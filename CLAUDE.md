@@ -136,7 +136,7 @@ OWNER_ID=...               # admin's Telegram user id (numeric)
 - **Bot UX:**
   - `/start` — greet + point at `/list`.
   - `/list` — inline keyboard, `✅/⬜ Title`, callback `toggle:<channel_id>`. No pagination.
-  - `/admin_list` (owner only) — inline keyboard of all channels incl. blacklisted,
+  - `/blacklist` (owner only) — inline keyboard of all channels incl. blacklisted,
     tap to toggle blacklist, callback `bl:<channel_id>`. Non-owners get "not allowed".
 - **Channel-list refresh:** background task every 10 min calls Telethon to fetch the
   admin's current subscriptions and `db.upsert_channel`s them. When a previously-active

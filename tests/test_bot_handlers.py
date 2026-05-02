@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from informer_bot.bot import (
-    cmd_admin_list,
+    cmd_blacklist,
     cmd_filter,
     cmd_help,
     cmd_list,
@@ -79,7 +79,7 @@ async def test_help_for_regular_user_lists_user_commands_only(db: Database) -> N
     text = update.message.reply_text.await_args.args[0]
     for cmd in ("/start", "/list", "/filter", "/usage", "/help"):
         assert cmd in text
-    assert "/admin_list" not in text
+    assert "/blacklist" not in text
     assert "/update" not in text
 
 
@@ -89,7 +89,7 @@ async def test_help_for_owner_includes_admin_commands(db: Database) -> None:
 
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.await_args.args[0]
-    for cmd in ("/list", "/filter", "/admin_list", "/update"):
+    for cmd in ("/list", "/filter", "/blacklist", "/update"):
         assert cmd in text
 
 
@@ -304,20 +304,20 @@ async def test_toggle_refuses_blacklisted_channel(db: Database) -> None:
     upd.callback_query.answer.assert_awaited()
 
 
-# ---------- /admin_list ----------
+# ---------- /blacklist ----------
 
-async def test_admin_list_denies_non_owner(db: Database) -> None:
+async def test_blacklist_denies_non_owner(db: Database) -> None:
     update = _msg_update(USER_ID)
-    await cmd_admin_list(update, _ctx(db))
+    await cmd_blacklist(update, _ctx(db))
 
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.await_args.args[0].lower()
     assert "not allowed" in text or "forbidden" in text
 
 
-async def test_admin_list_shows_all_channels_with_blacklist_marker(db: Database) -> None:
+async def test_blacklist_shows_all_channels_with_blacklist_marker(db: Database) -> None:
     update = _msg_update(OWNER_ID)
-    await cmd_admin_list(update, _ctx(db))
+    await cmd_blacklist(update, _ctx(db))
 
     flat = [btn for row in _kb_rows(update.message.reply_text.await_args.kwargs) for btn in row]
     titles = [t for t, _ in flat]

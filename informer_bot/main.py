@@ -8,7 +8,7 @@ from telethon import TelegramClient
 
 from informer_bot.album import AlbumBuffer
 from informer_bot.bot import (
-    cmd_admin_list,
+    cmd_blacklist,
     cmd_filter,
     cmd_help,
     cmd_list,
@@ -49,7 +49,7 @@ async def main() -> None:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("list", cmd_list))
-    app.add_handler(CommandHandler("admin_list", cmd_admin_list))
+    app.add_handler(CommandHandler("blacklist", cmd_blacklist))
     app.add_handler(CommandHandler("usage", cmd_usage))
     app.add_handler(CommandHandler("filter", cmd_filter))
     app.add_handler(CommandHandler("update", cmd_update))
