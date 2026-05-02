@@ -4,7 +4,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from informer_bot.bot import cmd_admin_list, cmd_list, cmd_start, on_blacklist, on_toggle
+from informer_bot.bot import (
+    cmd_admin_list,
+    cmd_list,
+    cmd_start,
+    on_approve,
+    on_blacklist,
+    on_deny,
+    on_toggle,
+)
 from informer_bot.db import Database
 
 OWNER_ID = 999
@@ -18,6 +26,8 @@ def db(tmp_path: Path) -> Database:
     db.upsert_channel(channel_id=2, title="Beta")
     db.upsert_channel(channel_id=3, title="BannedChan")
     db.set_blacklisted(channel_id=3, blacklisted=True)
+    db.set_user_status(user_id=USER_ID, status="approved")
+    db.set_user_status(user_id=OWNER_ID, status="approved")
     return db
 
 
@@ -28,9 +38,9 @@ def _ctx(db: Database) -> SimpleNamespace:
     )
 
 
-def _msg_update(user_id: int) -> SimpleNamespace:
+def _msg_update(user_id: int, username: str | None = None) -> SimpleNamespace:
     return SimpleNamespace(
-        effective_user=SimpleNamespace(id=user_id),
+        effective_user=SimpleNamespace(id=user_id, username=username, first_name=None),
         effective_chat=SimpleNamespace(id=user_id),
         message=SimpleNamespace(reply_text=AsyncMock()),
     )
@@ -56,13 +66,144 @@ def _kb_rows(reply_kwargs: dict) -> list[list[tuple[str, str]]]:
 
 # ---------- /start ----------
 
-async def test_start_replies_with_greeting(db: Database) -> None:
+async def test_start_for_approved_user_replies_with_greeting(db: Database) -> None:
     update = _msg_update(USER_ID)
     await cmd_start(update, _ctx(db))
 
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.await_args.args[0]
     assert "/list" in text
+
+
+async def test_start_for_unknown_user_creates_pending_and_dms_admin(db: Database) -> None:
+    new_user = 555
+    ctx = _ctx(db)
+    update = _msg_update(new_user, username="bob")
+
+    await cmd_start(update, ctx)
+
+    assert db.get_user_status(new_user) == "pending"
+    update.message.reply_text.assert_awaited_once()
+    user_text = update.message.reply_text.await_args.args[0].lower()
+    assert "wait" in user_text or "request" in user_text
+
+    ctx.bot.send_message.assert_awaited_once()
+    admin_call = ctx.bot.send_message.await_args
+    assert admin_call.kwargs["chat_id"] == OWNER_ID
+    markup = admin_call.kwargs["reply_markup"]
+    rows = [[(b.text, b.callback_data) for b in row] for row in markup.inline_keyboard]
+    flat = [btn for row in rows for btn in row]
+    assert any(data == f"approve:{new_user}" for _, data in flat)
+    assert any(data == f"deny:{new_user}" for _, data in flat)
+
+
+async def test_start_for_pending_user_does_not_re_dm_admin(db: Database) -> None:
+    new_user = 555
+    db.add_pending_user(user_id=new_user, username="bob")
+    ctx = _ctx(db)
+    update = _msg_update(new_user, username="bob")
+
+    await cmd_start(update, ctx)
+
+    ctx.bot.send_message.assert_not_called()
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "wait" in text or "approval" in text
+
+
+async def test_start_for_denied_user_replies_denied_and_no_admin_dm(db: Database) -> None:
+    new_user = 555
+    db.set_user_status(user_id=new_user, status="denied")
+    ctx = _ctx(db)
+    update = _msg_update(new_user)
+
+    await cmd_start(update, ctx)
+
+    ctx.bot.send_message.assert_not_called()
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "not allowed" in text or "denied" in text
+
+
+# ---------- approve / deny callbacks ----------
+
+async def test_approve_sets_status_and_greets_user(db: Database) -> None:
+    new_user = 555
+    db.add_pending_user(user_id=new_user, username="bob")
+    ctx = _ctx(db)
+    upd = _cb_update(OWNER_ID, f"approve:{new_user}")
+
+    await on_approve(upd, ctx)
+
+    assert db.get_user_status(new_user) == "approved"
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_text.assert_awaited()
+    ctx.bot.send_message.assert_awaited_once()
+    assert ctx.bot.send_message.await_args.kwargs["chat_id"] == new_user
+
+
+async def test_deny_sets_status_and_notifies_user(db: Database) -> None:
+    new_user = 555
+    db.add_pending_user(user_id=new_user, username="bob")
+    ctx = _ctx(db)
+    upd = _cb_update(OWNER_ID, f"deny:{new_user}")
+
+    await on_deny(upd, ctx)
+
+    assert db.get_user_status(new_user) == "denied"
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_text.assert_awaited()
+    ctx.bot.send_message.assert_awaited_once()
+    assert ctx.bot.send_message.await_args.kwargs["chat_id"] == new_user
+    text = ctx.bot.send_message.await_args.kwargs["text"].lower()
+    assert "not allowed" in text or "denied" in text
+
+
+async def test_approve_denies_non_owner(db: Database) -> None:
+    new_user = 555
+    db.add_pending_user(user_id=new_user, username="bob")
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, f"approve:{new_user}")
+
+    await on_approve(upd, ctx)
+
+    assert db.get_user_status(new_user) == "pending"
+    ctx.bot.send_message.assert_not_called()
+
+
+async def test_deny_denies_non_owner(db: Database) -> None:
+    new_user = 555
+    db.add_pending_user(user_id=new_user, username="bob")
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, f"deny:{new_user}")
+
+    await on_deny(upd, ctx)
+
+    assert db.get_user_status(new_user) == "pending"
+    ctx.bot.send_message.assert_not_called()
+
+
+# ---------- gating of /list and toggle ----------
+
+async def test_list_blocks_non_approved_user(db: Database) -> None:
+    new_user = 555  # not approved
+    update = _msg_update(new_user)
+
+    await cmd_list(update, _ctx(db))
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "not allowed" in text or "approval" in text
+
+
+async def test_toggle_blocks_non_approved_user(db: Database) -> None:
+    new_user = 555  # not approved
+    upd = _cb_update(new_user, "toggle:1")
+
+    await on_toggle(upd, _ctx(db))
+
+    assert db.is_subscribed(new_user, 1) is False
+    upd.callback_query.answer.assert_awaited()
 
 
 # ---------- /list ----------

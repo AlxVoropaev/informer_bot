@@ -9,6 +9,10 @@ log = logging.getLogger(__name__)
 
 GREETING = "Hi, I'm informer. Use /list to pick channels to follow."
 DENIED = "Not allowed."
+PENDING = "Your request has been sent to the administrator. Please wait."
+STILL_PENDING = "Still waiting for the administrator's approval."
+ACCESS_DENIED = "Sorry, you are not allowed to use this bot."
+APPROVED_NOTICE = "You are approved! " + GREETING
 
 
 def _db(context: ContextTypes.DEFAULT_TYPE) -> Database:
@@ -43,17 +47,54 @@ def _admin_keyboard(db: Database) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
+def _user_label(user) -> str:
+    if user.username:
+        return f"@{user.username}"
+    if user.first_name:
+        return f"{user.first_name} ({user.id})"
+    return str(user.id)
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    log.debug("/start from user=%s", update.effective_user.id)
-    await update.message.reply_text(GREETING)
+    db = _db(context)
+    user = update.effective_user
+    log.debug("/start from user=%s", user.id)
+    status = db.get_user_status(user.id)
+
+    if status == "approved":
+        await update.message.reply_text(GREETING)
+        return
+    if status == "pending":
+        await update.message.reply_text(STILL_PENDING)
+        return
+    if status == "denied":
+        await update.message.reply_text(ACCESS_DENIED)
+        return
+
+    db.add_pending_user(user_id=user.id, username=user.username)
+    log.info("new access request from user=%s (%s)", user.id, _user_label(user))
+    await update.message.reply_text(PENDING)
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(text="✅ Allow", callback_data=f"approve:{user.id}"),
+        InlineKeyboardButton(text="⛔ Deny", callback_data=f"deny:{user.id}"),
+    ]])
+    await context.bot.send_message(
+        chat_id=_owner_id(context),
+        text=f"Access request from {_user_label(user)}",
+        reply_markup=keyboard,
+    )
 
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db = _db(context)
-    log.debug("/list from user=%s", update.effective_user.id)
+    user_id = update.effective_user.id
+    log.debug("/list from user=%s", user_id)
+    if db.get_user_status(user_id) != "approved":
+        await update.message.reply_text(DENIED)
+        return
     await update.message.reply_text(
         "Pick channels:",
-        reply_markup=_user_keyboard(db, update.effective_user.id),
+        reply_markup=_user_keyboard(db, user_id),
     )
 
 
@@ -73,6 +114,11 @@ async def on_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db = _db(context)
     user_id = update.effective_user.id
     channel_id = int(update.callback_query.data.split(":", 1)[1])
+
+    if db.get_user_status(user_id) != "approved":
+        log.info("toggle rejected: user=%s not approved", user_id)
+        await update.callback_query.answer(DENIED)
+        return
 
     visible_ids = {c.id for c in db.list_channels()}
     if channel_id not in visible_ids:
@@ -98,6 +144,38 @@ async def on_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.debug("/list done by user=%s", update.effective_user.id)
     await update.callback_query.answer()
     await update.callback_query.edit_message_text("Channel selection saved.")
+
+
+async def on_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != _owner_id(context):
+        log.info("approve denied for user=%s", update.effective_user.id)
+        await update.callback_query.answer(DENIED)
+        return
+
+    db = _db(context)
+    target_id = int(update.callback_query.data.split(":", 1)[1])
+    db.set_user_status(user_id=target_id, status="approved")
+    log.info("user=%s approved by owner", target_id)
+
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text(f"Allowed user {target_id}.")
+    await context.bot.send_message(chat_id=target_id, text=APPROVED_NOTICE)
+
+
+async def on_deny(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != _owner_id(context):
+        log.info("deny denied for user=%s", update.effective_user.id)
+        await update.callback_query.answer(DENIED)
+        return
+
+    db = _db(context)
+    target_id = int(update.callback_query.data.split(":", 1)[1])
+    db.set_user_status(user_id=target_id, status="denied")
+    log.info("user=%s denied by owner", target_id)
+
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text(f"Denied user {target_id}.")
+    await context.bot.send_message(chat_id=target_id, text=ACCESS_DENIED)
 
 
 async def on_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
