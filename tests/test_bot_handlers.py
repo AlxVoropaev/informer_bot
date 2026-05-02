@@ -8,6 +8,7 @@ from informer_bot.bot import (
     cmd_blacklist,
     cmd_filter,
     cmd_help,
+    cmd_language,
     cmd_list,
     cmd_start,
     cmd_usage,
@@ -15,6 +16,7 @@ from informer_bot.bot import (
     on_blacklist,
     on_blacklist_done,
     on_deny,
+    on_language,
     on_toggle,
 )
 from informer_bot.db import Database
@@ -488,6 +490,41 @@ async def test_filter_bare_shows_current_filter_when_set(db: Database) -> None:
 
     text = update.message.reply_text.await_args.args[0]
     assert "only AI news" in text
+
+
+# ---------- /language ----------
+
+async def test_language_shows_current_and_keyboard(db: Database) -> None:
+    update = _msg_update(USER_ID)
+    await cmd_language(update, _ctx(db))
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0]
+    assert "English" in text
+    rows = _kb_rows(update.message.reply_text.await_args.kwargs)
+    flat = [btn for row in rows for btn in row]
+    datas = {data for _, data in flat}
+    assert datas == {"lang:en", "lang:ru"}
+
+
+async def test_language_callback_persists_choice_and_updates_message(db: Database) -> None:
+    upd = _cb_update(USER_ID, "lang:ru")
+    await on_language(upd, _ctx(db))
+
+    assert db.get_language(user_id=USER_ID) == "ru"
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_text.assert_awaited_once()
+    text = upd.callback_query.edit_message_text.await_args.args[0]
+    assert "Русский" in text
+
+
+async def test_language_affects_subsequent_replies(db: Database) -> None:
+    db.set_language(user_id=USER_ID, language="ru")
+    update = _msg_update(USER_ID)
+    await cmd_list(update, _ctx(db))
+
+    text = update.message.reply_text.await_args.args[0]
+    assert text == "Выбери каналы:"
 
 
 async def test_filter_clear_removes_filter(db: Database) -> None:

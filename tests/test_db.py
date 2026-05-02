@@ -254,6 +254,19 @@ def test_set_filter_clear_with_none_removes_filter(db: Database) -> None:
     assert db.get_filter(user_id=10) is None
 
 
+def test_get_language_defaults_to_en(db: Database) -> None:
+    db.add_pending_user(user_id=10, username="alice")
+    assert db.get_language(user_id=10) == "en"
+    assert db.get_language(user_id=999) == "en"
+
+
+def test_set_language_round_trips_and_overwrites(db: Database) -> None:
+    db.set_language(user_id=10, language="ru")
+    assert db.get_language(user_id=10) == "ru"
+    db.set_language(user_id=10, language="en")
+    assert db.get_language(user_id=10) == "en"
+
+
 def test_update_user_name_can_clear_username(db: Database) -> None:
     db.add_pending_user(user_id=10, username="alice", first_name="Alice")
 

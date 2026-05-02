@@ -4,17 +4,11 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from informer_bot.db import Database
+from informer_bot.i18n import LANGUAGE_NAMES, LANGUAGES, t
 from informer_bot.pipeline import refresh_channels
 from informer_bot.summarizer import estimate_cost_usd
 
 log = logging.getLogger(__name__)
-
-GREETING = "Hi, I'm informer. Use /list to pick channels to follow. See /help for all commands."
-DENIED = "Not allowed."
-PENDING = "Your request has been sent to the administrator. Please wait."
-STILL_PENDING = "Still waiting for the administrator's approval."
-ACCESS_DENIED = "Sorry, you are not allowed to use this bot."
-APPROVED_NOTICE = "You are approved! " + GREETING
 
 
 def _db(context: ContextTypes.DEFAULT_TYPE) -> Database:
@@ -25,11 +19,15 @@ def _owner_id(context: ContextTypes.DEFAULT_TYPE) -> int:
     return context.bot_data["owner_id"]
 
 
+def _lang(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
+    return _db(context).get_language(user_id)
+
+
 _MODE_EMOJI = {None: "⬜", "filtered": "🔀", "all": "✅"}
 _NEXT_MODE = {None: "filtered", "filtered": "all", "all": None}
 
 
-def _user_keyboard(db: Database, user_id: int) -> InlineKeyboardMarkup:
+def _user_keyboard(db: Database, user_id: int, lang: str) -> InlineKeyboardMarkup:
     modes = db.list_user_subscription_modes(user_id)
     rows = [
         [InlineKeyboardButton(
@@ -38,11 +36,11 @@ def _user_keyboard(db: Database, user_id: int) -> InlineKeyboardMarkup:
         )]
         for c in db.list_channels()
     ]
-    rows.append([InlineKeyboardButton(text="Done", callback_data="done")])
+    rows.append([InlineKeyboardButton(text=t(lang, "done_button"), callback_data="done")])
     return InlineKeyboardMarkup(rows)
 
 
-def _admin_keyboard(db: Database) -> InlineKeyboardMarkup:
+def _admin_keyboard(db: Database, lang: str) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(
             text=f"{'⛔' if c.blacklisted else '✅'} {c.title}",
@@ -50,8 +48,15 @@ def _admin_keyboard(db: Database) -> InlineKeyboardMarkup:
         )]
         for c in db.list_channels(include_blacklisted=True)
     ]
-    rows.append([InlineKeyboardButton(text="Done", callback_data="bl_done")])
+    rows.append([InlineKeyboardButton(text=t(lang, "done_button"), callback_data="bl_done")])
     return InlineKeyboardMarkup(rows)
+
+
+def _language_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(text=LANGUAGE_NAMES[code], callback_data=f"lang:{code}")]
+        for code in LANGUAGES
+    ])
 
 
 def _user_label(user) -> str:
@@ -62,28 +67,13 @@ def _user_label(user) -> str:
     return str(user.id)
 
 
-USER_HELP = (
-    "Commands:\n"
-    "/start — request access / get started\n"
-    "/list — pick channels to follow (tap to cycle: ⬜ off → 🔀 filtered → ✅ all)\n"
-    "/filter — set a personal content filter (used in 🔀 mode); /filter alone shows it, /filter clear removes it\n"
-    "/usage — your token usage and estimated cost\n"
-    "/help — show this message"
-)
-
-OWNER_HELP_EXTRA = (
-    "\n\nAdmin:\n"
-    "/blacklist — toggle channel blacklist\n"
-    "/update — refresh the channel list from your Telegram account"
-)
-
-
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     log.debug("/help from user=%s", user_id)
-    text = USER_HELP
+    lang = _lang(context, user_id)
+    text = t(lang, "user_help")
     if user_id == _owner_id(context):
-        text += OWNER_HELP_EXTRA
+        text += t(lang, "owner_help_extra")
     await update.message.reply_text(text)
 
 
@@ -92,29 +82,31 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     log.debug("/start from user=%s", user.id)
     status = db.get_user_status(user.id)
+    lang = db.get_language(user.id)
 
     if status == "approved":
-        await update.message.reply_text(GREETING)
+        await update.message.reply_text(t(lang, "greeting"))
         return
     if status == "pending":
-        await update.message.reply_text(STILL_PENDING)
+        await update.message.reply_text(t(lang, "still_pending"))
         return
     if status == "denied":
-        await update.message.reply_text(ACCESS_DENIED)
+        await update.message.reply_text(t(lang, "access_denied"))
         return
 
     db.add_pending_user(
         user_id=user.id, username=user.username, first_name=user.first_name
     )
     log.info("new access request from user=%s (%s)", user.id, _user_label(user))
-    await update.message.reply_text(PENDING)
+    await update.message.reply_text(t(lang, "pending"))
+    owner_lang = db.get_language(_owner_id(context))
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(text="✅ Allow", callback_data=f"approve:{user.id}"),
-        InlineKeyboardButton(text="⛔ Deny", callback_data=f"deny:{user.id}"),
+        InlineKeyboardButton(text=t(owner_lang, "approve_button"), callback_data=f"approve:{user.id}"),
+        InlineKeyboardButton(text=t(owner_lang, "deny_button"), callback_data=f"deny:{user.id}"),
     ]])
     await context.bot.send_message(
         chat_id=_owner_id(context),
-        text=f"Access request from {_user_label(user)}",
+        text=t(owner_lang, "access_request", label=_user_label(user)),
         reply_markup=keyboard,
     )
 
@@ -123,12 +115,13 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db = _db(context)
     user_id = update.effective_user.id
     log.debug("/list from user=%s", user_id)
+    lang = db.get_language(user_id)
     if db.get_user_status(user_id) != "approved":
-        await update.message.reply_text(DENIED)
+        await update.message.reply_text(t(lang, "denied"))
         return
     await update.message.reply_text(
-        "Pick channels:",
-        reply_markup=_user_keyboard(db, user_id),
+        t(lang, "pick_channels"),
+        reply_markup=_user_keyboard(db, user_id, lang),
     )
 
 
@@ -141,77 +134,84 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db = _db(context)
     user_id = update.effective_user.id
     log.debug("/usage from user=%s", user_id)
+    lang = db.get_language(user_id)
     if db.get_user_status(user_id) != "approved":
-        await update.message.reply_text(DENIED)
+        await update.message.reply_text(t(lang, "denied"))
         return
 
     if user_id == _owner_id(context):
         rows = db.list_all_usage()
         sys_in, sys_out = db.get_system_usage()
-        lines = ["Usage by user (delivered):"]
+        lines = [t(lang, "usage_admin_header")]
         if rows:
             for _uid, label, inp, out in rows:
                 lines.append(_format_usage_line(label, inp, out))
         else:
-            lines.append("(none yet)")
+            lines.append(t(lang, "usage_admin_none"))
         lines.append("")
-        lines.append(_format_usage_line("System total (actual API spend)", sys_in, sys_out))
+        lines.append(_format_usage_line(t(lang, "usage_admin_system_label"), sys_in, sys_out))
         await update.message.reply_text("\n".join(lines))
         return
 
     inp, out = db.get_usage(user_id)
     cost = estimate_cost_usd(inp, out)
     await update.message.reply_text(
-        f"Your usage:\n"
-        f"Input tokens: {inp:,}\n"
-        f"Output tokens: {out:,}\n"
-        f"Estimated cost: ${cost:.4f}"
+        t(lang, "usage_user_block", inp=inp, out=out, cost=cost)
     )
-
-
-FILTER_HELP = (
-    "Send /filter <text> to set what you want to read. "
-    "Send /filter clear to remove your filter (deliver everything). "
-    "Send /filter alone to see your current filter."
-)
 
 
 async def cmd_filter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db = _db(context)
     user_id = update.effective_user.id
     log.debug("/filter from user=%s", user_id)
+    lang = db.get_language(user_id)
     if db.get_user_status(user_id) != "approved":
-        await update.message.reply_text(DENIED)
+        await update.message.reply_text(t(lang, "denied"))
         return
 
     args_text = (update.message.text or "").split(maxsplit=1)
+    filter_help = t(lang, "filter_help")
     if len(args_text) < 2:
         current = db.get_filter(user_id=user_id)
         if current:
-            await update.message.reply_text(f"Your filter:\n{current}\n\n{FILTER_HELP}")
+            await update.message.reply_text(
+                t(lang, "filter_current", filter=current, help=filter_help)
+            )
         else:
-            await update.message.reply_text(f"No filter set — you receive everything.\n\n{FILTER_HELP}")
+            await update.message.reply_text(t(lang, "filter_none", help=filter_help))
         return
 
     payload = args_text[1].strip()
     if payload.lower() == "clear":
         db.set_filter(user_id=user_id, filter_prompt=None)
         log.info("user=%s cleared filter", user_id)
-        await update.message.reply_text("Filter cleared. You will receive everything.")
+        await update.message.reply_text(t(lang, "filter_cleared"))
         return
 
     db.set_filter(user_id=user_id, filter_prompt=payload)
     log.info("user=%s updated filter (%d chars)", user_id, len(payload))
-    await update.message.reply_text(f"Filter saved:\n{payload}")
+    await update.message.reply_text(t(lang, "filter_saved", filter=payload))
+
+
+async def cmd_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    log.debug("/language from user=%s", user_id)
+    lang = _lang(context, user_id)
+    await update.message.reply_text(
+        t(lang, "language_prompt", current=LANGUAGE_NAMES[lang]),
+        reply_markup=_language_keyboard(),
+    )
 
 
 async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != _owner_id(context):
-        log.info("/update denied for user=%s", update.effective_user.id)
-        await update.message.reply_text(DENIED)
+    user_id = update.effective_user.id
+    lang = _lang(context, user_id)
+    if user_id != _owner_id(context):
+        log.info("/update denied for user=%s", user_id)
+        await update.message.reply_text(t(lang, "denied"))
         return
-    log.info("/update from owner=%s", update.effective_user.id)
-    await update.message.reply_text("Refreshing channel list...")
+    log.info("/update from owner=%s", user_id)
+    await update.message.reply_text(t(lang, "refreshing"))
     try:
         await refresh_channels(
             fetch_fn=context.bot_data["fetch_channels"],
@@ -220,37 +220,40 @@ async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
     except Exception:
         log.exception("/update refresh failed")
-        await update.message.reply_text("Refresh failed. Check logs.")
+        await update.message.reply_text(t(lang, "refresh_failed"))
         return
-    await update.message.reply_text("Channel list refreshed.")
+    await update.message.reply_text(t(lang, "refresh_done"))
 
 
 async def cmd_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != _owner_id(context):
-        log.info("/blacklist denied for user=%s", update.effective_user.id)
-        await update.message.reply_text(DENIED)
+    user_id = update.effective_user.id
+    lang = _lang(context, user_id)
+    if user_id != _owner_id(context):
+        log.info("/blacklist denied for user=%s", user_id)
+        await update.message.reply_text(t(lang, "denied"))
         return
-    log.debug("/blacklist from owner=%s", update.effective_user.id)
+    log.debug("/blacklist from owner=%s", user_id)
     await update.message.reply_text(
-        "Admin: tap to toggle blacklist.",
-        reply_markup=_admin_keyboard(_db(context)),
+        t(lang, "admin_pick_blacklist"),
+        reply_markup=_admin_keyboard(_db(context), lang),
     )
 
 
 async def on_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db = _db(context)
     user_id = update.effective_user.id
+    lang = db.get_language(user_id)
     channel_id = int(update.callback_query.data.split(":", 1)[1])
 
     if db.get_user_status(user_id) != "approved":
         log.info("toggle rejected: user=%s not approved", user_id)
-        await update.callback_query.answer(DENIED)
+        await update.callback_query.answer(t(lang, "denied"))
         return
 
     visible_ids = {c.id for c in db.list_channels()}
     if channel_id not in visible_ids:
         log.info("toggle rejected: user=%s channel=%s unavailable", user_id, channel_id)
-        await update.callback_query.answer("Channel unavailable.")
+        await update.callback_query.answer(t(lang, "channel_unavailable"))
         return
 
     current = db.get_subscription_mode(user_id, channel_id)
@@ -263,66 +266,86 @@ async def on_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     await update.callback_query.answer()
     await update.callback_query.edit_message_text(
-        "Pick channels:",
-        reply_markup=_user_keyboard(db, user_id),
+        t(lang, "pick_channels"),
+        reply_markup=_user_keyboard(db, user_id, lang),
     )
 
 
 async def on_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    log.debug("/list done by user=%s", update.effective_user.id)
+    user_id = update.effective_user.id
+    log.debug("/list done by user=%s", user_id)
+    lang = _lang(context, user_id)
     await update.callback_query.answer()
-    await update.callback_query.edit_message_text("Channel selection saved.")
+    await update.callback_query.edit_message_text(t(lang, "selection_saved"))
 
 
 async def on_blacklist_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != _owner_id(context):
-        log.info("blacklist done denied for user=%s", update.effective_user.id)
-        await update.callback_query.answer(DENIED)
+    user_id = update.effective_user.id
+    lang = _lang(context, user_id)
+    if user_id != _owner_id(context):
+        log.info("blacklist done denied for user=%s", user_id)
+        await update.callback_query.answer(t(lang, "denied"))
         return
-    log.debug("/blacklist done by owner=%s", update.effective_user.id)
+    log.debug("/blacklist done by owner=%s", user_id)
     await update.callback_query.answer()
-    await update.callback_query.edit_message_text("Blacklist closed.")
+    await update.callback_query.edit_message_text(t(lang, "blacklist_closed"))
 
 
 async def on_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != _owner_id(context):
-        log.info("approve denied for user=%s", update.effective_user.id)
-        await update.callback_query.answer(DENIED)
+    db = _db(context)
+    actor_id = update.effective_user.id
+    actor_lang = db.get_language(actor_id)
+    if actor_id != _owner_id(context):
+        log.info("approve denied for user=%s", actor_id)
+        await update.callback_query.answer(t(actor_lang, "denied"))
         return
 
-    db = _db(context)
     target_id = int(update.callback_query.data.split(":", 1)[1])
     db.set_user_status(user_id=target_id, status="approved")
     log.info("user=%s approved by owner", target_id)
 
     await update.callback_query.answer()
-    await update.callback_query.edit_message_text(f"Allowed user {target_id}.")
-    await context.bot.send_message(chat_id=target_id, text=APPROVED_NOTICE)
+    await update.callback_query.edit_message_text(
+        t(actor_lang, "user_allowed", target=target_id)
+    )
+    target_lang = db.get_language(target_id)
+    await context.bot.send_message(
+        chat_id=target_id, text=t(target_lang, "approved_notice")
+    )
 
 
 async def on_deny(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != _owner_id(context):
-        log.info("deny denied for user=%s", update.effective_user.id)
-        await update.callback_query.answer(DENIED)
+    db = _db(context)
+    actor_id = update.effective_user.id
+    actor_lang = db.get_language(actor_id)
+    if actor_id != _owner_id(context):
+        log.info("deny denied for user=%s", actor_id)
+        await update.callback_query.answer(t(actor_lang, "denied"))
         return
 
-    db = _db(context)
     target_id = int(update.callback_query.data.split(":", 1)[1])
     db.set_user_status(user_id=target_id, status="denied")
     log.info("user=%s denied by owner", target_id)
 
     await update.callback_query.answer()
-    await update.callback_query.edit_message_text(f"Denied user {target_id}.")
-    await context.bot.send_message(chat_id=target_id, text=ACCESS_DENIED)
+    await update.callback_query.edit_message_text(
+        t(actor_lang, "user_denied_msg", target=target_id)
+    )
+    target_lang = db.get_language(target_id)
+    await context.bot.send_message(
+        chat_id=target_id, text=t(target_lang, "access_denied")
+    )
 
 
 async def on_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user.id != _owner_id(context):
-        log.info("blacklist toggle denied for user=%s", update.effective_user.id)
-        await update.callback_query.answer(DENIED)
+    db = _db(context)
+    actor_id = update.effective_user.id
+    actor_lang = db.get_language(actor_id)
+    if actor_id != _owner_id(context):
+        log.info("blacklist toggle denied for user=%s", actor_id)
+        await update.callback_query.answer(t(actor_lang, "denied"))
         return
 
-    db = _db(context)
     channel_id = int(update.callback_query.data.split(":", 1)[1])
     [channel] = [c for c in db.list_channels(include_blacklisted=True) if c.id == channel_id]
     will_blacklist = not channel.blacklisted
@@ -330,9 +353,10 @@ async def on_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if will_blacklist:
         subs = db.subscribers_for_channel(channel_id=channel_id)
         for user_id, _mode in subs:
+            sub_lang = db.get_language(user_id)
             await context.bot.send_message(
                 chat_id=user_id,
-                text=f"Admin blocked channel '{channel.title}', you will not get updates anymore.",
+                text=t(sub_lang, "channel_blocked", title=channel.title),
             )
         log.info(
             "blacklisting channel=%s '%s' (%d subscriber(s) notified)",
@@ -345,6 +369,21 @@ async def on_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     await update.callback_query.answer()
     await update.callback_query.edit_message_text(
-        "Admin: tap to toggle blacklist.",
-        reply_markup=_admin_keyboard(db),
+        t(actor_lang, "admin_pick_blacklist"),
+        reply_markup=_admin_keyboard(db, actor_lang),
+    )
+
+
+async def on_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db = _db(context)
+    user_id = update.effective_user.id
+    code = update.callback_query.data.split(":", 1)[1]
+    if code not in LANGUAGES:
+        await update.callback_query.answer()
+        return
+    db.set_language(user_id=user_id, language=code)
+    log.info("user=%s language -> %s", user_id, code)
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text(
+        t(code, "language_prompt", current=LANGUAGE_NAMES[code])
     )
