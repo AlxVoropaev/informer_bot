@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
-OnFlush = Callable[[int, int, str, str], Awaitable[None]]
+OnFlush = Callable[[int, int, str, str, bytes | None], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -14,6 +14,7 @@ class _Item:
     channel_username: str
     message_id: int
     text: str
+    photo: bytes | None
 
 
 class AlbumBuffer:
@@ -34,15 +35,16 @@ class AlbumBuffer:
         message_id: int,
         grouped_id: int | None,
         text: str,
+        photo: bytes | None = None,
     ) -> None:
         if grouped_id is None:
             link = f"https://t.me/{channel_username}/{message_id}"
             log.debug("album: passthrough non-grouped msg %s/%s", channel_id, message_id)
-            await self._on_flush(channel_id, message_id, text, link)
+            await self._on_flush(channel_id, message_id, text, link, photo)
             return
 
         self._groups.setdefault(grouped_id, []).append(
-            _Item(channel_id, channel_username, message_id, text)
+            _Item(channel_id, channel_username, message_id, text, photo)
         )
         log.debug(
             "album: buffered msg %s/%s into group=%s (size=%d)",
@@ -64,8 +66,9 @@ class AlbumBuffer:
         first = items[0]
         text = "\n\n".join(i.text for i in items if i.text.strip()).strip()
         link = f"https://t.me/{first.channel_username}/{first.message_id}"
+        photo = next((i.photo for i in items if i.photo is not None), None)
         log.debug(
             "album: flushing group=%s (%d items) → %s/%s",
             grouped_id, len(items), first.channel_id, first.message_id,
         )
-        await self._on_flush(first.channel_id, first.message_id, text, link)
+        await self._on_flush(first.channel_id, first.message_id, text, link, photo)

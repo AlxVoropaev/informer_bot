@@ -65,17 +65,28 @@ async def main() -> None:
     app.add_handler(CallbackQueryHandler(on_deny, pattern=r"^deny:"))
     app.add_handler(CallbackQueryHandler(on_language, pattern=r"^lang:"))
 
-    async def send_dm(user_id: int, text: str) -> None:
+    async def send_dm(user_id: int, text: str, photo: bytes | None = None) -> None:
         try:
-            await app.bot.send_message(chat_id=user_id, text=text)
-            log.debug("DM sent to %s (%d chars)", user_id, len(text))
+            if photo is not None:
+                await app.bot.send_photo(
+                    chat_id=user_id, photo=photo, caption=text, parse_mode="HTML"
+                )
+                log.debug("DM (photo) sent to %s (%d cap chars)", user_id, len(text))
+            else:
+                await app.bot.send_message(
+                    chat_id=user_id, text=text, parse_mode="HTML"
+                )
+                log.debug("DM sent to %s (%d chars)", user_id, len(text))
         except Exception:
             log.exception("send_dm to %s failed", user_id)
 
-    async def on_post(channel_id: int, message_id: int, text: str, link: str) -> None:
+    async def on_post(
+        channel_id: int, message_id: int, text: str, link: str, photo: bytes | None,
+    ) -> None:
         await handle_new_post(
             channel_id=channel_id, message_id=message_id, text=text, link=link,
             db=db, summarize_fn=summarize, is_relevant_fn=is_relevant, send_dm=send_dm,
+            photo=photo,
         )
 
     buffer = AlbumBuffer(on_flush=on_post, delay=1.5)

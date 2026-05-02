@@ -18,9 +18,8 @@ def _relevance(relevant: bool, input_tokens: int = 30, output_tokens: int = 1) -
     )
 
 
-def _yes_filter(*_args: object, **_kwargs: object) -> AsyncMock:
-    """Filter that always passes — never called when no users have a filter set."""
-    return AsyncMock(return_value=_relevance(True))
+def _expected_body(channel_title: str, summary: str, link: str) -> str:
+    return f'<a href="{link}">{channel_title}</a>\n{summary}'
 
 
 @pytest.fixture
@@ -49,7 +48,7 @@ async def test_handle_new_post_skips_empty_text(db: Database) -> None:
 
 
 async def test_handle_new_post_summarises_and_dms_subscribers(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    db.upsert_channel(channel_id=1, title="Channel A")
     db.subscribe(user_id=10, channel_id=1)
     db.subscribe(user_id=20, channel_id=1)
     summarize = AsyncMock(return_value=_summary("Brief."))
@@ -65,9 +64,46 @@ async def test_handle_new_post_summarises_and_dms_subscribers(db: Database) -> N
     summarize.assert_awaited_once_with("Long post body")
     is_rel.assert_not_called()
     assert send_dm.await_count == 2
-    sent = {call.args[0]: call.args[1] for call in send_dm.await_args_list}
-    assert sent[10] == "Brief.\n\nhttps://t.me/a/100"
-    assert sent[20] == "Brief.\n\nhttps://t.me/a/100"
+    expected = _expected_body("Channel A", "Brief.", "https://t.me/a/100")
+    sent = {call.args[0]: call.args for call in send_dm.await_args_list}
+    assert sent[10] == (10, expected, None)
+    assert sent[20] == (20, expected, None)
+
+
+async def test_handle_new_post_passes_photo_to_send_dm(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.subscribe(user_id=10, channel_id=1)
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock()
+    send_dm = AsyncMock()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="body",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm, photo=b"PNG",
+    )
+
+    send_dm.assert_awaited_once()
+    assert send_dm.await_args.args[0] == 10
+    assert send_dm.await_args.args[2] == b"PNG"
+
+
+async def test_handle_new_post_html_escapes_title_and_summary(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A & <B>")
+    db.subscribe(user_id=10, channel_id=1)
+    summarize = AsyncMock(return_value=_summary("5 < 10 & true"))
+    is_rel = AsyncMock()
+    send_dm = AsyncMock()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="body",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+    )
+
+    body = send_dm.await_args.args[1]
+    assert "A &amp; &lt;B&gt;" in body
+    assert "5 &lt; 10 &amp; true" in body
 
 
 async def test_handle_new_post_records_per_user_and_system_usage(db: Database) -> None:
@@ -148,7 +184,7 @@ async def test_handle_new_post_filters_out_user_when_irrelevant(db: Database) ->
 
 
 async def test_handle_new_post_filters_in_user_when_relevant(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    db.upsert_channel(channel_id=1, title="Channel A")
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
     db.subscribe(user_id=10, channel_id=1)
@@ -164,7 +200,8 @@ async def test_handle_new_post_filters_in_user_when_relevant(db: Database) -> No
     )
 
     summarize.assert_awaited_once()
-    send_dm.assert_awaited_once_with(10, "Brief.\n\nhttps://t.me/a/100")
+    expected = _expected_body("Channel A", "Brief.", "https://t.me/a/100")
+    send_dm.assert_awaited_once_with(10, expected, None)
 
 
 async def test_handle_new_post_summarises_once_when_at_least_one_user_passes(
@@ -240,7 +277,7 @@ async def test_handle_new_post_charges_filter_tokens_to_user_and_system(db: Data
 
 
 async def test_handle_new_post_mode_all_skips_filter_check(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    db.upsert_channel(channel_id=1, title="Channel A")
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
     db.subscribe(user_id=10, channel_id=1, mode="all")
@@ -257,11 +294,12 @@ async def test_handle_new_post_mode_all_skips_filter_check(db: Database) -> None
 
     is_rel.assert_not_called()
     summarize.assert_awaited_once()
-    send_dm.assert_awaited_once_with(10, "Brief.\n\nhttps://t.me/a/100")
+    expected = _expected_body("Channel A", "Brief.", "https://t.me/a/100")
+    send_dm.assert_awaited_once_with(10, expected, None)
 
 
 async def test_handle_new_post_mixes_modes_per_user(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    db.upsert_channel(channel_id=1, title="Channel A")
     db.add_pending_user(user_id=10, username="alice")
     db.add_pending_user(user_id=20, username="bob")
     db.set_user_status(user_id=10, status="approved")
@@ -280,7 +318,8 @@ async def test_handle_new_post_mixes_modes_per_user(db: Database) -> None:
     )
 
     is_rel.assert_awaited_once_with("Crypto pump", "AI")
-    send_dm.assert_awaited_once_with(10, "Brief.\n\nhttps://t.me/a/100")
+    expected = _expected_body("Channel A", "Brief.", "https://t.me/a/100")
+    send_dm.assert_awaited_once_with(10, expected, None)
 
 
 async def test_handle_new_post_filter_tokens_recorded_even_when_user_excluded(

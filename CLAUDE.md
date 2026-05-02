@@ -138,7 +138,13 @@ LOG_LEVEL=INFO             # optional, default INFO
 - **Trigger:** new top-level posts only. Albums coalesce into one summary. Edits ignored.
 - **Skip rule:** posts with no text and no caption (image/video-only) are skipped — no
   summary, no DM.
-- **Summary:** 1–2 sentences in the *source-post* language (do not translate).
+- **Summary:** a single sentence in the *source-post* language (do not translate).
+- **DM format:** the channel title is rendered as the only hyperlink (HTML
+  `<a href="post_url">Title</a>`), followed by the one-sentence summary on the
+  next line. No separate URL line. If the source post has a photo (or for an
+  album, the first photo), it is downloaded via Telethon and attached via
+  `bot.send_photo` with the formatted text as the caption; otherwise
+  `bot.send_message` is used.
 - **Access gate:** new users hit `/start` and land in `users.status='pending'`; the
   bot DMs the owner an Allow/Deny inline keyboard (callbacks `approve:<id>` /
   `deny:<id>`). Only `approved` users can use `/list`, `/filter`, `/usage`. The owner

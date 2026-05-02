@@ -9,7 +9,7 @@ MODEL = "claude-haiku-4-5"
 MAX_TOKENS = 256
 SYSTEM_PROMPT = (
     "You summarize Telegram channel posts. "
-    "Reply with a 1-2 sentence brief in the language of the post. "
+    "Reply with a single-sentence brief in the language of the post. "
     "No preamble, no quotes, no markdown — just the summary."
 )
 FILTER_SYSTEM_PROMPT = (

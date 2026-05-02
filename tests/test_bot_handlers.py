@@ -488,8 +488,8 @@ async def test_filter_bare_shows_current_filter_when_set(db: Database) -> None:
 
     await cmd_filter(update, _ctx(db))
 
-    text = update.message.reply_text.await_args.args[0]
-    assert "only AI news" in text
+    texts = [c.args[0] for c in update.message.reply_text.await_args_list]
+    assert any("only AI news" in t for t in texts)
 
 
 # ---------- /language ----------

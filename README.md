@@ -6,7 +6,7 @@ A Telegram bot that summarises posts from public channels and DMs you a short br
 
 1. The admin subscribes their account to public channels.
 2. You pick which of those channels you want to follow.
-3. When a new post lands in a channel you follow, the bot DMs you a 1–2-sentence summary in the post's original language and a link to it.
+3. When a new post lands in a channel you follow, the bot DMs you a one-sentence summary in the post's original language. The channel's name is shown as a clickable link to the original post, and if the post had a photo (or for albums, the first photo) it's attached.
 
 ## Commands
 
@@ -32,8 +32,8 @@ If you're the bot's `OWNER_ID`, you also get:
 
 ## What you'll receive
 
-- One DM per new post, in the channel's language, with a link to the original.
-- Albums (multi-photo posts) arrive as a single summary.
+- One DM per new post, in the channel's language. The channel name is the link back to the original; the photo (if any) is attached.
+- Albums (multi-photo posts) arrive as a single summary with the album's first photo.
 - Image- or video-only posts (no text/caption) are skipped.
 - Edits to existing posts are ignored.
 
