@@ -1,6 +1,9 @@
+import logging
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -36,6 +39,7 @@ class Database:
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        log.debug("opened sqlite at %s", path)
 
     def upsert_channel(self, channel_id: int, title: str) -> None:
         self._conn.execute(
@@ -44,6 +48,7 @@ class Database:
             (channel_id, title),
         )
         self._conn.commit()
+        log.debug("upsert_channel id=%s title=%r", channel_id, title)
 
     def set_blacklisted(self, channel_id: int, blacklisted: bool) -> None:
         self._conn.execute(
@@ -51,6 +56,7 @@ class Database:
             (1 if blacklisted else 0, channel_id),
         )
         self._conn.commit()
+        log.debug("set_blacklisted id=%s blacklisted=%s", channel_id, blacklisted)
 
     def list_channels(self, include_blacklisted: bool = False) -> list[Channel]:
         sql = "SELECT id, title, blacklisted FROM channels"
@@ -104,6 +110,7 @@ class Database:
         self._conn.execute("DELETE FROM subscriptions WHERE channel_id = ?", (channel_id,))
         self._conn.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
         self._conn.commit()
+        log.debug("delete_channel id=%s", channel_id)
 
     def mark_seen(self, channel_id: int, message_id: int) -> bool:
         cursor = self._conn.execute(

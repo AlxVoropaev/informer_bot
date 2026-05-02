@@ -23,12 +23,15 @@ log = logging.getLogger(__name__)
 
 async def main() -> None:
     cfg = load_config()
+    logging.getLogger().setLevel(cfg.log_level)
+    log.info("starting informer_bot (log_level=%s, db=%s)", cfg.log_level, cfg.db_path)
     db = Database(cfg.db_path)
 
     tg = TelegramClient(cfg.session_path, cfg.telegram_api_id, cfg.telegram_api_hash)
     await tg.connect()
     if not await tg.is_user_authorized():
         raise SystemExit("No Telethon session. Run: uv run python login.py")
+    log.info("telethon authorized")
 
     app = ApplicationBuilder().token(cfg.telegram_bot_token).build()
     app.bot_data["db"] = db
@@ -42,6 +45,7 @@ async def main() -> None:
     async def send_dm(user_id: int, text: str) -> None:
         try:
             await app.bot.send_message(chat_id=user_id, text=text)
+            log.debug("DM sent to %s (%d chars)", user_id, len(text))
         except Exception:
             log.exception("send_dm to %s failed", user_id)
 

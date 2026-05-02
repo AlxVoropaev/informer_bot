@@ -13,6 +13,7 @@ class Config:
     session_path: str = "informer"
     db_path: str = "informer.db"
     refresh_interval_seconds: int = 600
+    log_level: str = "INFO"
 
 
 def load_config() -> Config:
@@ -24,4 +25,5 @@ def load_config() -> Config:
         telegram_api_hash=os.environ["TELEGRAM_API_HASH"],
         telegram_bot_token=os.environ["TELEGRAM_BOT_TOKEN"],
         owner_id=int(os.environ["OWNER_ID"]),
+        log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
     )
