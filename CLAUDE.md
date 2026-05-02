@@ -43,7 +43,24 @@ When your changes create orphans:
 
 The test: Every changed line should trace directly to the user's request.
 
-## 4. Goal-Driven Execution
+## 4. Always Use a Worktree
+
+**Run code-changing subagents in an isolated git worktree.**
+
+When spawning subagents via the Agent tool that will write or edit files, always
+pass `isolation: "worktree"`. Read-only research/exploration agents don't need it.
+
+## 5. Keep Docs Current
+
+**After making changes, update CLAUDE.md or README.md if appropriate.**
+
+If your changes affect anything documented in either file — stack, layout,
+behaviour rules, required env vars, setup/run instructions, TODOs — update the
+relevant section in the same change. CLAUDE.md = guidance for Claude;
+README.md = user-facing setup and usage. If nothing documented is affected,
+leave both alone.
+
+## 6. Goal-Driven Execution
 
 **Define success criteria. Loop until verified.**
 
