@@ -93,7 +93,16 @@ Tip: stick that prefix in a shell alias, or `export HOST_UID=$(id -u) HOST_GID=$
    docker compose logs -f bot
    ```
 
-4. **Stop:**
+4. **Restart** (e.g. to pick up config or code changes):
+   ```sh
+   docker compose restart bot
+   ```
+   For an image rebuild after code changes:
+   ```sh
+   HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose up -d --build
+   ```
+
+5. **Stop:**
    ```sh
    docker compose down
    ```
