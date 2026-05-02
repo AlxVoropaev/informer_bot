@@ -1,6 +1,9 @@
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+
+log = logging.getLogger(__name__)
 
 OnFlush = Callable[[int, int, str, str], Awaitable[None]]
 
@@ -34,11 +37,16 @@ class AlbumBuffer:
     ) -> None:
         if grouped_id is None:
             link = f"https://t.me/{channel_username}/{message_id}"
+            log.debug("album: passthrough non-grouped msg %s/%s", channel_id, message_id)
             await self._on_flush(channel_id, message_id, text, link)
             return
 
         self._groups.setdefault(grouped_id, []).append(
             _Item(channel_id, channel_username, message_id, text)
+        )
+        log.debug(
+            "album: buffered msg %s/%s into group=%s (size=%d)",
+            channel_id, message_id, grouped_id, len(self._groups[grouped_id]),
         )
         if (existing := self._tasks.get(grouped_id)) is not None:
             existing.cancel()
@@ -56,4 +64,8 @@ class AlbumBuffer:
         first = items[0]
         text = "\n\n".join(i.text for i in items if i.text.strip()).strip()
         link = f"https://t.me/{first.channel_username}/{first.message_id}"
+        log.debug(
+            "album: flushing group=%s (%d items) → %s/%s",
+            grouped_id, len(items), first.channel_id, first.message_id,
+        )
         await self._on_flush(first.channel_id, first.message_id, text, link)

@@ -1,6 +1,9 @@
+import logging
 from collections.abc import Awaitable, Callable
 
 from informer_bot.db import Database
+
+log = logging.getLogger(__name__)
 
 SummarizeFn = Callable[[str], Awaitable[str]]
 SendDmFn = Callable[[int, str], Awaitable[None]]
@@ -18,12 +21,19 @@ async def handle_new_post(
     send_dm: SendDmFn,
 ) -> None:
     if not text.strip():
+        log.debug("skip post %s/%s: empty text", channel_id, message_id)
         return
     if not db.mark_seen(channel_id=channel_id, message_id=message_id):
+        log.debug("skip post %s/%s: already seen", channel_id, message_id)
         return
     subscribers = db.subscribers_for_channel(channel_id=channel_id)
     if not subscribers:
+        log.debug("skip post %s/%s: no subscribers", channel_id, message_id)
         return
+    log.info(
+        "handling post %s/%s for %d subscriber(s) (%d chars)",
+        channel_id, message_id, len(subscribers), len(text),
+    )
     brief = await summarize_fn(text)
     body = f"{brief}\n\n{link}"
     for user_id in subscribers:
@@ -38,18 +48,28 @@ async def refresh_channels(
 ) -> None:
     fresh = await fetch_fn()
     fresh_ids = {channel_id for channel_id, _ in fresh}
+    log.debug("refresh: %d fresh channel(s) from telethon", len(fresh))
 
     for channel_id, title in fresh:
         db.upsert_channel(channel_id=channel_id, title=title)
 
+    removed = 0
+    notified = 0
     known = db.list_channels(include_blacklisted=True)
     for channel in known:
         if channel.id in fresh_ids:
             continue
         if not channel.blacklisted:
-            for user_id in db.subscribers_for_channel(channel_id=channel.id):
+            subs = db.subscribers_for_channel(channel_id=channel.id)
+            for user_id in subs:
                 await send_dm(
                     user_id,
                     f"Channel '{channel.title}' is no longer available.",
                 )
+            notified += len(subs)
         db.delete_channel(channel_id=channel.id)
+        removed += 1
+    log.info(
+        "refresh done: %d known, %d removed, %d subscriber(s) notified",
+        len(fresh), removed, notified,
+    )
