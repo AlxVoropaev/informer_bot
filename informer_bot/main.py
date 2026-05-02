@@ -11,6 +11,7 @@ from informer_bot.bot import (
     cmd_admin_list,
     cmd_list,
     cmd_start,
+    cmd_usage,
     on_approve,
     on_blacklist,
     on_deny,
@@ -45,6 +46,7 @@ async def main() -> None:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("admin_list", cmd_admin_list))
+    app.add_handler(CommandHandler("usage", cmd_usage))
     app.add_handler(CallbackQueryHandler(on_toggle, pattern=r"^toggle:"))
     app.add_handler(CallbackQueryHandler(on_done, pattern=r"^done$"))
     app.add_handler(CallbackQueryHandler(on_blacklist, pattern=r"^bl:"))
@@ -83,6 +85,17 @@ async def main() -> None:
     await app.initialize()
     await app.start()
     await app.updater.start_polling()
+
+    for user_id in db.list_user_ids():
+        try:
+            chat = await app.bot.get_chat(chat_id=user_id)
+        except Exception:
+            log.debug("name refresh failed for user=%s", user_id)
+            continue
+        db.update_user_name(
+            user_id=user_id, username=chat.username, first_name=chat.first_name
+        )
+
     refresh_task = asyncio.create_task(refresh_loop())
 
     stop_event = asyncio.Event()

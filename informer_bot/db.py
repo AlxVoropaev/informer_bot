@@ -31,10 +31,22 @@ CREATE TABLE IF NOT EXISTS seen (
     PRIMARY KEY (channel_id, message_id)
 );
 CREATE TABLE IF NOT EXISTS users (
-    user_id  INTEGER PRIMARY KEY,
-    status   TEXT NOT NULL CHECK(status IN ('pending','approved','denied')),
-    username TEXT
+    user_id    INTEGER PRIMARY KEY,
+    status     TEXT NOT NULL CHECK(status IN ('pending','approved','denied')),
+    username   TEXT,
+    first_name TEXT
 );
+CREATE TABLE IF NOT EXISTS usage (
+    user_id       INTEGER PRIMARY KEY,
+    input_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS system_usage (
+    id            INTEGER PRIMARY KEY CHECK (id = 1),
+    input_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO system_usage (id, input_tokens, output_tokens) VALUES (1, 0, 0);
 """
 
 
@@ -43,6 +55,9 @@ class Database:
         self._conn = sqlite3.connect(path)
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(users)")}
+        if "first_name" not in cols:
+            self._conn.execute("ALTER TABLE users ADD COLUMN first_name TEXT")
         self._conn.commit()
         log.debug("opened sqlite at %s", path)
 
@@ -123,13 +138,22 @@ class Database:
         ).fetchone()
         return row[0] if row else None
 
-    def add_pending_user(self, user_id: int, username: str | None) -> None:
+    def add_pending_user(
+        self, user_id: int, username: str | None, first_name: str | None = None
+    ) -> None:
         self._conn.execute(
-            "INSERT OR IGNORE INTO users (user_id, status, username) VALUES (?, 'pending', ?)",
-            (user_id, username),
+            "INSERT INTO users (user_id, status, username, first_name) "
+            "VALUES (?, 'pending', ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "username = excluded.username, "
+            "first_name = COALESCE(excluded.first_name, users.first_name)",
+            (user_id, username, first_name),
         )
         self._conn.commit()
-        log.debug("add_pending_user user=%s username=%r", user_id, username)
+        log.debug(
+            "add_pending_user user=%s username=%r first_name=%r",
+            user_id, username, first_name,
+        )
 
     def set_user_status(self, user_id: int, status: str) -> None:
         self._conn.execute(
@@ -139,6 +163,84 @@ class Database:
         )
         self._conn.commit()
         log.debug("set_user_status user=%s status=%s", user_id, status)
+
+    def list_user_ids(self) -> list[int]:
+        return [r[0] for r in self._conn.execute("SELECT user_id FROM users ORDER BY user_id")]
+
+    def update_user_name(
+        self, user_id: int, username: str | None, first_name: str | None
+    ) -> None:
+        self._conn.execute(
+            "UPDATE users SET username = ?, first_name = ? WHERE user_id = ?",
+            (username, first_name, user_id),
+        )
+        self._conn.commit()
+        log.debug(
+            "update_user_name user=%s username=%r first_name=%r",
+            user_id, username, first_name,
+        )
+
+    def get_user_label(self, user_id: int) -> str:
+        row = self._conn.execute(
+            "SELECT username, first_name FROM users WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        username = row[0] if row else None
+        first_name = row[1] if row else None
+        if username:
+            return f"@{username} ({user_id})"
+        if first_name:
+            return f"{first_name} ({user_id})"
+        return f"({user_id})"
+
+    def add_usage(self, user_id: int, input_tokens: int, output_tokens: int) -> None:
+        self._conn.execute(
+            "INSERT INTO usage (user_id, input_tokens, output_tokens) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
+            "input_tokens = usage.input_tokens + excluded.input_tokens, "
+            "output_tokens = usage.output_tokens + excluded.output_tokens",
+            (user_id, input_tokens, output_tokens),
+        )
+        self._conn.commit()
+
+    def get_usage(self, user_id: int) -> tuple[int, int]:
+        row = self._conn.execute(
+            "SELECT input_tokens, output_tokens FROM usage WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        return (row[0], row[1]) if row else (0, 0)
+
+    def list_all_usage(self) -> list[tuple[int, str, int, int]]:
+        rows = self._conn.execute(
+            "SELECT u.user_id, usr.username, usr.first_name, u.input_tokens, u.output_tokens "
+            "FROM usage u LEFT JOIN users usr ON usr.user_id = u.user_id "
+            "ORDER BY u.user_id"
+        ).fetchall()
+        out: list[tuple[int, str, int, int]] = []
+        for user_id, username, first_name, inp, output in rows:
+            if username:
+                label = f"@{username} ({user_id})"
+            elif first_name:
+                label = f"{first_name} ({user_id})"
+            else:
+                label = f"({user_id})"
+            out.append((user_id, label, inp, output))
+        return out
+
+    def add_system_usage(self, input_tokens: int, output_tokens: int) -> None:
+        self._conn.execute(
+            "UPDATE system_usage SET "
+            "input_tokens = input_tokens + ?, "
+            "output_tokens = output_tokens + ? "
+            "WHERE id = 1",
+            (input_tokens, output_tokens),
+        )
+        self._conn.commit()
+
+    def get_system_usage(self) -> tuple[int, int]:
+        row = self._conn.execute(
+            "SELECT input_tokens, output_tokens FROM system_usage WHERE id = 1"
+        ).fetchone()
+        return (row[0], row[1]) if row else (0, 0)
 
     def mark_seen(self, channel_id: int, message_id: int) -> bool:
         cursor = self._conn.execute(

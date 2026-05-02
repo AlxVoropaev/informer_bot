@@ -8,6 +8,7 @@ from informer_bot.bot import (
     cmd_admin_list,
     cmd_list,
     cmd_start,
+    cmd_usage,
     on_approve,
     on_blacklist,
     on_deny,
@@ -334,3 +335,49 @@ async def test_blacklist_callback_denies_non_owner(db: Database) -> None:
     [alpha] = [c for c in db.list_channels(include_blacklisted=True) if c.id == 1]
     assert alpha.blacklisted is False
     upd.callback_query.answer.assert_awaited()
+
+
+# ---------- /usage ----------
+
+async def test_usage_blocks_non_approved_user(db: Database) -> None:
+    new_user = 555
+    update = _msg_update(new_user)
+
+    await cmd_usage(update, _ctx(db))
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "not allowed" in text
+
+
+async def test_usage_for_regular_user_shows_own_totals_and_cost(db: Database) -> None:
+    db.add_usage(user_id=USER_ID, input_tokens=1_000_000, output_tokens=200_000)
+    update = _msg_update(USER_ID)
+
+    await cmd_usage(update, _ctx(db))
+
+    text = update.message.reply_text.await_args.args[0]
+    assert "1,000,000" in text or "1000000" in text
+    assert "200,000" in text or "200000" in text
+    assert "$" in text
+
+
+async def test_usage_for_admin_shows_per_user_breakdown_and_system_total(db: Database) -> None:
+    db.add_pending_user(user_id=10, username="alice", first_name="Alice")
+    db.add_pending_user(user_id=20, username=None, first_name="Bob")
+    db.set_user_status(user_id=10, status="approved")
+    db.set_user_status(user_id=20, status="approved")
+    db.add_usage(user_id=10, input_tokens=100, output_tokens=20)
+    db.add_usage(user_id=20, input_tokens=50, output_tokens=10)
+    db.add_system_usage(input_tokens=75, output_tokens=15)
+
+    update = _msg_update(OWNER_ID)
+    await cmd_usage(update, _ctx(db))
+
+    text = update.message.reply_text.await_args.args[0]
+    assert "@alice (10)" in text
+    assert "Bob (20)" in text
+    assert "100" in text and "20" in text
+    assert "50" in text and "10" in text
+    assert "system" in text.lower() or "total" in text.lower()
+    assert "75" in text and "15" in text

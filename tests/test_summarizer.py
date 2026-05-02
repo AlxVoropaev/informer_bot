@@ -3,11 +3,19 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from informer_bot.summarizer import summarize
+from informer_bot.summarizer import (
+    PRICE_PER_MTOK_INPUT,
+    PRICE_PER_MTOK_OUTPUT,
+    estimate_cost_usd,
+    summarize,
+)
 
 
-def _fake_response(text: str) -> SimpleNamespace:
-    return SimpleNamespace(content=[SimpleNamespace(type="text", text=text)])
+def _fake_response(text: str, input_tokens: int = 12, output_tokens: int = 7) -> SimpleNamespace:
+    return SimpleNamespace(
+        content=[SimpleNamespace(type="text", text=text)],
+        usage=SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens),
+    )
 
 
 @pytest.fixture
@@ -17,10 +25,16 @@ def fake_client() -> AsyncMock:
     return client
 
 
-async def test_summarize_returns_text_from_response(fake_client: AsyncMock) -> None:
+async def test_summarize_returns_text_and_usage(fake_client: AsyncMock) -> None:
+    fake_client.messages.create.return_value = _fake_response(
+        "A short brief.", input_tokens=42, output_tokens=11
+    )
+
     result = await summarize("Some long post text", client=fake_client)
 
-    assert result == "A short brief."
+    assert result.text == "A short brief."
+    assert result.input_tokens == 42
+    assert result.output_tokens == 11
 
 
 async def test_summarize_calls_haiku_with_system_prompt_and_user_text(
@@ -42,4 +56,17 @@ async def test_summarize_strips_whitespace(fake_client: AsyncMock) -> None:
 
     result = await summarize("anything", client=fake_client)
 
-    assert result == "Brief with padding."
+    assert result.text == "Brief with padding."
+
+
+def test_estimate_cost_usd_matches_per_mtok_pricing() -> None:
+    cost = estimate_cost_usd(input_tokens=1_000_000, output_tokens=0)
+    assert cost == pytest.approx(PRICE_PER_MTOK_INPUT)
+
+    cost = estimate_cost_usd(input_tokens=0, output_tokens=1_000_000)
+    assert cost == pytest.approx(PRICE_PER_MTOK_OUTPUT)
+
+    cost = estimate_cost_usd(input_tokens=500_000, output_tokens=200_000)
+    assert cost == pytest.approx(
+        0.5 * PRICE_PER_MTOK_INPUT + 0.2 * PRICE_PER_MTOK_OUTPUT
+    )

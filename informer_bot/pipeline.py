@@ -2,10 +2,11 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from informer_bot.db import Database
+from informer_bot.summarizer import Summary
 
 log = logging.getLogger(__name__)
 
-SummarizeFn = Callable[[str], Awaitable[str]]
+SummarizeFn = Callable[[str], Awaitable[Summary]]
 SendDmFn = Callable[[int, str], Awaitable[None]]
 FetchChannelsFn = Callable[[], Awaitable[list[tuple[int, str]]]]
 
@@ -34,10 +35,18 @@ async def handle_new_post(
         "handling post %s/%s for %d subscriber(s) (%d chars)",
         channel_id, message_id, len(subscribers), len(text),
     )
-    brief = await summarize_fn(text)
-    body = f"{brief}\n\n{link}"
+    summary = await summarize_fn(text)
+    db.add_system_usage(
+        input_tokens=summary.input_tokens, output_tokens=summary.output_tokens
+    )
+    body = f"{summary.text}\n\n{link}"
     for user_id in subscribers:
         await send_dm(user_id, body)
+        db.add_usage(
+            user_id=user_id,
+            input_tokens=summary.input_tokens,
+            output_tokens=summary.output_tokens,
+        )
 
 
 async def refresh_channels(
