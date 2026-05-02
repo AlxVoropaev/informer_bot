@@ -46,7 +46,7 @@ Requirements: Python 3.12, [uv](https://docs.astral.sh/uv/), and a Telegram acco
 
 3. **Configure `.env`** (lives in `data/` so it's bind-mounted into the container, not baked into the image)
    ```sh
-   cp .env.example data/.env
+   cp data/.env.example data/.env
    # then fill in the five values above
    ```
 
