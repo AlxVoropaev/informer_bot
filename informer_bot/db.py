@@ -100,6 +100,11 @@ class Database:
             )
         ]
 
+    def delete_channel(self, channel_id: int) -> None:
+        self._conn.execute("DELETE FROM subscriptions WHERE channel_id = ?", (channel_id,))
+        self._conn.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
+        self._conn.commit()
+
     def mark_seen(self, channel_id: int, message_id: int) -> bool:
         cursor = self._conn.execute(
             "INSERT OR IGNORE INTO seen (channel_id, message_id) VALUES (?, ?)",
