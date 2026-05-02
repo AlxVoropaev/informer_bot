@@ -14,6 +14,7 @@ A Telegram bot that summarises posts from public channels and DMs you a short br
 - `/list` — show the available channels. Tap a row to toggle:
   - ✅ — you're subscribed
   - ⬜ — not subscribed
+- `/help` — list all available commands.
 
 That's it. No settings, no pagination, no spam — just toggle what you want and read the briefs as they arrive.
 

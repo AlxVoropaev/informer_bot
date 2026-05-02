@@ -9,7 +9,7 @@ from informer_bot.summarizer import estimate_cost_usd
 
 log = logging.getLogger(__name__)
 
-GREETING = "Hi, I'm informer. Use /list to pick channels to follow."
+GREETING = "Hi, I'm informer. Use /list to pick channels to follow. See /help for all commands."
 DENIED = "Not allowed."
 PENDING = "Your request has been sent to the administrator. Please wait."
 STILL_PENDING = "Still waiting for the administrator's approval."
@@ -59,6 +59,31 @@ def _user_label(user) -> str:
     if user.first_name:
         return f"{user.first_name} ({user.id})"
     return str(user.id)
+
+
+USER_HELP = (
+    "Commands:\n"
+    "/start — request access / get started\n"
+    "/list — pick channels to follow (tap to cycle: ⬜ off → 🔀 filtered → ✅ all)\n"
+    "/filter — set a personal content filter (used in 🔀 mode); /filter alone shows it, /filter clear removes it\n"
+    "/usage — your token usage and estimated cost\n"
+    "/help — show this message"
+)
+
+OWNER_HELP_EXTRA = (
+    "\n\nAdmin:\n"
+    "/admin_list — toggle channel blacklist\n"
+    "/update — refresh the channel list from your Telegram account"
+)
+
+
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    log.debug("/help from user=%s", user_id)
+    text = USER_HELP
+    if user_id == _owner_id(context):
+        text += OWNER_HELP_EXTRA
+    await update.message.reply_text(text)
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
