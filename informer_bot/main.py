@@ -1,5 +1,7 @@
 import asyncio
+import contextlib
 import logging
+import signal
 
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler
 from telethon import TelegramClient
@@ -76,15 +78,32 @@ async def main() -> None:
     await app.updater.start_polling()
     refresh_task = asyncio.create_task(refresh_loop())
 
+    stop_event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        with contextlib.suppress(NotImplementedError):
+            loop.add_signal_handler(sig, stop_event.set)
+
     log.info("informer_bot is running. Ctrl+C to stop.")
+    disconnect_task = asyncio.create_task(tg.run_until_disconnected())
+    stop_task = asyncio.create_task(stop_event.wait())
     try:
-        await tg.run_until_disconnected()
+        await asyncio.wait(
+            {disconnect_task, stop_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
     finally:
-        refresh_task.cancel()
+        log.info("shutting down")
+        for task in (refresh_task, disconnect_task, stop_task):
+            task.cancel()
+        for task in (refresh_task, disconnect_task, stop_task):
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
         await tg.disconnect()
+        log.info("shutdown complete")
 
 
 if __name__ == "__main__":
