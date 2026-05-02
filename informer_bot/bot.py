@@ -138,6 +138,42 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
+FILTER_HELP = (
+    "Send /filter <text> to set what you want to read. "
+    "Send /filter clear to remove your filter (deliver everything). "
+    "Send /filter alone to see your current filter."
+)
+
+
+async def cmd_filter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db = _db(context)
+    user_id = update.effective_user.id
+    log.debug("/filter from user=%s", user_id)
+    if db.get_user_status(user_id) != "approved":
+        await update.message.reply_text(DENIED)
+        return
+
+    args_text = (update.message.text or "").split(maxsplit=1)
+    if len(args_text) < 2:
+        current = db.get_filter(user_id=user_id)
+        if current:
+            await update.message.reply_text(f"Your filter:\n{current}\n\n{FILTER_HELP}")
+        else:
+            await update.message.reply_text(f"No filter set — you receive everything.\n\n{FILTER_HELP}")
+        return
+
+    payload = args_text[1].strip()
+    if payload.lower() == "clear":
+        db.set_filter(user_id=user_id, filter_prompt=None)
+        log.info("user=%s cleared filter", user_id)
+        await update.message.reply_text("Filter cleared. You will receive everything.")
+        return
+
+    db.set_filter(user_id=user_id, filter_prompt=payload)
+    log.info("user=%s updated filter (%d chars)", user_id, len(payload))
+    await update.message.reply_text(f"Filter saved:\n{payload}")
+
+
 async def cmd_admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != _owner_id(context):
         log.info("/admin_list denied for user=%s", update.effective_user.id)
