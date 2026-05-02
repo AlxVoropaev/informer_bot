@@ -120,3 +120,95 @@ def test_delete_channel_removes_channel_and_subscriptions(db: Database) -> None:
     assert [c.id for c in db.list_channels(include_blacklisted=True)] == [2]
     assert db.list_user_subscriptions(user_id=10) == [2]
     assert db.list_user_subscriptions(user_id=20) == []
+
+
+# ---------- usage tracking ----------
+
+def test_get_usage_returns_zero_for_unknown_user(db: Database) -> None:
+    assert db.get_usage(user_id=42) == (0, 0)
+
+
+def test_add_usage_accumulates(db: Database) -> None:
+    db.add_usage(user_id=42, input_tokens=100, output_tokens=20)
+    db.add_usage(user_id=42, input_tokens=50, output_tokens=10)
+
+    assert db.get_usage(user_id=42) == (150, 30)
+
+
+def test_add_usage_separate_users(db: Database) -> None:
+    db.add_usage(user_id=10, input_tokens=100, output_tokens=20)
+    db.add_usage(user_id=20, input_tokens=200, output_tokens=40)
+
+    assert db.get_usage(user_id=10) == (100, 20)
+    assert db.get_usage(user_id=20) == (200, 40)
+
+
+def test_get_system_usage_starts_at_zero(db: Database) -> None:
+    assert db.get_system_usage() == (0, 0)
+
+
+def test_add_system_usage_accumulates(db: Database) -> None:
+    db.add_system_usage(input_tokens=100, output_tokens=20)
+    db.add_system_usage(input_tokens=50, output_tokens=10)
+
+    assert db.get_system_usage() == (150, 30)
+
+
+def test_list_all_usage_returns_label_and_tokens(db: Database) -> None:
+    db.add_pending_user(user_id=10, username="alice", first_name="Alice")
+    db.add_pending_user(user_id=20, username=None, first_name="Bob")
+    db.add_pending_user(user_id=30, username=None, first_name=None)
+    db.add_usage(user_id=10, input_tokens=100, output_tokens=20)
+    db.add_usage(user_id=20, input_tokens=50, output_tokens=10)
+    db.add_usage(user_id=30, input_tokens=25, output_tokens=5)
+
+    rows = {uid: (label, inp, out) for uid, label, inp, out in db.list_all_usage()}
+
+    assert rows[10] == ("@alice (10)", 100, 20)
+    assert rows[20] == ("Bob (20)", 50, 10)
+    assert rows[30] == ("(30)", 25, 5)
+
+
+def test_list_all_usage_includes_users_without_user_row(db: Database) -> None:
+    db.add_usage(user_id=99, input_tokens=10, output_tokens=2)
+
+    rows = {uid: (label, inp, out) for uid, label, inp, out in db.list_all_usage()}
+    assert rows[99] == ("(99)", 10, 2)
+
+
+def test_add_pending_user_stores_first_name(db: Database) -> None:
+    db.add_pending_user(user_id=42, username="alice", first_name="Alice")
+
+    assert db.get_user_label(user_id=42) == "@alice (42)"
+
+
+def test_get_user_label_falls_back_to_first_name_then_id(db: Database) -> None:
+    db.add_pending_user(user_id=10, username=None, first_name="Bob")
+    db.add_pending_user(user_id=20, username=None, first_name=None)
+
+    assert db.get_user_label(user_id=10) == "Bob (10)"
+    assert db.get_user_label(user_id=20) == "(20)"
+    assert db.get_user_label(user_id=999) == "(999)"
+
+
+def test_list_user_ids(db: Database) -> None:
+    db.add_pending_user(user_id=10, username="alice")
+    db.add_pending_user(user_id=20, username="bob")
+
+    assert db.list_user_ids() == [10, 20]
+
+
+def test_update_user_name_overwrites_username_and_first_name(db: Database) -> None:
+    db.add_pending_user(user_id=10, username="old", first_name="Old")
+
+    db.update_user_name(user_id=10, username="new", first_name="New")
+
+    assert db.get_user_label(user_id=10) == "@new (10)"
+
+
+def test_update_user_name_can_clear_username(db: Database) -> None:
+    db.add_pending_user(user_id=10, username="alice", first_name="Alice")
+
+    db.update_user_name(user_id=10, username=None, first_name="Alice")
+
+    assert db.get_user_label(user_id=10) == "Alice (10)"

@@ -4,6 +4,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from informer_bot.db import Database
+from informer_bot.summarizer import estimate_cost_usd
 
 log = logging.getLogger(__name__)
 
@@ -71,7 +72,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(ACCESS_DENIED)
         return
 
-    db.add_pending_user(user_id=user.id, username=user.username)
+    db.add_pending_user(
+        user_id=user.id, username=user.username, first_name=user.first_name
+    )
     log.info("new access request from user=%s (%s)", user.id, _user_label(user))
     await update.message.reply_text(PENDING)
     keyboard = InlineKeyboardMarkup([[
@@ -95,6 +98,43 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Pick channels:",
         reply_markup=_user_keyboard(db, user_id),
+    )
+
+
+def _format_usage_line(label: str, input_tokens: int, output_tokens: int) -> str:
+    cost = estimate_cost_usd(input_tokens, output_tokens)
+    return f"{label}: in={input_tokens:,} out={output_tokens:,} ≈ ${cost:.4f}"
+
+
+async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db = _db(context)
+    user_id = update.effective_user.id
+    log.debug("/usage from user=%s", user_id)
+    if db.get_user_status(user_id) != "approved":
+        await update.message.reply_text(DENIED)
+        return
+
+    if user_id == _owner_id(context):
+        rows = db.list_all_usage()
+        sys_in, sys_out = db.get_system_usage()
+        lines = ["Usage by user (delivered):"]
+        if rows:
+            for _uid, label, inp, out in rows:
+                lines.append(_format_usage_line(label, inp, out))
+        else:
+            lines.append("(none yet)")
+        lines.append("")
+        lines.append(_format_usage_line("System total (actual API spend)", sys_in, sys_out))
+        await update.message.reply_text("\n".join(lines))
+        return
+
+    inp, out = db.get_usage(user_id)
+    cost = estimate_cost_usd(inp, out)
+    await update.message.reply_text(
+        f"Your usage:\n"
+        f"Input tokens: {inp:,}\n"
+        f"Output tokens: {out:,}\n"
+        f"Estimated cost: ${cost:.4f}"
     )
 
 
