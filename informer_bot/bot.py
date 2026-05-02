@@ -174,9 +174,9 @@ async def cmd_filter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if len(args_text) < 2:
         current = db.get_filter(user_id=user_id)
         if current:
-            await update.message.reply_text(
-                t(lang, "filter_current", filter=current, help=filter_help)
-            )
+            await update.message.reply_text(t(lang, "filter_current_header"))
+            await update.message.reply_text(current)
+            await update.message.reply_text(filter_help)
         else:
             await update.message.reply_text(t(lang, "filter_none", help=filter_help))
         return
