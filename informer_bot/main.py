@@ -17,6 +17,7 @@ from informer_bot.bot import (
     cmd_usage,
     on_approve,
     on_blacklist,
+    on_blacklist_done,
     on_deny,
     on_done,
     on_toggle,
@@ -56,6 +57,7 @@ async def main() -> None:
     app.add_handler(CallbackQueryHandler(on_toggle, pattern=r"^toggle:"))
     app.add_handler(CallbackQueryHandler(on_done, pattern=r"^done$"))
     app.add_handler(CallbackQueryHandler(on_blacklist, pattern=r"^bl:"))
+    app.add_handler(CallbackQueryHandler(on_blacklist_done, pattern=r"^bl_done$"))
     app.add_handler(CallbackQueryHandler(on_approve, pattern=r"^approve:"))
     app.add_handler(CallbackQueryHandler(on_deny, pattern=r"^deny:"))
 

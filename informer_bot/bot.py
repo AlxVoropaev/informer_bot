@@ -50,6 +50,7 @@ def _admin_keyboard(db: Database) -> InlineKeyboardMarkup:
         )]
         for c in db.list_channels(include_blacklisted=True)
     ]
+    rows.append([InlineKeyboardButton(text="Done", callback_data="bl_done")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -271,6 +272,16 @@ async def on_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.debug("/list done by user=%s", update.effective_user.id)
     await update.callback_query.answer()
     await update.callback_query.edit_message_text("Channel selection saved.")
+
+
+async def on_blacklist_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != _owner_id(context):
+        log.info("blacklist done denied for user=%s", update.effective_user.id)
+        await update.callback_query.answer(DENIED)
+        return
+    log.debug("/blacklist done by owner=%s", update.effective_user.id)
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text("Blacklist closed.")
 
 
 async def on_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

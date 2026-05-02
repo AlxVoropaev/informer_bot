@@ -13,6 +13,7 @@ from informer_bot.bot import (
     cmd_usage,
     on_approve,
     on_blacklist,
+    on_blacklist_done,
     on_deny,
     on_toggle,
 )
@@ -325,7 +326,9 @@ async def test_blacklist_shows_all_channels_with_blacklist_marker(db: Database) 
     assert any("Beta" in t for t in titles)
     banned = next(t for t in titles if "BannedChan" in t)
     assert banned.startswith("⛔")
-    assert all(data.startswith("bl:") for _, data in flat)
+    toggles = [(text, data) for text, data in flat if data.startswith("bl:")]
+    assert len(toggles) == len(flat) - 1
+    assert flat[-1] == ("Done", "bl_done")
 
 
 # ---------- blacklist callback ----------
@@ -379,6 +382,23 @@ async def test_blacklist_callback_denies_non_owner(db: Database) -> None:
     [alpha] = [c for c in db.list_channels(include_blacklisted=True) if c.id == 1]
     assert alpha.blacklisted is False
     upd.callback_query.answer.assert_awaited()
+
+
+async def test_blacklist_done_closes_keyboard_for_owner(db: Database) -> None:
+    upd = _cb_update(OWNER_ID, "bl_done")
+    await on_blacklist_done(upd, _ctx(db))
+
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_text.assert_awaited_once()
+    text = upd.callback_query.edit_message_text.await_args.args[0]
+    assert "blacklist" in text.lower() or "done" in text.lower() or "closed" in text.lower()
+
+
+async def test_blacklist_done_denies_non_owner(db: Database) -> None:
+    upd = _cb_update(USER_ID, "bl_done")
+    await on_blacklist_done(upd, _ctx(db))
+
+    upd.callback_query.edit_message_text.assert_not_awaited()
 
 
 # ---------- /usage ----------
