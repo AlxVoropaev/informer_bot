@@ -81,3 +81,17 @@ def test_mark_seen_returns_true_only_first_time(db: Database) -> None:
     assert db.mark_seen(channel_id=1, message_id=555) is True
     assert db.mark_seen(channel_id=1, message_id=555) is False
     assert db.mark_seen(channel_id=1, message_id=556) is True
+
+
+def test_delete_channel_removes_channel_and_subscriptions(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.upsert_channel(channel_id=2, title="B")
+    db.subscribe(user_id=10, channel_id=1)
+    db.subscribe(user_id=10, channel_id=2)
+    db.subscribe(user_id=20, channel_id=1)
+
+    db.delete_channel(channel_id=1)
+
+    assert [c.id for c in db.list_channels(include_blacklisted=True)] == [2]
+    assert db.list_user_subscriptions(user_id=10) == [2]
+    assert db.list_user_subscriptions(user_id=20) == []
