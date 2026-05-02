@@ -90,7 +90,16 @@ async def on_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     db = _db(context)
     channel_id = int(update.callback_query.data.split(":", 1)[1])
     [channel] = [c for c in db.list_channels(include_blacklisted=True) if c.id == channel_id]
-    db.set_blacklisted(channel_id=channel_id, blacklisted=not channel.blacklisted)
+    will_blacklist = not channel.blacklisted
+
+    if will_blacklist:
+        for user_id in db.subscribers_for_channel(channel_id=channel_id):
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"Channel '{channel.title}' is no longer available.",
+            )
+
+    db.set_blacklisted(channel_id=channel_id, blacklisted=will_blacklist)
 
     await update.callback_query.answer()
     await update.callback_query.edit_message_text(

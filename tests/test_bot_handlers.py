@@ -22,7 +22,10 @@ def db(tmp_path: Path) -> Database:
 
 
 def _ctx(db: Database) -> SimpleNamespace:
-    return SimpleNamespace(bot_data={"db": db, "owner_id": OWNER_ID})
+    return SimpleNamespace(
+        bot_data={"db": db, "owner_id": OWNER_ID},
+        bot=SimpleNamespace(send_message=AsyncMock()),
+    )
 
 
 def _msg_update(user_id: int) -> SimpleNamespace:
@@ -150,6 +153,35 @@ async def test_blacklist_toggle_flips_flag_for_owner(db: Database) -> None:
     await on_blacklist(upd2, _ctx(db))
     [alpha] = [c for c in db.list_channels(include_blacklisted=True) if c.id == 1]
     assert alpha.blacklisted is False
+
+
+async def test_blacklist_toggling_on_dms_existing_subscribers(db: Database) -> None:
+    db.subscribe(user_id=10, channel_id=1)
+    db.subscribe(user_id=20, channel_id=1)
+    ctx = _ctx(db)
+
+    upd = _cb_update(OWNER_ID, "bl:1")
+    await on_blacklist(upd, ctx)
+
+    [alpha] = [c for c in db.list_channels(include_blacklisted=True) if c.id == 1]
+    assert alpha.blacklisted is True
+    assert ctx.bot.send_message.await_count == 2
+    sent = {call.kwargs["chat_id"]: call.kwargs["text"] for call in ctx.bot.send_message.await_args_list}
+    assert set(sent.keys()) == {10, 20}
+    for text in sent.values():
+        assert "Alpha" in text and "no longer available" in text.lower()
+
+
+async def test_blacklist_toggling_off_does_not_dm(db: Database) -> None:
+    db.subscribe(user_id=10, channel_id=3)  # channel 3 is already blacklisted in fixture
+    ctx = _ctx(db)
+
+    upd = _cb_update(OWNER_ID, "bl:3")
+    await on_blacklist(upd, ctx)
+
+    [banned] = [c for c in db.list_channels(include_blacklisted=True) if c.id == 3]
+    assert banned.blacklisted is False
+    ctx.bot.send_message.assert_not_called()
 
 
 async def test_blacklist_callback_denies_non_owner(db: Database) -> None:
