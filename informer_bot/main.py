@@ -12,6 +12,7 @@ from informer_bot.bot import (
     cmd_filter,
     cmd_list,
     cmd_start,
+    cmd_update,
     cmd_usage,
     on_approve,
     on_blacklist,
@@ -49,6 +50,7 @@ async def main() -> None:
     app.add_handler(CommandHandler("admin_list", cmd_admin_list))
     app.add_handler(CommandHandler("usage", cmd_usage))
     app.add_handler(CommandHandler("filter", cmd_filter))
+    app.add_handler(CommandHandler("update", cmd_update))
     app.add_handler(CallbackQueryHandler(on_toggle, pattern=r"^toggle:"))
     app.add_handler(CallbackQueryHandler(on_done, pattern=r"^done$"))
     app.add_handler(CallbackQueryHandler(on_blacklist, pattern=r"^bl:"))
@@ -76,13 +78,8 @@ async def main() -> None:
 
     await refresh_channels(fetch_fn=fetch, db=db, send_dm=send_dm)
 
-    async def refresh_loop() -> None:
-        while True:
-            await asyncio.sleep(cfg.refresh_interval_seconds)
-            try:
-                await refresh_channels(fetch_fn=fetch, db=db, send_dm=send_dm)
-            except Exception:
-                log.exception("refresh failed")
+    app.bot_data["fetch_channels"] = fetch
+    app.bot_data["send_dm"] = send_dm
 
     await app.initialize()
     await app.start()
@@ -97,8 +94,6 @@ async def main() -> None:
         db.update_user_name(
             user_id=user_id, username=chat.username, first_name=chat.first_name
         )
-
-    refresh_task = asyncio.create_task(refresh_loop())
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -116,9 +111,9 @@ async def main() -> None:
         )
     finally:
         log.info("shutting down")
-        for task in (refresh_task, disconnect_task, stop_task):
+        for task in (disconnect_task, stop_task):
             task.cancel()
-        for task in (refresh_task, disconnect_task, stop_task):
+        for task in (disconnect_task, stop_task):
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         await app.updater.stop()
@@ -130,4 +125,5 @@ async def main() -> None:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     asyncio.run(main())
