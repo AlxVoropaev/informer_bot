@@ -19,6 +19,16 @@ async def fetch_subscribed_channels(tg: TelegramClient) -> list[tuple[int, str]]
     return out
 
 
+async def _download_photo(message) -> bytes | None:
+    if not getattr(message, "photo", None):
+        return None
+    try:
+        return await message.download_media(file=bytes)
+    except Exception:
+        log.exception("photo download failed for msg=%s", getattr(message, "id", "?"))
+        return None
+
+
 def register_new_post_handler(tg: TelegramClient, buffer: AlbumBuffer) -> None:
     @tg.on(events.NewMessage())
     async def _handler(event: events.NewMessage.Event) -> None:
@@ -30,10 +40,12 @@ def register_new_post_handler(tg: TelegramClient, buffer: AlbumBuffer) -> None:
             "new message: channel=%s msg=%s grouped=%s",
             chat.id, event.message.id, event.message.grouped_id,
         )
+        photo = await _download_photo(event.message)
         await buffer.add(
             channel_id=chat.id,
             channel_username=chat.username,
             message_id=event.message.id,
             grouped_id=event.message.grouped_id,
             text=event.message.message or "",
+            photo=photo,
         )

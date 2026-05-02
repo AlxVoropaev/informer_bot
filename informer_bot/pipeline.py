@@ -1,3 +1,4 @@
+import html
 import logging
 from collections.abc import Awaitable, Callable
 
@@ -9,8 +10,12 @@ log = logging.getLogger(__name__)
 
 SummarizeFn = Callable[[str], Awaitable[Summary]]
 IsRelevantFn = Callable[[str, str], Awaitable[RelevanceCheck]]
-SendDmFn = Callable[[int, str], Awaitable[None]]
+SendDmFn = Callable[..., Awaitable[None]]
 FetchChannelsFn = Callable[[], Awaitable[list[tuple[int, str]]]]
+
+
+def _format_post(channel_title: str, summary: str, link: str) -> str:
+    return f'<a href="{html.escape(link, quote=True)}">{html.escape(channel_title)}</a>\n{html.escape(summary)}'
 
 
 async def handle_new_post(
@@ -23,6 +28,7 @@ async def handle_new_post(
     summarize_fn: SummarizeFn,
     is_relevant_fn: IsRelevantFn,
     send_dm: SendDmFn,
+    photo: bytes | None = None,
 ) -> None:
     if not text.strip():
         log.debug("skip post %s/%s: empty text", channel_id, message_id)
@@ -73,9 +79,10 @@ async def handle_new_post(
     db.add_system_usage(
         input_tokens=summary.input_tokens, output_tokens=summary.output_tokens
     )
-    body = f"{summary.text}\n\n{link}"
+    channel_title = db.get_channel_title(channel_id) or ""
+    body = _format_post(channel_title, summary.text, link)
     for user_id in recipients:
-        await send_dm(user_id, body)
+        await send_dm(user_id, body, photo)
         db.add_usage(
             user_id=user_id,
             input_tokens=summary.input_tokens,

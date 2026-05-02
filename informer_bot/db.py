@@ -92,6 +92,12 @@ class Database:
         self._conn.commit()
         log.debug("set_blacklisted id=%s blacklisted=%s", channel_id, blacklisted)
 
+    def get_channel_title(self, channel_id: int) -> str | None:
+        row = self._conn.execute(
+            "SELECT title FROM channels WHERE id = ?", (channel_id,)
+        ).fetchone()
+        return row[0] if row else None
+
     def list_channels(self, include_blacklisted: bool = False) -> list[Channel]:
         sql = "SELECT id, title, blacklisted FROM channels"
         if not include_blacklisted:
