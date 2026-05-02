@@ -72,7 +72,7 @@ USER_HELP = (
 
 OWNER_HELP_EXTRA = (
     "\n\nAdmin:\n"
-    "/admin_list — toggle channel blacklist\n"
+    "/blacklist — toggle channel blacklist\n"
     "/update — refresh the channel list from your Telegram account"
 )
 
@@ -224,12 +224,12 @@ async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text("Channel list refreshed.")
 
 
-async def cmd_admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user.id != _owner_id(context):
-        log.info("/admin_list denied for user=%s", update.effective_user.id)
+        log.info("/blacklist denied for user=%s", update.effective_user.id)
         await update.message.reply_text(DENIED)
         return
-    log.debug("/admin_list from owner=%s", update.effective_user.id)
+    log.debug("/blacklist from owner=%s", update.effective_user.id)
     await update.message.reply_text(
         "Admin: tap to toggle blacklist.",
         reply_markup=_admin_keyboard(_db(context)),
