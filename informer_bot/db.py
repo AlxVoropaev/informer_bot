@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS seen (
     message_id INTEGER NOT NULL,
     PRIMARY KEY (channel_id, message_id)
 );
+CREATE TABLE IF NOT EXISTS users (
+    user_id  INTEGER PRIMARY KEY,
+    status   TEXT NOT NULL CHECK(status IN ('pending','approved','denied')),
+    username TEXT
+);
 """
 
 
@@ -111,6 +116,29 @@ class Database:
         self._conn.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
         self._conn.commit()
         log.debug("delete_channel id=%s", channel_id)
+
+    def get_user_status(self, user_id: int) -> str | None:
+        row = self._conn.execute(
+            "SELECT status FROM users WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def add_pending_user(self, user_id: int, username: str | None) -> None:
+        self._conn.execute(
+            "INSERT OR IGNORE INTO users (user_id, status, username) VALUES (?, 'pending', ?)",
+            (user_id, username),
+        )
+        self._conn.commit()
+        log.debug("add_pending_user user=%s username=%r", user_id, username)
+
+    def set_user_status(self, user_id: int, status: str) -> None:
+        self._conn.execute(
+            "INSERT INTO users (user_id, status) VALUES (?, ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET status = excluded.status",
+            (user_id, status),
+        )
+        self._conn.commit()
+        log.debug("set_user_status user=%s status=%s", user_id, status)
 
     def mark_seen(self, channel_id: int, message_id: int) -> bool:
         cursor = self._conn.execute(

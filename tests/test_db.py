@@ -83,6 +83,31 @@ def test_mark_seen_returns_true_only_first_time(db: Database) -> None:
     assert db.mark_seen(channel_id=1, message_id=556) is True
 
 
+def test_get_user_status_returns_none_for_unknown_user(db: Database) -> None:
+    assert db.get_user_status(user_id=42) is None
+
+
+def test_add_pending_user_sets_status_and_username(db: Database) -> None:
+    db.add_pending_user(user_id=42, username="alice")
+
+    assert db.get_user_status(user_id=42) == "pending"
+
+
+def test_add_pending_user_is_idempotent_does_not_overwrite_status(db: Database) -> None:
+    db.add_pending_user(user_id=42, username="alice")
+    db.set_user_status(user_id=42, status="approved")
+    db.add_pending_user(user_id=42, username="alice")
+
+    assert db.get_user_status(user_id=42) == "approved"
+
+
+def test_set_user_status_updates_existing(db: Database) -> None:
+    db.add_pending_user(user_id=42, username="alice")
+    db.set_user_status(user_id=42, status="denied")
+
+    assert db.get_user_status(user_id=42) == "denied"
+
+
 def test_delete_channel_removes_channel_and_subscriptions(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="A")
     db.upsert_channel(channel_id=2, title="B")

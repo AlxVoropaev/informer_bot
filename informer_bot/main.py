@@ -11,7 +11,9 @@ from informer_bot.bot import (
     cmd_admin_list,
     cmd_list,
     cmd_start,
+    on_approve,
     on_blacklist,
+    on_deny,
     on_done,
     on_toggle,
 )
@@ -29,6 +31,7 @@ async def main() -> None:
     logging.getLogger().setLevel(cfg.log_level)
     log.info("starting informer_bot (log_level=%s, db=%s)", cfg.log_level, cfg.db_path)
     db = Database(cfg.db_path)
+    db.set_user_status(user_id=cfg.owner_id, status="approved")
 
     tg = TelegramClient(cfg.session_path, cfg.telegram_api_id, cfg.telegram_api_hash)
     await tg.connect()
@@ -45,6 +48,8 @@ async def main() -> None:
     app.add_handler(CallbackQueryHandler(on_toggle, pattern=r"^toggle:"))
     app.add_handler(CallbackQueryHandler(on_done, pattern=r"^done$"))
     app.add_handler(CallbackQueryHandler(on_blacklist, pattern=r"^bl:"))
+    app.add_handler(CallbackQueryHandler(on_approve, pattern=r"^approve:"))
+    app.add_handler(CallbackQueryHandler(on_deny, pattern=r"^deny:"))
 
     async def send_dm(user_id: int, text: str) -> None:
         try:
