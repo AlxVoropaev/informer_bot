@@ -10,6 +10,7 @@ from informer_bot.album import AlbumBuffer
 from informer_bot.bot import (
     cmd_admin_list,
     cmd_filter,
+    cmd_help,
     cmd_list,
     cmd_start,
     cmd_update,
@@ -46,6 +47,7 @@ async def main() -> None:
     app.bot_data["db"] = db
     app.bot_data["owner_id"] = cfg.owner_id
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("admin_list", cmd_admin_list))
     app.add_handler(CommandHandler("usage", cmd_usage))

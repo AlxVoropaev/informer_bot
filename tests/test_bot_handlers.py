@@ -7,6 +7,7 @@ import pytest
 from informer_bot.bot import (
     cmd_admin_list,
     cmd_filter,
+    cmd_help,
     cmd_list,
     cmd_start,
     cmd_usage,
@@ -66,6 +67,40 @@ def _kb_rows(reply_kwargs: dict) -> list[list[tuple[str, str]]]:
     """Extract [[(button_text, callback_data), ...], ...] from an InlineKeyboardMarkup kwarg."""
     markup = reply_kwargs["reply_markup"]
     return [[(b.text, b.callback_data) for b in row] for row in markup.inline_keyboard]
+
+
+# ---------- /help ----------
+
+async def test_help_for_regular_user_lists_user_commands_only(db: Database) -> None:
+    update = _msg_update(USER_ID)
+    await cmd_help(update, _ctx(db))
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0]
+    for cmd in ("/start", "/list", "/filter", "/usage", "/help"):
+        assert cmd in text
+    assert "/admin_list" not in text
+    assert "/update" not in text
+
+
+async def test_help_for_owner_includes_admin_commands(db: Database) -> None:
+    update = _msg_update(OWNER_ID)
+    await cmd_help(update, _ctx(db))
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0]
+    for cmd in ("/list", "/filter", "/admin_list", "/update"):
+        assert cmd in text
+
+
+async def test_help_works_for_unapproved_user(db: Database) -> None:
+    unknown = 777
+    update = _msg_update(unknown)
+    await cmd_help(update, _ctx(db))
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0]
+    assert "/start" in text
 
 
 # ---------- /start ----------
