@@ -360,7 +360,7 @@ async def test_blacklist_toggling_on_dms_existing_subscribers(db: Database) -> N
     sent = {call.kwargs["chat_id"]: call.kwargs["text"] for call in ctx.bot.send_message.await_args_list}
     assert set(sent.keys()) == {10, 20}
     for text in sent.values():
-        assert "Alpha" in text and "no longer available" in text.lower()
+        assert "Alpha" in text and "admin blocked" in text.lower()
 
 
 async def test_blacklist_toggling_off_does_not_dm(db: Database) -> None:

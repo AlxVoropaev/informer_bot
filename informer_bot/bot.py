@@ -332,7 +332,7 @@ async def on_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         for user_id, _mode in subs:
             await context.bot.send_message(
                 chat_id=user_id,
-                text=f"Channel '{channel.title}' is no longer available.",
+                text=f"Admin blocked channel '{channel.title}', you will not get updates anymore.",
             )
         log.info(
             "blacklisting channel=%s '%s' (%d subscriber(s) notified)",
