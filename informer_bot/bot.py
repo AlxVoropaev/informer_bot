@@ -28,6 +28,7 @@ def _user_keyboard(db: Database, user_id: int) -> InlineKeyboardMarkup:
         )]
         for c in db.list_channels()
     ]
+    rows.append([InlineKeyboardButton(text="Done", callback_data="done")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -91,6 +92,12 @@ async def on_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Pick channels:",
         reply_markup=_user_keyboard(db, user_id),
     )
+
+
+async def on_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    log.debug("/list done by user=%s", update.effective_user.id)
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text("Channel selection saved.")
 
 
 async def on_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
