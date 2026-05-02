@@ -6,6 +6,7 @@ import pytest
 
 from informer_bot.bot import (
     cmd_admin_list,
+    cmd_filter,
     cmd_list,
     cmd_start,
     cmd_usage,
@@ -39,11 +40,13 @@ def _ctx(db: Database) -> SimpleNamespace:
     )
 
 
-def _msg_update(user_id: int, username: str | None = None) -> SimpleNamespace:
+def _msg_update(
+    user_id: int, username: str | None = None, text: str = ""
+) -> SimpleNamespace:
     return SimpleNamespace(
         effective_user=SimpleNamespace(id=user_id, username=username, first_name=None),
         effective_chat=SimpleNamespace(id=user_id),
-        message=SimpleNamespace(reply_text=AsyncMock()),
+        message=SimpleNamespace(reply_text=AsyncMock(), text=text),
     )
 
 
@@ -381,3 +384,57 @@ async def test_usage_for_admin_shows_per_user_breakdown_and_system_total(db: Dat
     assert "50" in text and "10" in text
     assert "system" in text.lower() or "total" in text.lower()
     assert "75" in text and "15" in text
+
+
+# ---------- /filter ----------
+
+async def test_filter_blocks_non_approved_user(db: Database) -> None:
+    new_user = 555
+    update = _msg_update(new_user, text="/filter only AI")
+
+    await cmd_filter(update, _ctx(db))
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "not allowed" in text
+    assert db.get_filter(user_id=new_user) is None
+
+
+async def test_filter_bare_shows_no_filter_message_when_unset(db: Database) -> None:
+    update = _msg_update(USER_ID, text="/filter")
+
+    await cmd_filter(update, _ctx(db))
+
+    text = update.message.reply_text.await_args.args[0]
+    assert "No filter" in text or "no filter" in text.lower()
+
+
+async def test_filter_set_saves_payload(db: Database) -> None:
+    update = _msg_update(USER_ID, text="/filter only AI news, no crypto")
+
+    await cmd_filter(update, _ctx(db))
+
+    assert db.get_filter(user_id=USER_ID) == "only AI news, no crypto"
+    text = update.message.reply_text.await_args.args[0]
+    assert "only AI news, no crypto" in text
+
+
+async def test_filter_bare_shows_current_filter_when_set(db: Database) -> None:
+    db.set_filter(user_id=USER_ID, filter_prompt="only AI news")
+    update = _msg_update(USER_ID, text="/filter")
+
+    await cmd_filter(update, _ctx(db))
+
+    text = update.message.reply_text.await_args.args[0]
+    assert "only AI news" in text
+
+
+async def test_filter_clear_removes_filter(db: Database) -> None:
+    db.set_filter(user_id=USER_ID, filter_prompt="only AI news")
+    update = _msg_update(USER_ID, text="/filter clear")
+
+    await cmd_filter(update, _ctx(db))
+
+    assert db.get_filter(user_id=USER_ID) is None
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "clear" in text or "everything" in text

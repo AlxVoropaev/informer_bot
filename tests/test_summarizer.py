@@ -7,6 +7,7 @@ from informer_bot.summarizer import (
     PRICE_PER_MTOK_INPUT,
     PRICE_PER_MTOK_OUTPUT,
     estimate_cost_usd,
+    is_relevant,
     summarize,
 )
 
@@ -57,6 +58,49 @@ async def test_summarize_strips_whitespace(fake_client: AsyncMock) -> None:
     result = await summarize("anything", client=fake_client)
 
     assert result.text == "Brief with padding."
+
+
+async def test_is_relevant_yes(fake_client: AsyncMock) -> None:
+    fake_client.messages.create.return_value = _fake_response(
+        "YES", input_tokens=30, output_tokens=1
+    )
+
+    result = await is_relevant("Post about AI", "I want AI news", client=fake_client)
+
+    assert result.relevant is True
+    assert result.input_tokens == 30
+    assert result.output_tokens == 1
+
+
+async def test_is_relevant_no(fake_client: AsyncMock) -> None:
+    fake_client.messages.create.return_value = _fake_response("NO")
+
+    result = await is_relevant("Crypto pump", "I want AI news", client=fake_client)
+
+    assert result.relevant is False
+
+
+async def test_is_relevant_tolerates_whitespace_and_case(fake_client: AsyncMock) -> None:
+    fake_client.messages.create.return_value = _fake_response("  yes\n")
+
+    result = await is_relevant("post", "filter", client=fake_client)
+
+    assert result.relevant is True
+
+
+async def test_is_relevant_passes_filter_and_post_to_user_message(
+    fake_client: AsyncMock,
+) -> None:
+    fake_client.messages.create.return_value = _fake_response("YES")
+
+    await is_relevant("POST_BODY", "FILTER_TEXT", client=fake_client)
+
+    kwargs = fake_client.messages.create.await_args.kwargs
+    assert kwargs["model"] == "claude-haiku-4-5"
+    assert "classifier" in kwargs["system"].lower() or "relevan" in kwargs["system"].lower()
+    user_content = kwargs["messages"][0]["content"]
+    assert "FILTER_TEXT" in user_content
+    assert "POST_BODY" in user_content
 
 
 def test_estimate_cost_usd_matches_per_mtok_pricing() -> None:

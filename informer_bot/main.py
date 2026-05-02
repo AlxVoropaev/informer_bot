@@ -9,6 +9,7 @@ from telethon import TelegramClient
 from informer_bot.album import AlbumBuffer
 from informer_bot.bot import (
     cmd_admin_list,
+    cmd_filter,
     cmd_list,
     cmd_start,
     cmd_usage,
@@ -22,7 +23,7 @@ from informer_bot.client import fetch_subscribed_channels, register_new_post_han
 from informer_bot.config import load_config
 from informer_bot.db import Database
 from informer_bot.pipeline import handle_new_post, refresh_channels
-from informer_bot.summarizer import summarize
+from informer_bot.summarizer import is_relevant, summarize
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ async def main() -> None:
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("admin_list", cmd_admin_list))
     app.add_handler(CommandHandler("usage", cmd_usage))
+    app.add_handler(CommandHandler("filter", cmd_filter))
     app.add_handler(CallbackQueryHandler(on_toggle, pattern=r"^toggle:"))
     app.add_handler(CallbackQueryHandler(on_done, pattern=r"^done$"))
     app.add_handler(CallbackQueryHandler(on_blacklist, pattern=r"^bl:"))
@@ -63,7 +65,7 @@ async def main() -> None:
     async def on_post(channel_id: int, message_id: int, text: str, link: str) -> None:
         await handle_new_post(
             channel_id=channel_id, message_id=message_id, text=text, link=link,
-            db=db, summarize_fn=summarize, send_dm=send_dm,
+            db=db, summarize_fn=summarize, is_relevant_fn=is_relevant, send_dm=send_dm,
         )
 
     buffer = AlbumBuffer(on_flush=on_post, delay=1.5)

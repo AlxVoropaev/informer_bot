@@ -31,10 +31,11 @@ CREATE TABLE IF NOT EXISTS seen (
     PRIMARY KEY (channel_id, message_id)
 );
 CREATE TABLE IF NOT EXISTS users (
-    user_id    INTEGER PRIMARY KEY,
-    status     TEXT NOT NULL CHECK(status IN ('pending','approved','denied')),
-    username   TEXT,
-    first_name TEXT
+    user_id       INTEGER PRIMARY KEY,
+    status        TEXT NOT NULL CHECK(status IN ('pending','approved','denied')),
+    username      TEXT,
+    first_name    TEXT,
+    filter_prompt TEXT
 );
 CREATE TABLE IF NOT EXISTS usage (
     user_id       INTEGER PRIMARY KEY,
@@ -58,6 +59,8 @@ class Database:
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(users)")}
         if "first_name" not in cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN first_name TEXT")
+        if "filter_prompt" not in cols:
+            self._conn.execute("ALTER TABLE users ADD COLUMN filter_prompt TEXT")
         self._conn.commit()
         log.debug("opened sqlite at %s", path)
 
@@ -191,6 +194,20 @@ class Database:
         if first_name:
             return f"{first_name} ({user_id})"
         return f"({user_id})"
+
+    def get_filter(self, user_id: int) -> str | None:
+        row = self._conn.execute(
+            "SELECT filter_prompt FROM users WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return row[0] if row and row[0] else None
+
+    def set_filter(self, user_id: int, filter_prompt: str | None) -> None:
+        self._conn.execute(
+            "UPDATE users SET filter_prompt = ? WHERE user_id = ?",
+            (filter_prompt, user_id),
+        )
+        self._conn.commit()
+        log.debug("set_filter user=%s len=%s", user_id, len(filter_prompt) if filter_prompt else 0)
 
     def add_usage(self, user_id: int, input_tokens: int, output_tokens: int) -> None:
         self._conn.execute(

@@ -206,6 +206,27 @@ def test_update_user_name_overwrites_username_and_first_name(db: Database) -> No
     assert db.get_user_label(user_id=10) == "@new (10)"
 
 
+def test_get_filter_returns_none_when_unset(db: Database) -> None:
+    db.add_pending_user(user_id=10, username="alice")
+    assert db.get_filter(user_id=10) is None
+    assert db.get_filter(user_id=999) is None
+
+
+def test_set_filter_round_trips(db: Database) -> None:
+    db.add_pending_user(user_id=10, username="alice")
+    db.set_filter(user_id=10, filter_prompt="I want AI news, no crypto")
+
+    assert db.get_filter(user_id=10) == "I want AI news, no crypto"
+
+
+def test_set_filter_clear_with_none_removes_filter(db: Database) -> None:
+    db.add_pending_user(user_id=10, username="alice")
+    db.set_filter(user_id=10, filter_prompt="something")
+    db.set_filter(user_id=10, filter_prompt=None)
+
+    assert db.get_filter(user_id=10) is None
+
+
 def test_update_user_name_can_clear_username(db: Database) -> None:
     db.add_pending_user(user_id=10, username="alice", first_name="Alice")
 
