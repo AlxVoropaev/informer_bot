@@ -36,7 +36,8 @@ CREATE TABLE IF NOT EXISTS users (
     status        TEXT NOT NULL CHECK(status IN ('pending','approved','denied')),
     username      TEXT,
     first_name    TEXT,
-    filter_prompt TEXT
+    filter_prompt TEXT,
+    language      TEXT NOT NULL DEFAULT 'en' CHECK(language IN ('en','ru'))
 );
 CREATE TABLE IF NOT EXISTS usage (
     user_id       INTEGER PRIMARY KEY,
@@ -62,6 +63,10 @@ class Database:
             self._conn.execute("ALTER TABLE users ADD COLUMN first_name TEXT")
         if "filter_prompt" not in cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN filter_prompt TEXT")
+        if "language" not in cols:
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'en'"
+            )
         sub_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(subscriptions)")}
         if "mode" not in sub_cols:
             self._conn.execute(
@@ -222,6 +227,21 @@ class Database:
         )
         self._conn.commit()
         log.debug("set_filter user=%s len=%s", user_id, len(filter_prompt) if filter_prompt else 0)
+
+    def get_language(self, user_id: int) -> str:
+        row = self._conn.execute(
+            "SELECT language FROM users WHERE user_id = ?", (user_id,)
+        ).fetchone()
+        return row[0] if row and row[0] else "en"
+
+    def set_language(self, user_id: int, language: str) -> None:
+        self._conn.execute(
+            "INSERT INTO users (user_id, status, language) VALUES (?, 'pending', ?) "
+            "ON CONFLICT(user_id) DO UPDATE SET language = excluded.language",
+            (user_id, language),
+        )
+        self._conn.commit()
+        log.debug("set_language user=%s language=%s", user_id, language)
 
     def add_usage(self, user_id: int, input_tokens: int, output_tokens: int) -> None:
         self._conn.execute(

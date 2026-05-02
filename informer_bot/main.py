@@ -11,6 +11,7 @@ from informer_bot.bot import (
     cmd_blacklist,
     cmd_filter,
     cmd_help,
+    cmd_language,
     cmd_list,
     cmd_start,
     cmd_update,
@@ -20,6 +21,7 @@ from informer_bot.bot import (
     on_blacklist_done,
     on_deny,
     on_done,
+    on_language,
     on_toggle,
 )
 from informer_bot.client import fetch_subscribed_channels, register_new_post_handler
@@ -53,6 +55,7 @@ async def main() -> None:
     app.add_handler(CommandHandler("blacklist", cmd_blacklist))
     app.add_handler(CommandHandler("usage", cmd_usage))
     app.add_handler(CommandHandler("filter", cmd_filter))
+    app.add_handler(CommandHandler("language", cmd_language))
     app.add_handler(CommandHandler("update", cmd_update))
     app.add_handler(CallbackQueryHandler(on_toggle, pattern=r"^toggle:"))
     app.add_handler(CallbackQueryHandler(on_done, pattern=r"^done$"))
@@ -60,6 +63,7 @@ async def main() -> None:
     app.add_handler(CallbackQueryHandler(on_blacklist_done, pattern=r"^bl_done$"))
     app.add_handler(CallbackQueryHandler(on_approve, pattern=r"^approve:"))
     app.add_handler(CallbackQueryHandler(on_deny, pattern=r"^deny:"))
+    app.add_handler(CallbackQueryHandler(on_language, pattern=r"^lang:"))
 
     async def send_dm(user_id: int, text: str) -> None:
         try:

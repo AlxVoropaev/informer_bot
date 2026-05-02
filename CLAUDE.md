@@ -134,11 +134,16 @@ OWNER_ID=...               # admin's Telegram user id (numeric)
 - **Summary:** 1–2 sentences in the *source-post* language (do not translate).
 - **Storage:** `channels(id, title, blacklisted)`, `subscriptions(user_id, channel_id)`,
   `seen(channel_id, msg_id)` for restart catch-up dedupe.
+- **Localization:** bot UI is per-user English / Russian. Default `en`. Strings live in
+  `informer_bot/i18n.py` (`_STRINGS[lang][key]`, `t(lang, key, **fmt)` helper); the
+  user's choice is persisted in `users.language`. Summaries are NOT translated — they
+  stay in the source-post language (rule above).
 - **Bot UX:**
   - `/start` — greet + point at `/list`.
   - `/list` — inline keyboard, `✅/⬜ Title`, callback `toggle:<channel_id>`. No pagination.
   - `/blacklist` (owner only) — inline keyboard of all channels incl. blacklisted,
     tap to toggle blacklist, callback `bl:<channel_id>`. Non-owners get "not allowed".
+  - `/language` — inline keyboard `[English] [Русский]`, callback `lang:<code>`.
 - **Channel-list refresh:** background task every 10 min calls Telethon to fetch the
   admin's current subscriptions and `db.upsert_channel`s them. When a previously-active
   channel disappears (admin unsubscribed) or becomes blacklisted, the bot DMs each
@@ -156,6 +161,7 @@ informer_bot/
 ├── informer_bot/
 │   ├── config.py        # loads .env, exposes typed settings
 │   ├── db.py            # sqlite schema + queries (sync, single-file)
+│   ├── i18n.py          # EN/RU UI strings + t() helper
 │   ├── summarizer.py    # claude api call → str
 │   ├── client.py        # telethon: list channels, NewMessage handler
 │   ├── bot.py           # ptb handlers: /start, /list, inline toggle keyboard

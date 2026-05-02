@@ -2,6 +2,7 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from informer_bot.db import Database
+from informer_bot.i18n import t
 from informer_bot.summarizer import RelevanceCheck, Summary
 
 log = logging.getLogger(__name__)
@@ -104,9 +105,10 @@ async def refresh_channels(
         if not channel.blacklisted:
             subs = db.subscribers_for_channel(channel_id=channel.id)
             for user_id, _mode in subs:
+                lang = db.get_language(user_id)
                 await send_dm(
                     user_id,
-                    f"Channel '{channel.title}' is no longer available.",
+                    t(lang, "channel_gone", title=channel.title),
                 )
             notified += len(subs)
         db.delete_channel(channel_id=channel.id)
