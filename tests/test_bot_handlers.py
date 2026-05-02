@@ -77,7 +77,9 @@ async def test_list_shows_only_non_blacklisted_with_unchecked_marker(db: Databas
     assert "BannedChan" not in " ".join(titles)
     assert any("Alpha" in t and t.startswith("⬜") for t in titles)
     assert any("Beta" in t and t.startswith("⬜") for t in titles)
-    assert all(data.startswith("toggle:") for _, data in flat)
+    toggles = [(text, data) for text, data in flat if data.startswith("toggle:")]
+    assert len(toggles) == len(flat) - 1
+    assert flat[-1] == ("Done", "done")
 
 
 async def test_list_marks_subscribed_channels_with_check(db: Database) -> None:

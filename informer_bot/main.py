@@ -12,6 +12,7 @@ from informer_bot.bot import (
     cmd_list,
     cmd_start,
     on_blacklist,
+    on_done,
     on_toggle,
 )
 from informer_bot.client import fetch_subscribed_channels, register_new_post_handler
@@ -42,6 +43,7 @@ async def main() -> None:
     app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("admin_list", cmd_admin_list))
     app.add_handler(CallbackQueryHandler(on_toggle, pattern=r"^toggle:"))
+    app.add_handler(CallbackQueryHandler(on_done, pattern=r"^done$"))
     app.add_handler(CallbackQueryHandler(on_blacklist, pattern=r"^bl:"))
 
     async def send_dm(user_id: int, text: str) -> None:
