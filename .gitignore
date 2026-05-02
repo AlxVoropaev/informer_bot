@@ -1,0 +1,15 @@
+.env
+*.session
+*.session-journal
+informer.db
+informer.db-journal
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
+.claude/
+dist/
+build/
+*.egg-info/
