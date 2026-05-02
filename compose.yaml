@@ -1,0 +1,12 @@
+services:
+  bot:
+    build:
+      context: .
+      args:
+        UID: ${HOST_UID:?set HOST_UID before building, e.g. HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose build}
+        GID: ${HOST_GID:?set HOST_GID before building, e.g. HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose build}
+    env_file: ./data/.env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    stop_grace_period: 30s

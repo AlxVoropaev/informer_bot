@@ -3,6 +3,8 @@
 *.session-journal
 informer.db
 informer.db-journal
+data/*
+!data/.gitkeep
 
 __pycache__/
 *.pyc

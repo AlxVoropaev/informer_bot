@@ -44,13 +44,13 @@ Requirements: Python 3.12, [uv](https://docs.astral.sh/uv/), and a Telegram acco
    - `ANTHROPIC_API_KEY` — from [console.anthropic.com](https://console.anthropic.com).
    - `OWNER_ID` — your numeric Telegram user ID (ask [@userinfobot](https://t.me/userinfobot)).
 
-3. **Configure `.env`**
+3. **Configure `.env`** (lives in `data/` so it's bind-mounted into the container, not baked into the image)
    ```sh
-   cp .env.example .env
+   cp .env.example data/.env
    # then fill in the five values above
    ```
 
-4. **Log in to your Telegram account once** (creates a `.session` file, chmod 600):
+4. **Log in to your Telegram account once** (creates `data/informer.session`, chmod 600):
    ```sh
    uv run python login.py
    ```
@@ -62,6 +62,43 @@ Requirements: Python 3.12, [uv](https://docs.astral.sh/uv/), and a Telegram acco
    ```
 
 The process runs both the user-account client (reads channels) and the bot (talks to subscribers) in one asyncio loop. Keep it running — there's no built-in daemonisation.
+
+### Run with Docker Compose
+
+Requirements: Docker with the Compose plugin.
+
+The image is built as a non-root user matching your host uid/gid, so files
+written to `./data/` stay owned by you. Pass them at build time from the shell —
+they are not stored in `.env`. Bash's `$UID` is a readonly built-in and cannot
+be re-exported, so compose reads `HOST_UID` / `HOST_GID` instead:
+
+```sh
+HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose build
+HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose up -d
+```
+
+Tip: stick that prefix in a shell alias, or `export HOST_UID=$(id -u) HOST_GID=$(id -g)` once per shell.
+
+1. Fill in `data/.env` (step 3 above).
+
+2. **One-time Telethon login** — interactive, asks for your phone number and the code Telegram sends:
+   ```sh
+   docker compose run --rm bot uv run python login.py
+   ```
+   This creates `data/informer.session` on the host (the `./data` directory is bind-mounted into the container).
+
+3. **Start the bot:**
+   ```sh
+   docker compose up -d
+   docker compose logs -f bot
+   ```
+
+4. **Stop:**
+   ```sh
+   docker compose down
+   ```
+
+State (`.env`, `informer.db`, `informer.session`) all live in `./data/` on the host. Back that directory up if you care about your subscriptions and seen-message dedupe.
 
 ### Tests
 
