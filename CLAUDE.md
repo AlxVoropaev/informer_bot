@@ -116,6 +116,15 @@ OWNER_ID=...               # admin's Telegram user id (numeric)
 - **Summary:** 1–2 sentences in the *source-post* language (do not translate).
 - **Storage:** `channels(id, title, blacklisted)`, `subscriptions(user_id, channel_id)`,
   `seen(channel_id, msg_id)` for restart catch-up dedupe.
+- **Bot UX:**
+  - `/start` — greet + point at `/list`.
+  - `/list` — inline keyboard, `✅/⬜ Title`, callback `toggle:<channel_id>`. No pagination.
+  - `/admin_list` (owner only) — inline keyboard of all channels incl. blacklisted,
+    tap to toggle blacklist, callback `bl:<channel_id>`. Non-owners get "not allowed".
+- **Channel-list refresh:** background task every 10 min calls Telethon to fetch the
+  admin's current subscriptions and `db.upsert_channel`s them. When a previously-active
+  channel disappears (admin unsubscribed) or becomes blacklisted, the bot DMs each
+  affected subscriber: "Channel '<title>' is no longer available."
 - **Session security:** `.session` is `chmod 600` + git-ignored. Encrypted-at-rest is a
   later TODO.
 
