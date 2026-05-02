@@ -4,6 +4,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from informer_bot.db import Database
+from informer_bot.pipeline import refresh_channels
 from informer_bot.summarizer import estimate_cost_usd
 
 log = logging.getLogger(__name__)
@@ -172,6 +173,26 @@ async def cmd_filter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     db.set_filter(user_id=user_id, filter_prompt=payload)
     log.info("user=%s updated filter (%d chars)", user_id, len(payload))
     await update.message.reply_text(f"Filter saved:\n{payload}")
+
+
+async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if update.effective_user.id != _owner_id(context):
+        log.info("/update denied for user=%s", update.effective_user.id)
+        await update.message.reply_text(DENIED)
+        return
+    log.info("/update from owner=%s", update.effective_user.id)
+    await update.message.reply_text("Refreshing channel list...")
+    try:
+        await refresh_channels(
+            fetch_fn=context.bot_data["fetch_channels"],
+            db=_db(context),
+            send_dm=context.bot_data["send_dm"],
+        )
+    except Exception:
+        log.exception("/update refresh failed")
+        await update.message.reply_text("Refresh failed. Check logs.")
+        return
+    await update.message.reply_text("Channel list refreshed.")
 
 
 async def cmd_admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

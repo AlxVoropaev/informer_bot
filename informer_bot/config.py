@@ -12,7 +12,6 @@ class Config:
     owner_id: int
     session_path: str = "data/informer"
     db_path: str = "data/informer.db"
-    refresh_interval_seconds: int = 600
     log_level: str = "INFO"
 
 
