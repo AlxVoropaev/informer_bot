@@ -227,31 +227,37 @@ async def test_list_shows_only_non_blacklisted_with_unchecked_marker(db: Databas
     assert flat[-1] == ("Done", "done")
 
 
-async def test_list_marks_subscribed_channels_with_check(db: Database) -> None:
-    db.subscribe(user_id=USER_ID, channel_id=1)
+async def test_list_marks_filtered_and_all_modes_distinctly(db: Database) -> None:
+    db.subscribe(user_id=USER_ID, channel_id=1, mode="filtered")
+    db.subscribe(user_id=USER_ID, channel_id=2, mode="all")
     update = _msg_update(USER_ID)
     await cmd_list(update, _ctx(db))
 
     flat = [btn for row in _kb_rows(update.message.reply_text.await_args.kwargs) for btn in row]
     alpha = next(t for t, _ in flat if "Alpha" in t)
     beta = next(t for t, _ in flat if "Beta" in t)
-    assert alpha.startswith("✅")
-    assert beta.startswith("⬜")
+    assert alpha.startswith("🔀")
+    assert beta.startswith("✅")
 
 
 # ---------- toggle callback ----------
 
-async def test_toggle_subscribes_then_unsubscribes(db: Database) -> None:
+async def test_toggle_cycles_disabled_filtered_all_disabled(db: Database) -> None:
     ctx = _ctx(db)
 
     upd1 = _cb_update(USER_ID, "toggle:1")
     await on_toggle(upd1, ctx)
-    assert db.is_subscribed(USER_ID, 1) is True
+    assert db.get_subscription_mode(USER_ID, 1) == "filtered"
     upd1.callback_query.answer.assert_awaited()
     upd1.callback_query.edit_message_text.assert_awaited()
 
     upd2 = _cb_update(USER_ID, "toggle:1")
     await on_toggle(upd2, ctx)
+    assert db.get_subscription_mode(USER_ID, 1) == "all"
+
+    upd3 = _cb_update(USER_ID, "toggle:1")
+    await on_toggle(upd3, ctx)
+    assert db.get_subscription_mode(USER_ID, 1) is None
     assert db.is_subscribed(USER_ID, 1) is False
 
 
