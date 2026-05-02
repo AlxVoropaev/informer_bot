@@ -110,11 +110,17 @@ One Python process runs both the client and the bot inside a single asyncio loop
 - Telegram client: **Telethon** (MTProto user account, real-time `events.NewMessage`).
 - Telegram bot: **python-telegram-bot** (v21+, asyncio).
 - LLM: **anthropic** SDK, model `claude-haiku-4-5` (cheap & fast for summaries).
-- Storage: **SQLite** (single file, `informer.db`) + Telethon `.session` file.
-- Config: **`.env`** loaded via `python-dotenv`. Never commit `.env` or `*.session`.
+- Storage: **SQLite** (single file, `data/informer.db`) + Telethon
+  `data/informer.session` file. The `data/` directory holds all mutable state
+  and is bind-mounted into the Docker container.
+- Config: **`.env`** (lives in `data/.env`) loaded via `python-dotenv`. Never
+  commit `.env` or `*.session`.
+- Container: **Dockerfile** + **compose.yaml** (`compose.yaml` not the legacy
+  `docker-compose.yml`). Image is built as a non-root user matching host
+  `HOST_UID`/`HOST_GID` so files written to `./data/` stay owned by you.
 - Tests: **pytest** + **pytest-asyncio**. TDD — failing test before code.
 
-## Required env vars (`.env`)
+## Required env vars (`data/.env`)
 
 ```
 TELEGRAM_API_ID=...        # from my.telegram.org
@@ -122,6 +128,7 @@ TELEGRAM_API_HASH=...      # from my.telegram.org
 TELEGRAM_BOT_TOKEN=...     # from @BotFather
 ANTHROPIC_API_KEY=...
 OWNER_ID=...               # admin's Telegram user id (numeric)
+LOG_LEVEL=INFO             # optional, default INFO
 ```
 
 ## Behaviour rules
@@ -132,45 +139,77 @@ OWNER_ID=...               # admin's Telegram user id (numeric)
 - **Skip rule:** posts with no text and no caption (image/video-only) are skipped — no
   summary, no DM.
 - **Summary:** 1–2 sentences in the *source-post* language (do not translate).
-- **Storage:** `channels(id, title, blacklisted)`, `subscriptions(user_id, channel_id)`,
-  `seen(channel_id, msg_id)` for restart catch-up dedupe.
+- **Access gate:** new users hit `/start` and land in `users.status='pending'`; the
+  bot DMs the owner an Allow/Deny inline keyboard (callbacks `approve:<id>` /
+  `deny:<id>`). Only `approved` users can use `/list`, `/filter`, `/usage`. The owner
+  is auto-approved on startup.
+- **Storage:**
+  - `channels(id, title, blacklisted)`
+  - `subscriptions(user_id, channel_id, mode)` — `mode IN ('filtered','all')`
+  - `seen(channel_id, message_id)` — restart catch-up dedupe
+  - `users(user_id, status, username, first_name, filter_prompt, language)` —
+    `status IN ('pending','approved','denied')`, `language IN ('en','ru')`
+  - `usage(user_id, input_tokens, output_tokens)` — per-user delivered-summary tokens
+  - `system_usage(id=1, input_tokens, output_tokens)` — total API spend (incl. filter checks)
 - **Localization:** bot UI is per-user English / Russian. Default `en`. Strings live in
   `informer_bot/i18n.py` (`_STRINGS[lang][key]`, `t(lang, key, **fmt)` helper); the
   user's choice is persisted in `users.language`. Summaries are NOT translated — they
   stay in the source-post language (rule above).
 - **Bot UX:**
-  - `/start` — greet + point at `/list`.
-  - `/list` — inline keyboard, `✅/⬜ Title`, callback `toggle:<channel_id>`. No pagination.
-  - `/blacklist` (owner only) — inline keyboard of all channels incl. blacklisted,
-    tap to toggle blacklist, callback `bl:<channel_id>`. Non-owners get "not allowed".
+  - `/start` — for new users, requests admin approval (see Access gate). For approved
+    users, greet + point at `/list`. For pending/denied, the appropriate notice.
+  - `/list` — inline keyboard, three-mode cycle on each row: `⬜ off → 🔀 filtered → ✅ all`,
+    callback `toggle:<channel_id>`. `🔀 filtered` runs the user's `/filter` prompt
+    against each post via `summarizer.is_relevant`; `✅ all` delivers every post. A
+    `Done` button (callback `done`) closes the keyboard. No pagination.
+  - `/filter <text>` — set personal content filter (used in `🔀` mode). `/filter` alone
+    shows the current filter; `/filter clear` removes it.
+  - `/usage` — show your input/output token totals + estimated USD cost. Owner sees
+    a per-user breakdown plus the system total (actual API spend, including filter checks).
   - `/language` — inline keyboard `[English] [Русский]`, callback `lang:<code>`.
-- **Channel-list refresh:** background task every 10 min calls Telethon to fetch the
-  admin's current subscriptions and `db.upsert_channel`s them. When a previously-active
-  channel disappears (admin unsubscribed) or becomes blacklisted, the bot DMs each
-  affected subscriber: "Channel '<title>' is no longer available."
+  - `/help` — list available commands. Owner sees an extra admin section.
+  - `/blacklist` (owner only) — inline keyboard of all channels incl. blacklisted,
+    tap to toggle blacklist, callback `bl:<channel_id>`. `Done` button (callback
+    `bl_done`) closes the keyboard. Non-owners get "not allowed".
+  - `/update` (owner only) — refresh the channel list from the admin's Telegram
+    subscriptions on demand. Non-owners get "not allowed".
+- **Channel-list refresh:** triggered manually by the admin via `/update` (also runs
+  once at startup). Calls Telethon to fetch the admin's current subscriptions and
+  `db.upsert_channel`s them. When a previously-active channel disappears (admin
+  unsubscribed) or becomes blacklisted, the bot DMs each affected subscriber:
+  "Channel '<title>' is no longer available."
 - **Session security:** `.session` is `chmod 600` + git-ignored. Encrypted-at-rest is a
   later TODO.
 
-## Layout (target)
+## Layout
 
 ```
 informer_bot/
 ├── pyproject.toml
-├── .env.example
+├── Dockerfile
+├── compose.yaml
 ├── .gitignore
+├── data/                # bind-mounted runtime state (gitignored)
+│   ├── .env.example     # template — copy to data/.env and fill in
+│   ├── .env             # secrets (gitignored)
+│   ├── informer.db      # sqlite (created on first run)
+│   └── informer.session # telethon session (created by login.py, chmod 600)
 ├── informer_bot/
 │   ├── config.py        # loads .env, exposes typed settings
 │   ├── db.py            # sqlite schema + queries (sync, single-file)
 │   ├── i18n.py          # EN/RU UI strings + t() helper
-│   ├── summarizer.py    # claude api call → str
+│   ├── summarizer.py    # claude api call → summarize() + is_relevant() + cost estimate
 │   ├── client.py        # telethon: list channels, NewMessage handler
-│   ├── bot.py           # ptb handlers: /start, /list, inline toggle keyboard
+│   ├── album.py         # buffer-and-flush coalescer for multi-photo albums
+│   ├── pipeline.py      # handle_new_post + refresh_channels glue
+│   ├── bot.py           # ptb handlers: commands, inline keyboards, callbacks
 │   └── main.py          # wires client + bot in one asyncio loop
 ├── login.py             # one-time interactive: phone + code → .session
 └── tests/
     ├── test_db.py
     ├── test_summarizer.py
     ├── test_bot_handlers.py
+    ├── test_album.py
     └── test_pipeline.py
 ```
 

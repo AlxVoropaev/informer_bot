@@ -10,14 +10,25 @@ A Telegram bot that summarises posts from public channels and DMs you a short br
 
 ## Commands
 
-- `/start` — greet and point you at `/list`.
-- `/list` — show the available channels. Tap a row to toggle:
-  - ✅ — you're subscribed
-  - ⬜ — not subscribed
+- `/start` — request access. New users wait for the admin to approve; once approved you're pointed at `/list`.
+- `/list` — show the available channels. Tap a row to cycle through three modes:
+  - ⬜ — off (you don't get posts from this channel)
+  - 🔀 — filtered (only posts matching your `/filter` are delivered)
+  - ✅ — all (every post is delivered)
+- `/filter <text>` — set a personal content filter, used by 🔀 mode (e.g. `/filter only AI and ML news`). `/filter` alone shows your current filter; `/filter clear` removes it.
+- `/usage` — show your token usage and estimated cost.
 - `/language` — switch interface language (English / Русский).
 - `/help` — list all available commands.
 
-That's it. No settings, no pagination, no spam — just toggle what you want and read the briefs as they arrive.
+That's it. No pagination, no spam — toggle what you want, optionally narrow it with a filter, and read the briefs as they arrive.
+
+### Admin commands
+
+If you're the bot's `OWNER_ID`, you also get:
+
+- `/blacklist` — toggle channels on/off the public list (channels you've subscribed to but don't want to expose to bot users).
+- `/update` — refresh the channel list from your Telegram subscriptions (run after subscribing to or leaving a channel).
+- New `/start` requests come to you as an inline Allow / Deny prompt.
 
 ## What you'll receive
 
