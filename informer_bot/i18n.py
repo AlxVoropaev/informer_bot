@@ -34,11 +34,18 @@ _STRINGS: dict[str, dict[str, str]] = {
         "refresh_failed": "Refresh failed. Check logs.",
         "refresh_done": "Channel list refreshed.",
         "filter_help": (
-            "Send /filter <text> to set what you want to read. "
-            "Send /filter clear to remove your filter (deliver everything). "
-            "Send /filter alone to see your current filter."
+            "How to use:\n"
+            "• /filter <text> — set your filter\n"
+            "• /filter clear — remove the filter (deliver everything)\n"
+            "• /filter — show your current filter\n\n"
+            "Tips for a good filter:\n"
+            "• Write in plain language; bullets work well.\n"
+            "• Split into what you want and what you don't (e.g. \"Interesting:\" / \"Not interesting:\").\n"
+            "• Be concrete — name topics, domains, or keywords instead of vague labels.\n"
+            "• Add exceptions when a broad rule has them (\"deaths/arrests, except in IT\").\n"
+            "• Any language works; the filter doesn't have to match the post language."
         ),
-        "filter_current": "Your filter:\n{filter}\n\n{help}",
+        "filter_current_header": "Your current filter (copy to edit):",
         "filter_none": "No filter set — you receive everything.\n\n{help}",
         "filter_cleared": "Filter cleared. You will receive everything.",
         "filter_saved": "Filter saved:\n{filter}",
@@ -86,11 +93,18 @@ _STRINGS: dict[str, dict[str, str]] = {
         "refresh_failed": "Обновление не удалось. Смотри логи.",
         "refresh_done": "Список каналов обновлён.",
         "filter_help": (
-            "Отправь /filter <текст>, чтобы задать, что ты хочешь читать. "
-            "Отправь /filter clear, чтобы убрать фильтр (получать всё). "
-            "Отправь /filter без аргументов, чтобы увидеть текущий фильтр."
+            "Как пользоваться:\n"
+            "• /filter <текст> — задать фильтр\n"
+            "• /filter clear — убрать фильтр (получать всё)\n"
+            "• /filter — показать текущий фильтр\n\n"
+            "Советы по составлению фильтра:\n"
+            "• Пиши обычным языком; списки работают хорошо.\n"
+            "• Раздели на интересное и неинтересное (\"Интересно:\" / \"Не интересно:\").\n"
+            "• Будь конкретным — называй темы, области, ключевые слова, а не общие ярлыки.\n"
+            "• Добавляй исключения, если у широкого правила они есть (\"смерти/аресты, кроме IT\").\n"
+            "• Можно писать на любом языке; язык фильтра не обязан совпадать с языком поста."
         ),
-        "filter_current": "Твой фильтр:\n{filter}\n\n{help}",
+        "filter_current_header": "Текущий фильтр (скопируй, чтобы изменить):",
         "filter_none": "Фильтр не задан — получаешь всё.\n\n{help}",
         "filter_cleared": "Фильтр очищен. Будешь получать всё.",
         "filter_saved": "Фильтр сохранён:\n{filter}",
