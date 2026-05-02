@@ -43,9 +43,10 @@ When your changes create orphans:
 
 The test: Every changed line should trace directly to the user's request.
 
-## 4. Always Use a Worktree
+## 4. Worktree for Subagents Only
 
-**Run code-changing subagents in an isolated git worktree.**
+**Run code-changing subagents in an isolated git worktree. The main session
+edits the working tree directly — no worktree needed.**
 
 When spawning subagents via the Agent tool that will write or edit files, always
 pass `isolation: "worktree"`. Read-only research/exploration agents don't need it.
