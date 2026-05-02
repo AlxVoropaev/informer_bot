@@ -4,7 +4,7 @@
 informer.db
 informer.db-journal
 data/*
-!data/.gitkeep
+!data/.env.example
 
 __pycache__/
 *.pyc
