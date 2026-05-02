@@ -50,7 +50,34 @@ def test_subscribe_is_idempotent(db: Database) -> None:
     db.subscribe(user_id=42, channel_id=1)
 
     assert db.is_subscribed(user_id=42, channel_id=1) is True
-    assert db.list_user_subscriptions(user_id=42) == [1]
+    assert db.list_user_subscription_modes(user_id=42) == {1: "filtered"}
+
+
+def test_subscribe_default_mode_is_filtered(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.subscribe(user_id=42, channel_id=1)
+
+    assert db.get_subscription_mode(user_id=42, channel_id=1) == "filtered"
+
+
+def test_subscribe_with_mode_all(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.subscribe(user_id=42, channel_id=1, mode="all")
+
+    assert db.get_subscription_mode(user_id=42, channel_id=1) == "all"
+
+
+def test_subscribe_updates_existing_mode(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.subscribe(user_id=42, channel_id=1, mode="filtered")
+    db.subscribe(user_id=42, channel_id=1, mode="all")
+
+    assert db.get_subscription_mode(user_id=42, channel_id=1) == "all"
+
+
+def test_get_subscription_mode_returns_none_when_not_subscribed(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    assert db.get_subscription_mode(user_id=42, channel_id=1) is None
 
 
 def test_unsubscribe(db: Database) -> None:
@@ -60,18 +87,18 @@ def test_unsubscribe(db: Database) -> None:
     db.unsubscribe(user_id=42, channel_id=1)
 
     assert db.is_subscribed(user_id=42, channel_id=1) is False
-    assert db.list_user_subscriptions(user_id=42) == []
+    assert db.list_user_subscription_modes(user_id=42) == {}
 
 
 def test_subscribers_for_channel_skips_blacklisted_channel(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="Open")
     db.upsert_channel(channel_id=2, title="Banned")
-    db.subscribe(user_id=10, channel_id=1)
+    db.subscribe(user_id=10, channel_id=1, mode="all")
     db.subscribe(user_id=10, channel_id=2)
     db.subscribe(user_id=20, channel_id=1)
     db.set_blacklisted(channel_id=2, blacklisted=True)
 
-    assert sorted(db.subscribers_for_channel(channel_id=1)) == [10, 20]
+    assert sorted(db.subscribers_for_channel(channel_id=1)) == [(10, "all"), (20, "filtered")]
     assert db.subscribers_for_channel(channel_id=2) == []
 
 
@@ -118,8 +145,8 @@ def test_delete_channel_removes_channel_and_subscriptions(db: Database) -> None:
     db.delete_channel(channel_id=1)
 
     assert [c.id for c in db.list_channels(include_blacklisted=True)] == [2]
-    assert db.list_user_subscriptions(user_id=10) == [2]
-    assert db.list_user_subscriptions(user_id=20) == []
+    assert db.list_user_subscription_modes(user_id=10) == {2: "filtered"}
+    assert db.list_user_subscription_modes(user_id=20) == {}
 
 
 # ---------- usage tracking ----------

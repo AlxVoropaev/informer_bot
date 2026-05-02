@@ -35,7 +35,10 @@ async def handle_new_post(
         return
 
     recipients: list[int] = []
-    for user_id in subscribers:
+    for user_id, mode in subscribers:
+        if mode == "all":
+            recipients.append(user_id)
+            continue
         filter_prompt = db.get_filter(user_id=user_id)
         if not filter_prompt:
             recipients.append(user_id)
@@ -100,7 +103,7 @@ async def refresh_channels(
             continue
         if not channel.blacklisted:
             subs = db.subscribers_for_channel(channel_id=channel.id)
-            for user_id in subs:
+            for user_id, _mode in subs:
                 await send_dm(
                     user_id,
                     f"Channel '{channel.title}' is no longer available.",

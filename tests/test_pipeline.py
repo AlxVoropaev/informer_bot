@@ -239,6 +239,50 @@ async def test_handle_new_post_charges_filter_tokens_to_user_and_system(db: Data
     assert db.get_system_usage() == (130, 21)
 
 
+async def test_handle_new_post_mode_all_skips_filter_check(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.add_pending_user(user_id=10, username="alice")
+    db.set_user_status(user_id=10, status="approved")
+    db.subscribe(user_id=10, channel_id=1, mode="all")
+    db.set_filter(user_id=10, filter_prompt="only AI")
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock()
+    send_dm = AsyncMock()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="Crypto pump news",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+    )
+
+    is_rel.assert_not_called()
+    summarize.assert_awaited_once()
+    send_dm.assert_awaited_once_with(10, "Brief.\n\nhttps://t.me/a/100")
+
+
+async def test_handle_new_post_mixes_modes_per_user(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.add_pending_user(user_id=10, username="alice")
+    db.add_pending_user(user_id=20, username="bob")
+    db.set_user_status(user_id=10, status="approved")
+    db.set_user_status(user_id=20, status="approved")
+    db.subscribe(user_id=10, channel_id=1, mode="all")
+    db.subscribe(user_id=20, channel_id=1, mode="filtered")
+    db.set_filter(user_id=20, filter_prompt="AI")
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock(return_value=_relevance(False))
+    send_dm = AsyncMock()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="Crypto pump",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+    )
+
+    is_rel.assert_awaited_once_with("Crypto pump", "AI")
+    send_dm.assert_awaited_once_with(10, "Brief.\n\nhttps://t.me/a/100")
+
+
 async def test_handle_new_post_filter_tokens_recorded_even_when_user_excluded(
     db: Database,
 ) -> None:

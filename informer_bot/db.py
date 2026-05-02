@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS channels (
 CREATE TABLE IF NOT EXISTS subscriptions (
     user_id    INTEGER NOT NULL,
     channel_id INTEGER NOT NULL,
+    mode       TEXT NOT NULL DEFAULT 'filtered' CHECK(mode IN ('filtered','all')),
     PRIMARY KEY (user_id, channel_id),
     FOREIGN KEY (channel_id) REFERENCES channels(id)
 );
@@ -61,6 +62,11 @@ class Database:
             self._conn.execute("ALTER TABLE users ADD COLUMN first_name TEXT")
         if "filter_prompt" not in cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN filter_prompt TEXT")
+        sub_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(subscriptions)")}
+        if "mode" not in sub_cols:
+            self._conn.execute(
+                "ALTER TABLE subscriptions ADD COLUMN mode TEXT NOT NULL DEFAULT 'filtered'"
+            )
         self._conn.commit()
         log.debug("opened sqlite at %s", path)
 
@@ -88,10 +94,11 @@ class Database:
         sql += " ORDER BY title"
         return [Channel(id=r[0], title=r[1], blacklisted=bool(r[2])) for r in self._conn.execute(sql)]
 
-    def subscribe(self, user_id: int, channel_id: int) -> None:
+    def subscribe(self, user_id: int, channel_id: int, mode: str = "filtered") -> None:
         self._conn.execute(
-            "INSERT OR IGNORE INTO subscriptions (user_id, channel_id) VALUES (?, ?)",
-            (user_id, channel_id),
+            "INSERT INTO subscriptions (user_id, channel_id, mode) VALUES (?, ?, ?) "
+            "ON CONFLICT(user_id, channel_id) DO UPDATE SET mode = excluded.mode",
+            (user_id, channel_id, mode),
         )
         self._conn.commit()
 
@@ -109,20 +116,27 @@ class Database:
         ).fetchone()
         return row is not None
 
-    def list_user_subscriptions(self, user_id: int) -> list[int]:
-        return [
-            r[0]
+    def get_subscription_mode(self, user_id: int, channel_id: int) -> str | None:
+        row = self._conn.execute(
+            "SELECT mode FROM subscriptions WHERE user_id = ? AND channel_id = ?",
+            (user_id, channel_id),
+        ).fetchone()
+        return row[0] if row else None
+
+    def list_user_subscription_modes(self, user_id: int) -> dict[int, str]:
+        return {
+            r[0]: r[1]
             for r in self._conn.execute(
-                "SELECT channel_id FROM subscriptions WHERE user_id = ? ORDER BY channel_id",
+                "SELECT channel_id, mode FROM subscriptions WHERE user_id = ?",
                 (user_id,),
             )
-        ]
+        }
 
-    def subscribers_for_channel(self, channel_id: int) -> list[int]:
+    def subscribers_for_channel(self, channel_id: int) -> list[tuple[int, str]]:
         return [
-            r[0]
+            (r[0], r[1])
             for r in self._conn.execute(
-                "SELECT s.user_id FROM subscriptions s "
+                "SELECT s.user_id, s.mode FROM subscriptions s "
                 "JOIN channels c ON c.id = s.channel_id "
                 "WHERE s.channel_id = ? AND c.blacklisted = 0",
                 (channel_id,),

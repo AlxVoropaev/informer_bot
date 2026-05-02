@@ -25,11 +25,15 @@ def _owner_id(context: ContextTypes.DEFAULT_TYPE) -> int:
     return context.bot_data["owner_id"]
 
 
+_MODE_EMOJI = {None: "⬜", "filtered": "🔀", "all": "✅"}
+_NEXT_MODE = {None: "filtered", "filtered": "all", "all": None}
+
+
 def _user_keyboard(db: Database, user_id: int) -> InlineKeyboardMarkup:
-    subs = set(db.list_user_subscriptions(user_id))
+    modes = db.list_user_subscription_modes(user_id)
     rows = [
         [InlineKeyboardButton(
-            text=f"{'✅' if c.id in subs else '⬜'} {c.title}",
+            text=f"{_MODE_EMOJI[modes.get(c.id)]} {c.title}",
             callback_data=f"toggle:{c.id}",
         )]
         for c in db.list_channels()
@@ -223,12 +227,13 @@ async def on_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.callback_query.answer("Channel unavailable.")
         return
 
-    if db.is_subscribed(user_id, channel_id):
+    current = db.get_subscription_mode(user_id, channel_id)
+    next_mode = _NEXT_MODE[current]
+    if next_mode is None:
         db.unsubscribe(user_id, channel_id)
-        log.info("user=%s unsubscribed from channel=%s", user_id, channel_id)
     else:
-        db.subscribe(user_id, channel_id)
-        log.info("user=%s subscribed to channel=%s", user_id, channel_id)
+        db.subscribe(user_id, channel_id, mode=next_mode)
+    log.info("user=%s channel=%s mode %s -> %s", user_id, channel_id, current, next_mode)
 
     await update.callback_query.answer()
     await update.callback_query.edit_message_text(
@@ -288,7 +293,7 @@ async def on_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if will_blacklist:
         subs = db.subscribers_for_channel(channel_id=channel_id)
-        for user_id in subs:
+        for user_id, _mode in subs:
             await context.bot.send_message(
                 chat_id=user_id,
                 text=f"Channel '{channel.title}' is no longer available.",
