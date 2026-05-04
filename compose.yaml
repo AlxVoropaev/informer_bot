@@ -10,3 +10,9 @@ services:
       - ./data:/app/data
     restart: unless-stopped
     stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "10"
+        compress: "true"
