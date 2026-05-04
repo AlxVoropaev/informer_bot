@@ -204,11 +204,13 @@ CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
 - **Bot UX:**
   - `/start` — for new users, requests admin approval (see Access gate). For approved
     users, greet + point at `/list`. For pending/denied, the appropriate notice.
-  - `/list` — inline keyboard. Each channel row has three or four buttons (the
-    last one conditional): the toggle button (`toggle:<channel_id>`), an ℹ️
-    info button (`linfo:<channel_id>`), an ✏️ edit button
-    (`fedit:<channel_id>`), and a 🗑 delete button (`fdel:<channel_id>`, only
-    rendered when a `filter_prompt` exists for that user/channel). The toggle
+  - `/list` — inline keyboard. Each channel takes two keyboard rows: a
+    full-width title row with the toggle button (`toggle:<channel_id>`), and
+    an icon row underneath with an ℹ️ info button (`linfo:<channel_id>`), a
+    🔗 URL button (only when `channels.username` is set, links to
+    `https://t.me/<username>`), an ✏️ edit button (`fedit:<channel_id>`),
+    and a 🗑 delete button (`fdel:<channel_id>`, only rendered when a
+    `filter_prompt` exists for that user/channel). The toggle
     cycles `⬜ off/None → 🔀 filtered → 🐞 debug → ✅ all → 🗑-preserved 'off'
     (if a filter_prompt exists) or row-deleted None (if not)`. `🔀 filtered`
     runs the per-channel filter prompt via `summarizer.is_relevant`; if no
