@@ -99,12 +99,18 @@ async def main() -> None:
                 msg = await app.bot.send_photo(
                     chat_id=user_id, photo=photo, caption=text, parse_mode="HTML"
                 )
-                log.debug("DM (photo) sent to %s (%d cap chars)", user_id, len(text))
+                log.info(
+                    "outgoing: DM (photo) user=%s msg=%s cap_chars=%d",
+                    user_id, msg.message_id, len(text),
+                )
             else:
                 msg = await app.bot.send_message(
                     chat_id=user_id, text=text, parse_mode="HTML"
                 )
-                log.debug("DM sent to %s (%d chars)", user_id, len(text))
+                log.info(
+                    "outgoing: DM user=%s msg=%s chars=%d",
+                    user_id, msg.message_id, len(text),
+                )
             return msg.message_id
         except Exception:
             log.exception("send_dm to %s failed", user_id)
@@ -120,8 +126,8 @@ async def main() -> None:
             await app.bot.edit_message_reply_markup(
                 chat_id=user_id, message_id=bot_message_id, reply_markup=keyboard,
             )
-            log.debug(
-                "DM buttons updated for user=%s msg=%s (%d links)",
+            log.info(
+                "outgoing: DM buttons updated user=%s msg=%s links=%d",
                 user_id, bot_message_id, len(dup_links),
             )
         except Exception:

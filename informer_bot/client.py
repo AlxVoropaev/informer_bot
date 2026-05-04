@@ -34,11 +34,15 @@ def register_new_post_handler(tg: TelegramClient, buffer: AlbumBuffer) -> None:
     async def _handler(event: events.NewMessage.Event) -> None:
         chat = await event.get_chat()
         if not (isinstance(chat, Channel) and chat.broadcast and chat.username):
-            log.debug("ignoring message from non-broadcast chat")
+            log.info(
+                "incoming dropped: non-broadcast/no-username chat=%s msg=%s",
+                getattr(chat, "id", "?"), event.message.id,
+            )
             return
-        log.debug(
-            "new message: channel=%s msg=%s grouped=%s",
-            chat.id, event.message.id, event.message.grouped_id,
+        log.info(
+            "incoming: channel=%s @%s msg=%s grouped=%s chars=%d",
+            chat.id, chat.username, event.message.id, event.message.grouped_id,
+            len(event.message.message or ""),
         )
         photo = await _download_photo(event.message)
         await buffer.add(
