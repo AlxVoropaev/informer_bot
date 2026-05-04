@@ -160,6 +160,14 @@ async def test_local_embedder_wraps_fastembed_with_zero_tokens(monkeypatch) -> N
             for _ in texts:
                 yield FakeVector([0.5, -0.5, 0.25])
 
+        @staticmethod
+        def list_supported_models():
+            return [{"model": "fake/model"}]
+
+        @staticmethod
+        def add_custom_model(**kwargs) -> None:
+            pass
+
     monkeypatch.setitem(sys.modules, "fastembed", SimpleNamespace(TextEmbedding=FakeTextEmbedding))
 
     embedder = summarizer.LocalEmbedder(model_name="fake/model")
