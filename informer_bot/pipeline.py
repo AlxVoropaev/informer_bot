@@ -48,14 +48,14 @@ async def handle_new_post(
     now: int | None = None,
 ) -> None:
     if not text.strip():
-        log.debug("skip post %s/%s: empty text", channel_id, message_id)
+        log.info("skip post %s/%s: empty text", channel_id, message_id)
         return
     if not db.mark_seen(channel_id=channel_id, message_id=message_id):
-        log.debug("skip post %s/%s: already seen", channel_id, message_id)
+        log.info("skip post %s/%s: already seen", channel_id, message_id)
         return
     subscribers = db.subscribers_for_channel(channel_id=channel_id)
     if not subscribers:
-        log.debug("skip post %s/%s: no subscribers", channel_id, message_id)
+        log.info("skip post %s/%s: no subscribers", channel_id, message_id)
         return
 
     recipients: list[tuple[int, bool]] = []
@@ -81,7 +81,7 @@ async def handle_new_post(
         elif mode == "debug":
             recipients.append((user_id, True))
         else:
-            log.debug("filter excluded user=%s for post %s/%s", user_id, channel_id, message_id)
+            log.info("filter excluded user=%s for post %s/%s", user_id, channel_id, message_id)
 
     if not recipients:
         log.info(
