@@ -26,7 +26,7 @@ def _lang(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
 
 _MODE_EMOJI = {None: "⬜", "off": "⬜", "filtered": "🔀", "debug": "🐞", "all": "✅"}
 
-_PAGE_SIZE = 25
+_PAGE_SIZE = 15
 
 
 def _paginate(items: list, page: int) -> tuple[list, int, int]:
