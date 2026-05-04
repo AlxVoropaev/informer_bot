@@ -37,6 +37,7 @@ If you're the bot's `OWNER_ID`, you also get:
 - Albums (multi-photo posts) arrive as a single summary with the album's first photo.
 - Image- or video-only posts (no text/caption) are skipped.
 - Edits to existing posts are ignored.
+- **Duplicates merge.** If the same story shows up in another channel within ~48 hours, the bot adds a new inline URL button (labeled with the source channel) under your original DM instead of sending a second one. In 🐞 debug mode, you instead get a fresh DM prefixed with `🔁 DUPLICATE` so you can see what was deduped.
 
 ## Notes
 
@@ -56,6 +57,7 @@ Requirements: Python 3.12, [uv](https://docs.astral.sh/uv/), and a Telegram acco
    - `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` — from [my.telegram.org](https://my.telegram.org).
    - `TELEGRAM_BOT_TOKEN` — create a bot via [@BotFather](https://t.me/BotFather).
    - `ANTHROPIC_API_KEY` — from [console.anthropic.com](https://console.anthropic.com).
+   - `OPENAI_API_KEY` — *optional*, from [platform.openai.com](https://platform.openai.com). Used for summary embeddings (dedup); cost is negligible (~$0.02 per million tokens with `text-embedding-3-small`). If you leave it blank, the bot starts fine — deduplication is just disabled, and the owner gets a one-time DM at startup saying so.
    - `OWNER_ID` — your numeric Telegram user ID (ask [@userinfobot](https://t.me/userinfobot)).
 
 3. **Configure `.env`** (lives in `data/` so it's bind-mounted into the container, not baked into the image)

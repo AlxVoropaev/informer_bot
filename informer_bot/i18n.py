@@ -52,6 +52,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "usage_admin_header": "Usage by user (delivered):",
         "usage_admin_none": "(none yet)",
         "usage_admin_system_label": "System total (actual API spend)",
+        "usage_admin_embedding_label": "Embeddings (OpenAI)",
+        "usage_admin_embedding_line": "{label}: tokens={tokens:,} ≈ ${cost:.4f}",
         "usage_user_block": "Your usage:\nInput tokens: {inp:,}\nOutput tokens: {out:,}\nEstimated cost: ${cost:.4f}",
         "access_request": "Access request from {label}",
         "approve_button": "✅ Allow",
@@ -62,6 +64,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "channel_gone": "Channel '{title}' is no longer available.",
         "language_prompt": "Current language: {current}\nChoose:",
         "debug_filtered_marker": "🐞 FILTERED",
+        "debug_duplicate_marker": "🔁 DUPLICATE",
+        "dedup_disabled_notice": "⚠️ Deduplication disabled: OPENAI_API_KEY is not set.",
     },
     "ru": {
         "greeting": "Привет, я informer. Используй /list, чтобы выбрать каналы. /help — все команды.",
@@ -112,6 +116,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "usage_admin_header": "Расход по пользователям (доставлено):",
         "usage_admin_none": "(пока пусто)",
         "usage_admin_system_label": "Системный итог (фактический расход API)",
+        "usage_admin_embedding_label": "Эмбеддинги (OpenAI)",
+        "usage_admin_embedding_line": "{label}: токены={tokens:,} ≈ ${cost:.4f}",
         "usage_user_block": "Твой расход:\nВходные токены: {inp:,}\nВыходные токены: {out:,}\nПримерная стоимость: ${cost:.4f}",
         "access_request": "Запрос доступа от {label}",
         "approve_button": "✅ Разрешить",
@@ -122,6 +128,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "channel_gone": "Канал '{title}' больше недоступен.",
         "language_prompt": "Текущий язык: {current}\nВыбери:",
         "debug_filtered_marker": "🐞 ОТФИЛЬТРОВАНО",
+        "debug_duplicate_marker": "🔁 ДУБЛЬ",
+        "dedup_disabled_notice": "⚠️ Дедупликация отключена: OPENAI_API_KEY не задан.",
     },
 }
 

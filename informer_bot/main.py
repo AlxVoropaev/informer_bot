@@ -1,8 +1,12 @@
 import asyncio
 import contextlib
+import functools
 import logging
 import signal
+import time
 
+from openai import AsyncOpenAI
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -35,8 +39,9 @@ from informer_bot.bot import (
 from informer_bot.client import fetch_subscribed_channels, register_new_post_handler
 from informer_bot.config import load_config
 from informer_bot.db import Database
-from informer_bot.pipeline import handle_new_post, refresh_channels
-from informer_bot.summarizer import is_relevant, summarize
+from informer_bot.i18n import t
+from informer_bot.pipeline import EditDmFn, EmbedFn, handle_new_post, refresh_channels
+from informer_bot.summarizer import embed_summary, is_relevant, summarize
 
 log = logging.getLogger(__name__)
 
@@ -75,20 +80,56 @@ async def main() -> None:
     app.add_handler(CallbackQueryHandler(on_language, pattern=r"^lang:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_filter_text))
 
-    async def send_dm(user_id: int, text: str, photo: bytes | None = None) -> None:
+    embed_fn: EmbedFn | None
+    if cfg.openai_api_key:
+        openai_client = AsyncOpenAI(api_key=cfg.openai_api_key)
+        embed_fn = functools.partial(embed_summary, client=openai_client)
+        db.purge_dedup_older_than(
+            cutoff=int(time.time()) - cfg.dedup_window_hours * 3600
+        )
+    else:
+        embed_fn = None
+        log.warning("OPENAI_API_KEY missing — deduplication disabled")
+
+    async def send_dm(
+        user_id: int, text: str, photo: bytes | None = None
+    ) -> int | None:
         try:
             if photo is not None:
-                await app.bot.send_photo(
+                msg = await app.bot.send_photo(
                     chat_id=user_id, photo=photo, caption=text, parse_mode="HTML"
                 )
                 log.debug("DM (photo) sent to %s (%d cap chars)", user_id, len(text))
             else:
-                await app.bot.send_message(
+                msg = await app.bot.send_message(
                     chat_id=user_id, text=text, parse_mode="HTML"
                 )
                 log.debug("DM sent to %s (%d chars)", user_id, len(text))
+            return msg.message_id
         except Exception:
             log.exception("send_dm to %s failed", user_id)
+            return None
+
+    async def edit_dm(
+        user_id: int, bot_message_id: int, dup_links: list[tuple[str, str]]
+    ) -> None:
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton(text=title, url=link)] for title, link in dup_links]
+        )
+        try:
+            await app.bot.edit_message_reply_markup(
+                chat_id=user_id, message_id=bot_message_id, reply_markup=keyboard,
+            )
+            log.debug(
+                "DM buttons updated for user=%s msg=%s (%d links)",
+                user_id, bot_message_id, len(dup_links),
+            )
+        except Exception:
+            log.exception(
+                "edit_dm failed for user=%s msg=%s", user_id, bot_message_id
+            )
+
+    edit_dm_fn: EditDmFn | None = edit_dm if embed_fn is not None else None
 
     async def on_post(
         channel_id: int, message_id: int, text: str, link: str, photo: bytes | None,
@@ -96,6 +137,9 @@ async def main() -> None:
         await handle_new_post(
             channel_id=channel_id, message_id=message_id, text=text, link=link,
             db=db, summarize_fn=summarize, is_relevant_fn=is_relevant, send_dm=send_dm,
+            embed_fn=embed_fn, edit_dm=edit_dm_fn,
+            dedup_threshold=cfg.dedup_threshold,
+            dedup_window_seconds=cfg.dedup_window_hours * 3600,
             photo=photo,
         )
 
@@ -122,6 +166,12 @@ async def main() -> None:
             continue
         db.update_user_name(
             user_id=user_id, username=chat.username, first_name=chat.first_name
+        )
+
+    if embed_fn is None:
+        await send_dm(
+            cfg.owner_id,
+            t(db.get_language(cfg.owner_id), "dedup_disabled_notice"),
         )
 
     stop_event = asyncio.Event()
