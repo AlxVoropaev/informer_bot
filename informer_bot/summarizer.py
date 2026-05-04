@@ -16,7 +16,7 @@ LOCAL_EMBED_DIMENSIONS = 1024
 MAX_TOKENS = 256
 SYSTEM_PROMPT = (
     "You summarize Telegram channel posts. "
-    "Reply with a single-sentence brief in the language of the post. "
+    "Reply with a brief of one or two sentences in the language of the post. "
     "No preamble, no quotes, no markdown — just the summary."
 )
 FILTER_SYSTEM_PROMPT = (

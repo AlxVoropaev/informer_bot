@@ -147,9 +147,9 @@ DEDUP_WINDOW_HOURS=48      # optional, lookback window for dedup
 - **Trigger:** new top-level posts only. Albums coalesce into one summary. Edits ignored.
 - **Skip rule:** posts with no text and no caption (image/video-only) are skipped — no
   summary, no DM.
-- **Summary:** a single sentence in the *source-post* language (do not translate).
+- **Summary:** one or two sentences in the *source-post* language (do not translate).
 - **DM format:** the channel title is rendered as the only hyperlink (HTML
-  `<a href="post_url">Title</a>`), followed by the one-sentence summary on the
+  `<a href="post_url">Title</a>`), followed by the summary on the
   next line. No separate URL line. If the source post has a photo (or for an
   album, the first photo), it is downloaded via Telethon and attached via
   `bot.send_photo` with the formatted text as the caption; otherwise
