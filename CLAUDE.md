@@ -211,7 +211,7 @@ CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
     debug` always delivers, but posts the filter would have rejected get a
     localized `🐞 FILTERED` line prepended to the body (filter tokens are still
     charged). A `Done` button (callback `done`) closes the keyboard. The list
-    paginates at 15 channels per page; a nav row (`◀ N/M ▶`, callbacks
+    paginates at 25 channels per page; a nav row (`◀ N/M ▶`, callbacks
     `lpage:<n>` and `noop` for the counter button) appears only when there's
     more than one page. The current page is held in
     `context.user_data['list_page']` so toggle/filter-delete re-renders return
@@ -229,7 +229,7 @@ CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
   - `/help` — list available commands. Owner sees an extra admin section.
   - `/blacklist` (owner only) — inline keyboard of all channels incl. blacklisted,
     tap to toggle blacklist, callback `bl:<channel_id>`. `Done` button (callback
-    `bl_done`) closes the keyboard. Same 15-per-page pagination as `/list`
+    `bl_done`) closes the keyboard. Same 25-per-page pagination as `/list`
     (nav callback `blpage:<n>`, page held in `context.user_data['bl_page']`).
     Non-owners get "not allowed".
   - `/update` (owner only) — refresh the channel list from the admin's Telegram
