@@ -270,6 +270,8 @@ async def main() -> None:
             t(db.get_language(cfg.owner_id), "dedup_disabled_notice"),
         )
 
+    await send_dm(cfg.owner_id, t(db.get_language(cfg.owner_id), "startup_notice"))
+
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -286,6 +288,10 @@ async def main() -> None:
         )
     finally:
         log.info("shutting down")
+        with contextlib.suppress(Exception):
+            await send_dm(
+                cfg.owner_id, t(db.get_language(cfg.owner_id), "shutdown_notice")
+            )
         for task in (disconnect_task, stop_task):
             task.cancel()
         for task in (disconnect_task, stop_task):
