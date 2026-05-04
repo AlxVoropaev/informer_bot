@@ -296,7 +296,10 @@ async def on_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     channel_id = int(update.callback_query.data.split(":", 1)[1])
-    [channel] = [c for c in db.list_channels(include_blacklisted=True) if c.id == channel_id]
+    channel = db.get_channel(channel_id)
+    if channel is None:
+        await update.callback_query.answer(t(actor_lang, "channel_unavailable"))
+        return
     will_blacklist = not channel.blacklisted
 
     if will_blacklist:
