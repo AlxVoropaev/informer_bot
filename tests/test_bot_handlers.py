@@ -640,21 +640,21 @@ def _seed_many_channels(db: Database, count: int, prefix: str = "Ch") -> None:
         db.upsert_channel(channel_id=1000 + i, title=f"{prefix}{i:02d}")
 
 
-async def test_list_first_page_caps_at_15_and_shows_next_only(db: Database) -> None:
-    _seed_many_channels(db, 18)  # plus the 2 non-blacklisted from fixture = 20 visible
+async def test_list_first_page_caps_at_25_and_shows_next_only(db: Database) -> None:
+    _seed_many_channels(db, 28)  # plus the 2 non-blacklisted from fixture = 30 visible
     update = _msg_update(USER_ID)
     await cmd_list(update, _ctx(db))
 
     rows = _kb_rows(update.message.reply_text.await_args.kwargs)
     toggles = [d for row in rows for _, d in row if d.startswith("toggle:")]
-    assert len(toggles) == 15
+    assert len(toggles) == 25
     flat = [btn for row in rows for btn in row]
     nav_pairs = [(t, d) for t, d in flat if d == "noop" or d.startswith("lpage:")]
     assert nav_pairs == [("1/2", "noop"), ("▶", "lpage:1")]
 
 
 async def test_list_second_page_shows_remainder_and_prev_only(db: Database) -> None:
-    _seed_many_channels(db, 18)
+    _seed_many_channels(db, 28)
     ctx = _ctx(db)
     upd = _cb_update(USER_ID, "lpage:1")
 
@@ -666,7 +666,7 @@ async def test_list_second_page_shows_remainder_and_prev_only(db: Database) -> N
     markup = upd.callback_query.edit_message_reply_markup.await_args.kwargs["reply_markup"]
     rows = [[(b.text, b.callback_data) for b in row] for row in markup.inline_keyboard]
     toggles = [d for row in rows for _, d in row if d.startswith("toggle:")]
-    assert len(toggles) == 5  # 20 - 15
+    assert len(toggles) == 5  # 30 - 25
     flat = [btn for row in rows for btn in row]
     nav_pairs = [(t, d) for t, d in flat if d == "noop" or d.startswith("lpage:")]
     assert nav_pairs == [("◀", "lpage:0"), ("2/2", "noop")]
@@ -682,7 +682,7 @@ async def test_list_no_pagination_when_under_threshold(db: Database) -> None:
 
 
 async def test_list_page_blocks_non_approved_user(db: Database) -> None:
-    _seed_many_channels(db, 18)
+    _seed_many_channels(db, 28)
     new_user = 555
     ctx = _ctx(db)
     upd = _cb_update(new_user, "lpage:1")
@@ -694,10 +694,10 @@ async def test_list_page_blocks_non_approved_user(db: Database) -> None:
 
 
 async def test_toggle_preserves_page_position(db: Database) -> None:
-    _seed_many_channels(db, 18)
+    _seed_many_channels(db, 28)
     ctx = _ctx(db)
     ctx.user_data["list_page"] = 1
-    target_id = 1015  # 16th channel; in fixture order, will be on page 2
+    target_id = 1025  # in fixture order, will be on page 2
 
     upd = _cb_update(USER_ID, f"toggle:{target_id}")
     await on_toggle(upd, ctx)
@@ -710,20 +710,20 @@ async def test_toggle_preserves_page_position(db: Database) -> None:
 
 
 async def test_blacklist_paginates_for_owner(db: Database) -> None:
-    _seed_many_channels(db, 18)
+    _seed_many_channels(db, 28)
     update = _msg_update(OWNER_ID)
     await cmd_blacklist(update, _ctx(db))
 
     rows = _kb_rows(update.message.reply_text.await_args.kwargs)
     bl_toggles = [d for row in rows for _, d in row if d.startswith("bl:")]
-    assert len(bl_toggles) == 15
+    assert len(bl_toggles) == 25
     flat = [btn for row in rows for btn in row]
     nav_pairs = [(t, d) for t, d in flat if d == "noop" or d.startswith("blpage:")]
     assert nav_pairs == [("1/2", "noop"), ("▶", "blpage:1")]
 
 
 async def test_blacklist_page_callback_advances_for_owner(db: Database) -> None:
-    _seed_many_channels(db, 18)
+    _seed_many_channels(db, 28)
     ctx = _ctx(db)
     upd = _cb_update(OWNER_ID, "blpage:1")
 
@@ -734,7 +734,7 @@ async def test_blacklist_page_callback_advances_for_owner(db: Database) -> None:
 
 
 async def test_blacklist_page_callback_denies_non_owner(db: Database) -> None:
-    _seed_many_channels(db, 18)
+    _seed_many_channels(db, 28)
     upd = _cb_update(USER_ID, "blpage:1")
 
     await on_blacklist_page(upd, _ctx(db))
