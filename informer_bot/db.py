@@ -20,9 +20,10 @@ CREATE TABLE IF NOT EXISTS channels (
     blacklisted INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS subscriptions (
-    user_id    INTEGER NOT NULL,
-    channel_id INTEGER NOT NULL,
-    mode       TEXT NOT NULL DEFAULT 'filtered' CHECK(mode IN ('filtered','all')),
+    user_id       INTEGER NOT NULL,
+    channel_id    INTEGER NOT NULL,
+    mode          TEXT NOT NULL DEFAULT 'filtered' CHECK(mode IN ('off','filtered','all')),
+    filter_prompt TEXT,
     PRIMARY KEY (user_id, channel_id),
     FOREIGN KEY (channel_id) REFERENCES channels(id)
 );
@@ -36,7 +37,6 @@ CREATE TABLE IF NOT EXISTS users (
     status        TEXT NOT NULL CHECK(status IN ('pending','approved','denied')),
     username      TEXT,
     first_name    TEXT,
-    filter_prompt TEXT,
     language      TEXT NOT NULL DEFAULT 'en' CHECK(language IN ('en','ru'))
 );
 CREATE TABLE IF NOT EXISTS usage (
@@ -61,16 +61,33 @@ class Database:
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(users)")}
         if "first_name" not in cols:
             self._conn.execute("ALTER TABLE users ADD COLUMN first_name TEXT")
-        if "filter_prompt" not in cols:
-            self._conn.execute("ALTER TABLE users ADD COLUMN filter_prompt TEXT")
         if "language" not in cols:
             self._conn.execute(
                 "ALTER TABLE users ADD COLUMN language TEXT NOT NULL DEFAULT 'en'"
             )
+        if "filter_prompt" in cols:
+            self._conn.execute("ALTER TABLE users DROP COLUMN filter_prompt")
         sub_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(subscriptions)")}
         if "mode" not in sub_cols:
             self._conn.execute(
                 "ALTER TABLE subscriptions ADD COLUMN mode TEXT NOT NULL DEFAULT 'filtered'"
+            )
+        if "filter_prompt" not in sub_cols:
+            self._conn.executescript(
+                """
+                CREATE TABLE subscriptions_new (
+                    user_id       INTEGER NOT NULL,
+                    channel_id    INTEGER NOT NULL,
+                    mode          TEXT NOT NULL DEFAULT 'filtered' CHECK(mode IN ('off','filtered','all')),
+                    filter_prompt TEXT,
+                    PRIMARY KEY (user_id, channel_id),
+                    FOREIGN KEY (channel_id) REFERENCES channels(id)
+                );
+                INSERT INTO subscriptions_new (user_id, channel_id, mode)
+                    SELECT user_id, channel_id, mode FROM subscriptions;
+                DROP TABLE subscriptions;
+                ALTER TABLE subscriptions_new RENAME TO subscriptions;
+                """
             )
         self._conn.commit()
         log.debug("opened sqlite at %s", path)
@@ -149,7 +166,7 @@ class Database:
             for r in self._conn.execute(
                 "SELECT s.user_id, s.mode FROM subscriptions s "
                 "JOIN channels c ON c.id = s.channel_id "
-                "WHERE s.channel_id = ? AND c.blacklisted = 0",
+                "WHERE s.channel_id = ? AND c.blacklisted = 0 AND s.mode != 'off'",
                 (channel_id,),
             )
         ]
@@ -220,19 +237,36 @@ class Database:
             return f"{first_name} ({user_id})"
         return f"({user_id})"
 
-    def get_filter(self, user_id: int) -> str | None:
+    def get_channel_filter(self, user_id: int, channel_id: int) -> str | None:
         row = self._conn.execute(
-            "SELECT filter_prompt FROM users WHERE user_id = ?", (user_id,)
+            "SELECT filter_prompt FROM subscriptions WHERE user_id = ? AND channel_id = ?",
+            (user_id, channel_id),
         ).fetchone()
         return row[0] if row and row[0] else None
 
-    def set_filter(self, user_id: int, filter_prompt: str | None) -> None:
+    def set_channel_filter(
+        self, user_id: int, channel_id: int, filter_prompt: str | None
+    ) -> None:
         self._conn.execute(
-            "UPDATE users SET filter_prompt = ? WHERE user_id = ?",
-            (filter_prompt, user_id),
+            "INSERT INTO subscriptions (user_id, channel_id, mode, filter_prompt) "
+            "VALUES (?, ?, 'off', ?) "
+            "ON CONFLICT(user_id, channel_id) DO UPDATE SET filter_prompt = excluded.filter_prompt",
+            (user_id, channel_id, filter_prompt),
         )
         self._conn.commit()
-        log.debug("set_filter user=%s len=%s", user_id, len(filter_prompt) if filter_prompt else 0)
+        log.debug(
+            "set_channel_filter user=%s channel=%s len=%s",
+            user_id, channel_id, len(filter_prompt) if filter_prompt else 0,
+        )
+
+    def list_user_subscription_filters(self, user_id: int) -> dict[int, str | None]:
+        return {
+            r[0]: r[1]
+            for r in self._conn.execute(
+                "SELECT channel_id, filter_prompt FROM subscriptions WHERE user_id = ?",
+                (user_id,),
+            )
+        }
 
     def get_language(self, user_id: int) -> str:
         row = self._conn.execute(
