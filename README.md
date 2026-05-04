@@ -21,6 +21,7 @@ A Telegram bot that summarises posts from public channels and DMs you a short br
 - `/usage` — show your token usage and estimated cost.
 - `/language` — switch interface language (English / Русский).
 - `/help` — list all available commands.
+- `/app` — *experimental, branch `miniapp-test`* — opens a Telegram Mini App with the same channel manager (search, mode picker, filter editor) in a real HTML UI. Only available when the admin sets `MINIAPP_URL`. Once configured, the bot's burger-menu (≡, left of the input box) also opens it directly.
 
 That's it. No pagination, no spam — toggle what you want, optionally narrow it with a per-channel filter, and read the briefs as they arrive.
 
@@ -74,6 +75,59 @@ Optional, controls how summary embeddings for dedup are computed:
 | `DEDUP_THRESHOLD` | float 0..1 | `0.85` | Cosine similarity at or above which two posts count as the same story. |
 | `DEDUP_WINDOW_HOURS` | int | `48` | How far back to look for duplicates per user. |
 | `CATCH_UP_WINDOW_HOURS` | int | `48` | On restart, replay missed posts up to this age. Set to `0` if you don't want any backfill. |
+| `MINIAPP_URL` | full HTTPS URL | *(unset)* | Public URL where Telegram can fetch the Mini App frontend. See [Where do I get this URL?](#where-do-i-get-miniapp_url) below. When set, the bot starts an in-process aiohttp server on `WEBAPP_HOST:WEBAPP_PORT`, registers the burger-menu launcher, and `/app` becomes available. |
+| `MINIAPP_URL_FILE` | path | *(unset)* | Alternative to `MINIAPP_URL` — point at a file (typically the cloudflared sidecar's log) and the bot extracts the latest `https://*.trycloudflare.com` URL from it on startup. Already wired in `compose.yaml`. Ignored if `MINIAPP_URL` is set. |
+| `WEBAPP_HOST` | host | `0.0.0.0` | Bind address for the Mini App server. |
+| `WEBAPP_PORT` | int | `8080` | Bind port for the Mini App server. |
+
+#### Where do I get `MINIAPP_URL`?
+
+You provide it yourself — it's the **public HTTPS URL where Telegram can reach
+the bot's built-in Mini App server.** The bot serves `webapp/index.html` from
+`http://WEBAPP_HOST:WEBAPP_PORT/`; you put HTTPS in front and give Telegram
+that URL. Plain HTTP is rejected by the Telegram client.
+
+Three common ways:
+
+1. **Quick local test — cloudflared (no signup, no account):**
+   ```sh
+   cloudflared tunnel --url http://localhost:8080
+   # → https://random-words-1234.trycloudflare.com
+   ```
+   Put that URL into `MINIAPP_URL`, restart the bot. URL changes every run.
+
+2. **Quick local test — ngrok (free account):**
+   ```sh
+   ngrok http 8080
+   # → https://abcd-1-2-3-4.ngrok-free.app
+   ```
+
+3. **Production — your own host.** If the bot already runs on a VPS with a
+   domain, put a reverse proxy (Caddy / nginx with Let's Encrypt) in front of
+   `WEBAPP_PORT` and use that HTTPS domain. With Caddy:
+   ```caddyfile
+   miniapp.example.com {
+       reverse_proxy localhost:8080
+   }
+   ```
+   Then `MINIAPP_URL=https://miniapp.example.com`.
+
+##### Auto-discovery via the cloudflared sidecar (default in `compose.yaml`)
+
+The bundled `compose.yaml` already runs `cloudflare/cloudflared:latest` as a
+sidecar — it starts a quick tunnel pointing at `bot:8080` and writes its log
+to a shared volume. The bot reads that log via `MINIAPP_URL_FILE` and grabs
+the latest `https://*.trycloudflare.com` URL automatically on startup. **You
+do not need to set `MINIAPP_URL` or install cloudflared on the host** — just
+`docker compose up -d` and the Mini App is ready.
+
+Caveats:
+- The URL is **anonymous and changes every time cloudflared restarts.** If
+  cloudflared restarts mid-run, restart the bot too (`docker compose restart bot`)
+  so it picks up the new URL.
+- For a stable URL, set `MINIAPP_URL=https://your-stable-host` in `data/.env`
+  (it takes precedence over the file) and remove the `cloudflared` service
+  from `compose.yaml`.
 
 - `openai` — `text-embedding-3-small` @ 512 dims, paid (~$0.02 / 1M tokens).
 - `local` — runs the model via fastembed (ONNX, no PyTorch). Default model is

@@ -139,7 +139,49 @@ LOCAL_EMBEDDING_MODEL=...  # optional, fastembed model name; default intfloat/mu
 DEDUP_THRESHOLD=0.85       # optional, cosine threshold for "same story"
 DEDUP_WINDOW_HOURS=48      # optional, lookback window for dedup
 CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
+MINIAPP_URL=               # optional, public HTTPS URL of the Mini App; enables /app, the burger-menu launcher, and the in-process aiohttp server
+MINIAPP_URL_FILE=          # optional, path to a file (typically the cloudflared logfile) the bot polls at startup to extract a https://*.trycloudflare.com URL; ignored if MINIAPP_URL is set
+WEBAPP_HOST=0.0.0.0        # optional, bind host for the Mini App server (default 0.0.0.0)
+WEBAPP_PORT=8080           # optional, bind port for the Mini App server (default 8080)
 ```
+
+## Mini App (experimental, branch `miniapp-test`)
+
+When `MINIAPP_URL` is set, `main.py` boots an **aiohttp** server alongside the
+PTB application (same asyncio loop, same SQLite, no separate process). The
+server serves `webapp/index.html` at `/`, static assets at `/static/<file>`,
+and a JSON API under `/api/`. Every API call validates the
+`X-Telegram-Init-Data` header via `informer_bot.webapp.verify_init_data` —
+HMAC-SHA256 with key `HMAC("WebAppData", bot_token)` over the sorted
+`\n`-joined `key=value` pairs from `Telegram.WebApp.initData` — and rejects
+data older than 24h. The caller's user_id is parsed from the `user` field and
+checked against `users.status='approved'`.
+
+Endpoints:
+- `GET /api/state` → `{user_id, language, is_owner, channels: [...]}`
+- `POST /api/subscription` `{channel_id, mode}` (`mode` ∈ `off|filtered|debug|all|unsubscribe`)
+- `POST /api/filter` `{channel_id, filter_prompt}` (null/empty clears)
+- `POST /api/language` `{language}`
+
+Subscription/filter behaviour mirrors the inline-keyboard handlers — setting a
+filter on an `off`/no-row channel auto-bumps it to `filtered`, same as
+`on_filter_text`. The frontend (`webapp/`) is vanilla HTML/CSS/JS using the
+Telegram `--tg-theme-*` CSS variables for native theming. `/app` opens the
+Mini App via `InlineKeyboardButton(web_app=WebAppInfo(url=MINIAPP_URL))` and
+`main.py` also calls `set_chat_menu_button(MenuButtonWebApp(...))` so the
+bot's burger menu launches it.
+
+`compose.yaml` ships a `cloudflared` sidecar (`cloudflare/cloudflared:latest`,
+`tunnel --url http://bot:8080`) that writes its log to a named volume mounted
+read-only at `/cloudflared` in the bot container. The bot reads
+`MINIAPP_URL_FILE=/cloudflared/cloudflared.log` and `_discover_miniapp_url`
+in `main.py` polls it (1 Hz, 60 s timeout) extracting the latest
+`https://*.trycloudflare.com` URL via regex — `findall(...)[-1]` so a
+cloudflared restart with a new URL still picks the fresh one. The discovered
+URL replaces `cfg.miniapp_url` for the rest of the run; if cloudflared
+restarts mid-run, the bot does NOT re-poll — restart the bot too. To use a
+stable URL instead, set `MINIAPP_URL` explicitly (takes precedence over the
+file) and remove the `cloudflared` service from compose.
 
 ## Behaviour rules
 
@@ -257,6 +299,9 @@ CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
     Non-owners get "not allowed".
   - `/update` (owner only) — refresh the channel list from the admin's Telegram
     subscriptions on demand. Non-owners get "not allowed".
+  - `/app` — replies with an inline `🪟 Open Mini App` button
+    (`web_app=WebAppInfo(MINIAPP_URL)`). Hidden if `MINIAPP_URL` is unset
+    (replies with `miniapp_unconfigured`). Approved users only.
 - **Channel-list refresh:** triggered manually by the admin via `/update`
   (NOT run at startup — see catch-up note above). Calls Telethon to fetch the
   admin's current subscriptions — for each channel, also issues
@@ -326,7 +371,12 @@ informer_bot/
 │   ├── album.py         # buffer-and-flush coalescer for multi-photo albums
 │   ├── pipeline.py      # handle_new_post + refresh_channels glue
 │   ├── bot.py           # ptb handlers: commands, inline keyboards, callbacks
+│   ├── webapp.py        # aiohttp server for the Mini App (initData verify + JSON API)
 │   └── main.py          # wires client + bot in one asyncio loop
+├── webapp/              # Mini App static SPA (served by webapp.py when MINIAPP_URL set)
+│   ├── index.html
+│   ├── style.css        # uses --tg-theme-* CSS vars for native look
+│   └── app.js           # talks to /api/* with X-Telegram-Init-Data header
 ├── login.py             # one-time interactive: phone + code → .session
 └── tests/
     ├── test_db.py

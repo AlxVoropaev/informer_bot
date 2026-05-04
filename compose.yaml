@@ -9,8 +9,12 @@ services:
     environment:
       FASTEMBED_CACHE_PATH: /app/data/fastembed_cache
       HF_HOME: /app/data/huggingface
+      MINIAPP_URL_FILE: /cloudflared/cloudflared.log
     volumes:
       - ./data:/app/data
+      - cloudflared_state:/cloudflared:ro
+    depends_on:
+      - cloudflared
     restart: unless-stopped
     stop_grace_period: 30s
     logging:
@@ -19,3 +23,20 @@ services:
         max-size: "10m"
         max-file: "10"
         compress: "true"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: >
+      tunnel --no-autoupdate --url http://bot:8080
+      --logfile /shared/cloudflared.log --loglevel info
+    volumes:
+      - cloudflared_state:/shared
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+volumes:
+  cloudflared_state:

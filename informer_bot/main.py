@@ -2,11 +2,12 @@ import asyncio
 import contextlib
 import functools
 import logging
+import re
 import signal
 import time
 
 from openai import AsyncOpenAI
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, WebAppInfo
 from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -18,6 +19,7 @@ from telethon import TelegramClient
 
 from informer_bot.album import AlbumBuffer
 from informer_bot.bot import (
+    cmd_app,
     cmd_blacklist,
     cmd_help,
     cmd_language,
@@ -60,8 +62,26 @@ from informer_bot.summarizer import (
     is_relevant,
     summarize,
 )
+from informer_bot.webapp import start_server as start_webapp_server
 
 log = logging.getLogger(__name__)
+
+_QUICK_TUNNEL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
+
+
+async def _discover_miniapp_url(path: str, timeout: float = 60.0) -> str | None:
+    """Poll cloudflared's logfile for a quick-tunnel URL. Returns the latest match."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            with open(path, encoding="utf-8", errors="ignore") as f:
+                matches = _QUICK_TUNNEL_RE.findall(f.read())
+            if matches:
+                return matches[-1]
+        except FileNotFoundError:
+            pass
+        await asyncio.sleep(1)
+    return None
 
 
 async def main() -> None:
@@ -70,6 +90,19 @@ async def main() -> None:
     log.info("starting informer_bot (log_level=%s, db=%s)", cfg.log_level, cfg.db_path)
     db = Database(cfg.db_path)
     db.set_user_status(user_id=cfg.owner_id, status="approved")
+
+    miniapp_url = cfg.miniapp_url
+    if not miniapp_url and cfg.miniapp_url_file:
+        log.info("waiting for cloudflared URL in %s ...", cfg.miniapp_url_file)
+        miniapp_url = await _discover_miniapp_url(cfg.miniapp_url_file)
+        if miniapp_url:
+            log.info("discovered miniapp URL: %s", miniapp_url)
+        else:
+            log.warning(
+                "MINIAPP_URL_FILE=%s contained no trycloudflare URL within timeout; "
+                "Mini App will be disabled this run",
+                cfg.miniapp_url_file,
+            )
 
     tg = TelegramClient(cfg.session_path, cfg.telegram_api_id, cfg.telegram_api_hash)
     await tg.connect()
@@ -80,9 +113,11 @@ async def main() -> None:
     app = ApplicationBuilder().token(cfg.telegram_bot_token).build()
     app.bot_data["db"] = db
     app.bot_data["owner_id"] = cfg.owner_id
+    app.bot_data["miniapp_url"] = miniapp_url
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("list", cmd_list))
+    app.add_handler(CommandHandler("app", cmd_app))
     app.add_handler(CommandHandler("blacklist", cmd_blacklist))
     app.add_handler(CommandHandler("usage", cmd_usage))
     app.add_handler(CommandHandler("language", cmd_language))
@@ -250,6 +285,21 @@ async def main() -> None:
     await app.start()
     await app.updater.start_polling()
 
+    webapp_runner = None
+    if miniapp_url:
+        webapp_runner = await start_webapp_server(
+            db=db, bot_token=cfg.telegram_bot_token, owner_id=cfg.owner_id,
+            host=cfg.webapp_host, port=cfg.webapp_port,
+        )
+        try:
+            await app.bot.set_chat_menu_button(menu_button=MenuButtonWebApp(
+                text=t(db.get_language(cfg.owner_id), "miniapp_menu_label"),
+                web_app=WebAppInfo(url=miniapp_url),
+            ))
+            log.info("set chat menu button -> %s", miniapp_url)
+        except Exception:
+            log.exception("failed to set chat menu button")
+
     await catch_up(
         tg, db, buffer, max_age_seconds=cfg.catch_up_window_hours * 3600,
     )
@@ -300,6 +350,8 @@ async def main() -> None:
         await app.updater.stop()
         await app.stop()
         await app.shutdown()
+        if webapp_runner is not None:
+            await webapp_runner.cleanup()
         await tg.disconnect()
         log.info("shutdown complete")
 
