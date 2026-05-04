@@ -1,7 +1,7 @@
 import html
 import logging
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import ContextTypes
 
 from informer_bot.db import Database
@@ -228,6 +228,22 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         text=t(owner_lang, "access_request", label=_user_label(user)),
         reply_markup=keyboard,
     )
+
+
+async def cmd_app(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user_id = update.effective_user.id
+    lang = _lang(context, user_id)
+    if _db(context).get_user_status(user_id) != "approved":
+        await update.message.reply_text(t(lang, "denied"))
+        return
+    url = context.bot_data.get("miniapp_url")
+    if not url:
+        await update.message.reply_text(t(lang, "miniapp_unconfigured"))
+        return
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(
+        text=t(lang, "open_miniapp_button"), web_app=WebAppInfo(url=url),
+    )]])
+    await update.message.reply_text(t(lang, "miniapp_intro"), reply_markup=keyboard)
 
 
 async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

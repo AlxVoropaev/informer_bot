@@ -90,6 +90,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "channel_details_toggle_all": "✅ All — tap to cycle",
         "channel_details_edit_filter_button": "✏️ Edit filter",
         "channel_details_delete_filter_button": "🗑 Delete filter",
+        "open_miniapp_button": "🪟 Open Mini App",
+        "miniapp_intro": "Open the channel manager:",
+        "miniapp_unconfigured": "Mini App is not configured (MINIAPP_URL is unset).",
+        "miniapp_menu_label": "Channels",
     },
     "ru": {
         "greeting": "Привет, я informer. Используй /list, чтобы выбрать каналы. /help — все команды.",
@@ -178,6 +182,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "channel_details_toggle_all": "✅ Все — нажми, чтобы переключить",
         "channel_details_edit_filter_button": "✏️ Редактировать фильтр",
         "channel_details_delete_filter_button": "🗑 Удалить фильтр",
+        "open_miniapp_button": "🪟 Открыть Mini App",
+        "miniapp_intro": "Открой менеджер каналов:",
+        "miniapp_unconfigured": "Mini App не настроен (MINIAPP_URL не задан).",
+        "miniapp_menu_label": "Каналы",
     },
 }
 

@@ -1,0 +1,332 @@
+"use strict";
+
+const tg = window.Telegram && window.Telegram.WebApp;
+
+const I18N = {
+  en: {
+    search: "Search channels…",
+    loading: "Loading…",
+    empty: "No channels yet. Ask the admin to /update.",
+    not_approved: "Not approved yet — talk to the admin.",
+    network_error: "Network error.",
+    saved: "Saved.",
+    cleared: "Filter cleared.",
+    deliveryMode: "Delivery mode",
+    filterPrompt: "Filter prompt",
+    filterPlaceholder: "Plain-language rules for what you want to see…",
+    save: "Save filter",
+    clear: "Clear",
+    back: "← Back",
+    noDescription: "No description.",
+    open: "🔗 Open in Telegram",
+    tips: [
+      "Tips for a good filter:",
+      "• Plain language; bullets work well.",
+      "• Split into want / don't want (\"Interesting:\" / \"Not interesting:\").",
+      "• Be concrete — name topics, domains, or keywords.",
+      "• Add exceptions when broad rules have them.",
+      "• Any language works.",
+    ].join("\n"),
+    modes: { off: "⬜ Off", filtered: "🔀 Filtered", debug: "🐞 Debug", all: "✅ All" },
+    badgeFilter: "filter set",
+    badgeMode: { off: "off", filtered: "filtered", debug: "debug", all: "all" },
+  },
+  ru: {
+    search: "Поиск каналов…",
+    loading: "Загрузка…",
+    empty: "Каналов пока нет. Попроси админа /update.",
+    not_approved: "Доступ ещё не одобрен — напиши админу.",
+    network_error: "Ошибка сети.",
+    saved: "Сохранено.",
+    cleared: "Фильтр удалён.",
+    deliveryMode: "Режим доставки",
+    filterPrompt: "Фильтр",
+    filterPlaceholder: "Опиши обычным языком, что тебе интересно…",
+    save: "Сохранить",
+    clear: "Очистить",
+    back: "← Назад",
+    noDescription: "Описания нет.",
+    open: "🔗 Открыть в Telegram",
+    tips: [
+      "Советы по фильтру:",
+      "• Пиши обычным языком; списки удобны.",
+      "• Раздели на интересное/неинтересное.",
+      "• Будь конкретным — темы, ключевые слова.",
+      "• Добавляй исключения, если у правил они есть.",
+      "• Можно писать на любом языке.",
+    ].join("\n"),
+    modes: { off: "⬜ Выкл", filtered: "🔀 Фильтр", debug: "🐞 Отладка", all: "✅ Все" },
+    badgeFilter: "фильтр",
+    badgeMode: { off: "выкл", filtered: "фильтр", debug: "отладка", all: "все" },
+  },
+};
+
+const state = {
+  language: "en",
+  channels: [],
+  filteredView: [],
+  searchQuery: "",
+  selectedId: null,
+  isOwner: false,
+};
+
+function t() { return I18N[state.language] || I18N.en; }
+
+function el(id) { return document.getElementById(id); }
+
+async function api(path, options = {}) {
+  const initData = (tg && tg.initData) || "";
+  const headers = { "Content-Type": "application/json", "X-Telegram-Init-Data": initData, ...(options.headers || {}) };
+  const resp = await fetch(path, { ...options, headers });
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({}));
+    const err = new Error(body.error || `HTTP ${resp.status}`);
+    err.status = resp.status;
+    throw err;
+  }
+  return resp.json();
+}
+
+function showToast(message) {
+  const node = el("toast");
+  node.textContent = message;
+  node.classList.add("visible");
+  clearTimeout(showToast._timer);
+  showToast._timer = setTimeout(() => node.classList.remove("visible"), 1800);
+}
+
+function applyLanguage() {
+  const dict = t();
+  el("search").placeholder = dict.search;
+  el("filter-input").placeholder = dict.filterPlaceholder;
+  el("filter-tips").textContent = dict.tips;
+  el("filter-save").textContent = dict.save;
+  el("filter-clear").textContent = dict.clear;
+  el("details-back").textContent = dict.back;
+  document.querySelectorAll('input[name="mode"]').forEach((input) => {
+    const labelSpan = input.nextElementSibling;
+    labelSpan.textContent = dict.modes[input.value];
+  });
+}
+
+function rebuildLangSelect() {
+  const sel = el("lang");
+  sel.innerHTML = "";
+  for (const code of ["en", "ru"]) {
+    const opt = document.createElement("option");
+    opt.value = code;
+    opt.textContent = code === "en" ? "English" : "Русский";
+    if (code === state.language) opt.selected = true;
+    sel.appendChild(opt);
+  }
+}
+
+function renderList() {
+  const dict = t();
+  const container = el("list");
+  container.removeAttribute("aria-busy");
+  const q = state.searchQuery.trim().toLowerCase();
+  const items = state.channels.filter((c) => !q || c.title.toLowerCase().includes(q));
+  state.filteredView = items;
+
+  if (items.length === 0) {
+    container.innerHTML = `<div class="empty">${q ? "—" : dict.empty}</div>`;
+    return;
+  }
+
+  const frag = document.createDocumentFragment();
+  for (const c of items) {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.dataset.id = String(c.id);
+
+    const icon = document.createElement("div");
+    icon.className = "mode-icon";
+    icon.textContent = ({ off: "⬜", filtered: "🔀", debug: "🐞", all: "✅" })[c.mode] || "⬜";
+
+    const titleBlock = document.createElement("div");
+    titleBlock.className = "title-block";
+    const title = document.createElement("div");
+    title.className = "title";
+    title.textContent = c.title;
+    titleBlock.appendChild(title);
+
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const modeBadge = document.createElement("span");
+    modeBadge.className = "badge";
+    modeBadge.textContent = dict.badgeMode[c.mode] || c.mode;
+    meta.appendChild(modeBadge);
+    if (c.filter_prompt) {
+      const f = document.createElement("span");
+      f.className = "badge has-filter";
+      f.textContent = dict.badgeFilter;
+      meta.appendChild(f);
+    }
+    if (c.username) {
+      const u = document.createElement("span");
+      u.textContent = "@" + c.username;
+      meta.appendChild(u);
+    }
+    titleBlock.appendChild(meta);
+
+    const chev = document.createElement("div");
+    chev.className = "chevron";
+    chev.textContent = "›";
+
+    row.appendChild(icon);
+    row.appendChild(titleBlock);
+    row.appendChild(chev);
+    row.addEventListener("click", () => openDetails(c.id));
+    frag.appendChild(row);
+  }
+  container.replaceChildren(frag);
+}
+
+function openDetails(channelId) {
+  const c = state.channels.find((x) => x.id === channelId);
+  if (!c) return;
+  state.selectedId = channelId;
+  const dict = t();
+
+  el("details-title").textContent = c.title;
+  const link = el("details-link");
+  if (c.username) {
+    link.textContent = dict.open;
+    link.href = `https://t.me/${c.username}`;
+    link.hidden = false;
+  } else {
+    link.hidden = true;
+  }
+  el("details-about").textContent = c.about || "";
+
+  document.querySelectorAll('input[name="mode"]').forEach((input) => {
+    input.checked = input.value === c.mode;
+  });
+  el("filter-input").value = c.filter_prompt || "";
+
+  el("list").classList.add("hidden");
+  el("details").classList.remove("hidden");
+  el("details").setAttribute("aria-hidden", "false");
+  el("search").parentElement.style.display = "none";
+  window.scrollTo(0, 0);
+
+  if (tg && tg.BackButton) {
+    tg.BackButton.show();
+    tg.BackButton.onClick(closeDetails);
+  }
+}
+
+function closeDetails() {
+  state.selectedId = null;
+  el("details").classList.add("hidden");
+  el("details").setAttribute("aria-hidden", "true");
+  el("list").classList.remove("hidden");
+  el("search").parentElement.style.display = "";
+  if (tg && tg.BackButton) {
+    tg.BackButton.offClick(closeDetails);
+    tg.BackButton.hide();
+  }
+}
+
+async function changeMode(channelId, mode) {
+  try {
+    const data = await api("/api/subscription", {
+      method: "POST",
+      body: JSON.stringify({ channel_id: channelId, mode }),
+    });
+    state.channels = data.channels;
+    renderList();
+    showToast(t().saved);
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+  } catch (e) {
+    showToast(e.message || t().network_error);
+  }
+}
+
+async function saveFilter(channelId, prompt) {
+  try {
+    const data = await api("/api/filter", {
+      method: "POST",
+      body: JSON.stringify({ channel_id: channelId, filter_prompt: prompt }),
+    });
+    state.channels = data.channels;
+    renderList();
+    const fresh = state.channels.find((x) => x.id === channelId);
+    if (fresh && state.selectedId === channelId) {
+      document.querySelectorAll('input[name="mode"]').forEach((input) => {
+        input.checked = input.value === fresh.mode;
+      });
+      el("filter-input").value = fresh.filter_prompt || "";
+    }
+    showToast(prompt ? t().saved : t().cleared);
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+  } catch (e) {
+    showToast(e.message || t().network_error);
+  }
+}
+
+async function changeLanguage(code) {
+  try {
+    await api("/api/language", { method: "POST", body: JSON.stringify({ language: code }) });
+    state.language = code;
+    applyLanguage();
+    renderList();
+  } catch (e) {
+    showToast(e.message || t().network_error);
+  }
+}
+
+async function init() {
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    if (tg.setHeaderColor) {
+      try { tg.setHeaderColor("secondary_bg_color"); } catch (_) {}
+    }
+  }
+
+  rebuildLangSelect();
+  applyLanguage();
+
+  try {
+    const data = await api("/api/state");
+    state.language = data.language || "en";
+    state.channels = data.channels || [];
+    state.isOwner = !!data.is_owner;
+    rebuildLangSelect();
+    applyLanguage();
+    renderList();
+  } catch (e) {
+    el("list").innerHTML = `<div class="empty">${
+      e.status === 403 ? t().not_approved : (e.message || t().network_error)
+    }</div>`;
+  }
+
+  el("search").addEventListener("input", (ev) => {
+    state.searchQuery = ev.target.value;
+    renderList();
+  });
+  el("lang").addEventListener("change", (ev) => changeLanguage(ev.target.value));
+  el("details-back").addEventListener("click", closeDetails);
+
+  document.querySelectorAll('input[name="mode"]').forEach((input) => {
+    input.addEventListener("change", () => {
+      if (state.selectedId == null) return;
+      changeMode(state.selectedId, input.value);
+    });
+  });
+
+  el("filter-save").addEventListener("click", () => {
+    if (state.selectedId == null) return;
+    const value = el("filter-input").value.trim();
+    saveFilter(state.selectedId, value || null);
+  });
+  el("filter-clear").addEventListener("click", () => {
+    if (state.selectedId == null) return;
+    el("filter-input").value = "";
+    saveFilter(state.selectedId, null);
+  });
+}
+
+init();

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Informer</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <input id="search" type="search" placeholder="Search channels…" autocomplete="off" />
+    <select id="lang"></select>
+  </header>
+
+  <main id="list" class="list" aria-busy="true">
+    <div class="empty" id="loading">Loading…</div>
+  </main>
+
+  <section id="details" class="details hidden" aria-hidden="true">
+    <button class="back" id="details-back" type="button">← Back</button>
+    <h2 id="details-title"></h2>
+    <a id="details-link" class="link" target="_blank" rel="noopener" hidden></a>
+    <p id="details-about" class="about"></p>
+
+    <fieldset class="modes">
+      <legend>Delivery mode</legend>
+      <label><input type="radio" name="mode" value="off" /><span>⬜ Off</span></label>
+      <label><input type="radio" name="mode" value="filtered" /><span>🔀 Filtered</span></label>
+      <label><input type="radio" name="mode" value="debug" /><span>🐞 Debug</span></label>
+      <label><input type="radio" name="mode" value="all" /><span>✅ All</span></label>
+    </fieldset>
+
+    <label class="filter">
+      <span>Filter prompt</span>
+      <textarea id="filter-input" rows="6" placeholder="Plain-language rules for what you want to see…"></textarea>
+    </label>
+    <div class="filter-actions">
+      <button id="filter-save" type="button" class="primary">Save filter</button>
+      <button id="filter-clear" type="button" class="ghost">Clear</button>
+    </div>
+    <p class="tips" id="filter-tips"></p>
+  </section>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
