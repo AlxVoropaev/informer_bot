@@ -1,11 +1,10 @@
-import html
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import ContextTypes
 
 from informer_bot.db import Database
-from informer_bot.i18n import LANGUAGE_NAMES, LANGUAGES, t
+from informer_bot.i18n import t
 from informer_bot.pipeline import refresh_channels
 from informer_bot.summarizer import estimate_cost_usd, estimate_embedding_cost_usd
 
@@ -23,8 +22,6 @@ def _owner_id(context: ContextTypes.DEFAULT_TYPE) -> int:
 def _lang(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
     return _db(context).get_language(user_id)
 
-
-_MODE_EMOJI = {None: "⬜", "off": "⬜", "filtered": "🔀", "debug": "🐞", "all": "✅"}
 
 _PAGE_SIZE = 15
 
@@ -48,109 +45,6 @@ def _nav_row(page: int, total_pages: int, prefix: str) -> list[InlineKeyboardBut
     return row
 
 
-def _user_keyboard(
-    db: Database, user_id: int, lang: str, page: int = 0
-) -> InlineKeyboardMarkup:
-    modes = db.list_user_subscription_modes(user_id)
-    filters = db.list_user_subscription_filters(user_id)
-    page_items, _page, total_pages = _paginate(db.list_channels(), page)
-    rows: list[list[InlineKeyboardButton]] = []
-    for c in page_items:
-        rows.append([InlineKeyboardButton(
-            text=f"{_MODE_EMOJI[modes.get(c.id)]} {c.title}",
-            callback_data=f"toggle:{c.id}",
-        )])
-        icon_row = [
-            InlineKeyboardButton(text="ℹ️", callback_data=f"linfo:{c.id}"),
-        ]
-        if c.username:
-            icon_row.append(InlineKeyboardButton(
-                text="🔗", url=f"https://t.me/{c.username}",
-            ))
-        icon_row.append(InlineKeyboardButton(text="✏️", callback_data=f"fedit:{c.id}"))
-        if filters.get(c.id):
-            icon_row.append(InlineKeyboardButton(text="🗑", callback_data=f"fdel:{c.id}"))
-        rows.append(icon_row)
-    nav = _nav_row(_page, total_pages, "lpage")
-    if nav:
-        rows.append(nav)
-    rows.append([InlineKeyboardButton(text=t(lang, "done_button"), callback_data="done")])
-    return InlineKeyboardMarkup(rows)
-
-
-_DETAILS_TOGGLE_KEY = {
-    None: "channel_details_toggle_off",
-    "off": "channel_details_toggle_off",
-    "filtered": "channel_details_toggle_filtered",
-    "debug": "channel_details_toggle_debug",
-    "all": "channel_details_toggle_all",
-}
-
-
-def _details_view(
-    db: Database, user_id: int, lang: str, channel_id: int
-) -> tuple[str, InlineKeyboardMarkup]:
-    channel = db.get_channel(channel_id)
-    title = channel.title if channel else ""
-    username = channel.username if channel else None
-    about = channel.about if channel else None
-    mode = db.get_subscription_mode(user_id, channel_id)
-    has_filter = bool(db.get_channel_filter(user_id, channel_id))
-
-    title_html = f"<b>{html.escape(title)}</b>"
-    description = html.escape(about) if about else t(lang, "channel_details_no_description")
-    text = f"{title_html}\n\n{description}"
-
-    rows: list[list[InlineKeyboardButton]] = []
-    if username:
-        rows.append([InlineKeyboardButton(
-            text=t(lang, "channel_details_open_button"),
-            url=f"https://t.me/{username}",
-        )])
-    rows.append([InlineKeyboardButton(
-        text=t(lang, _DETAILS_TOGGLE_KEY[mode]),
-        callback_data=f"toggle:{channel_id}",
-    )])
-    edit_row = [InlineKeyboardButton(
-        text=t(lang, "channel_details_edit_filter_button"),
-        callback_data=f"fedit:{channel_id}",
-    )]
-    if has_filter:
-        edit_row.append(InlineKeyboardButton(
-            text=t(lang, "channel_details_delete_filter_button"),
-            callback_data=f"fdel:{channel_id}",
-        ))
-    rows.append(edit_row)
-    rows.append([InlineKeyboardButton(
-        text=t(lang, "channel_details_back_button"),
-        callback_data="lback",
-    )])
-    return text, InlineKeyboardMarkup(rows)
-
-
-async def _rerender_list_or_details(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    db: Database,
-    user_id: int,
-    lang: str,
-) -> None:
-    view = context.user_data.get("list_view", "list")
-    if isinstance(view, tuple) and view[0] == "details":
-        text, kb = _details_view(db, user_id, lang, view[1])
-        await update.callback_query.edit_message_text(
-            text, reply_markup=kb,
-            parse_mode="HTML", disable_web_page_preview=True,
-        )
-        return
-    await update.callback_query.edit_message_text(
-        t(lang, "pick_channels"),
-        reply_markup=_user_keyboard(
-            db, user_id, lang, page=context.user_data.get("list_page", 0)
-        ),
-    )
-
-
 def _admin_keyboard(
     db: Database, lang: str, page: int = 0
 ) -> InlineKeyboardMarkup:
@@ -169,13 +63,6 @@ def _admin_keyboard(
         rows.append(nav)
     rows.append([InlineKeyboardButton(text=t(lang, "done_button"), callback_data="bl_done")])
     return InlineKeyboardMarkup(rows)
-
-
-def _language_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(text=LANGUAGE_NAMES[code], callback_data=f"lang:{code}")]
-        for code in LANGUAGES
-    ])
 
 
 def _user_label(user) -> str:
@@ -246,22 +133,6 @@ async def cmd_app(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(t(lang, "miniapp_intro"), reply_markup=keyboard)
 
 
-async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db = _db(context)
-    user_id = update.effective_user.id
-    log.debug("/list from user=%s", user_id)
-    lang = db.get_language(user_id)
-    if db.get_user_status(user_id) != "approved":
-        await update.message.reply_text(t(lang, "denied"))
-        return
-    context.user_data["list_page"] = 0
-    context.user_data["list_view"] = "list"
-    await update.message.reply_text(
-        t(lang, "pick_channels"),
-        reply_markup=_user_keyboard(db, user_id, lang, page=0),
-    )
-
-
 def _format_usage_line(label: str, input_tokens: int, output_tokens: int) -> str:
     cost = estimate_cost_usd(input_tokens, output_tokens)
     return f"{label}: in={input_tokens:,} out={output_tokens:,} ≈ ${cost:.4f}"
@@ -304,16 +175,6 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def cmd_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
-    log.debug("/language from user=%s", user_id)
-    lang = _lang(context, user_id)
-    await update.message.reply_text(
-        t(lang, "language_prompt", current=LANGUAGE_NAMES[lang]),
-        reply_markup=_language_keyboard(),
-    )
-
-
 async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     lang = _lang(context, user_id)
@@ -352,54 +213,6 @@ async def cmd_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
 
-async def on_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db = _db(context)
-    user_id = update.effective_user.id
-    lang = db.get_language(user_id)
-    channel_id = int(update.callback_query.data.split(":", 1)[1])
-
-    if db.get_user_status(user_id) != "approved":
-        log.info("toggle rejected: user=%s not approved", user_id)
-        await update.callback_query.answer(t(lang, "denied"))
-        return
-
-    visible_ids = {c.id for c in db.list_channels()}
-    if channel_id not in visible_ids:
-        log.info("toggle rejected: user=%s channel=%s unavailable", user_id, channel_id)
-        await update.callback_query.answer(t(lang, "channel_unavailable"))
-        return
-
-    current = db.get_subscription_mode(user_id, channel_id)
-    if current in (None, "off"):
-        next_mode: str | None = "filtered"
-        db.subscribe(user_id, channel_id, mode="filtered")
-    elif current == "filtered":
-        next_mode = "debug"
-        db.subscribe(user_id, channel_id, mode="debug")
-    elif current == "debug":
-        next_mode = "all"
-        db.subscribe(user_id, channel_id, mode="all")
-    else:
-        if db.get_channel_filter(user_id, channel_id):
-            next_mode = "off"
-            db.subscribe(user_id, channel_id, mode="off")
-        else:
-            next_mode = None
-            db.unsubscribe(user_id, channel_id)
-    log.info("user=%s channel=%s mode %s -> %s", user_id, channel_id, current, next_mode)
-
-    await update.callback_query.answer()
-    await _rerender_list_or_details(update, context, db, user_id, lang)
-
-
-async def on_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
-    log.debug("/list done by user=%s", user_id)
-    lang = _lang(context, user_id)
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(t(lang, "selection_saved"))
-
-
 async def on_blacklist_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     lang = _lang(context, user_id)
@@ -410,59 +223,6 @@ async def on_blacklist_done(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     log.debug("/blacklist done by owner=%s", user_id)
     await update.callback_query.answer()
     await update.callback_query.edit_message_text(t(lang, "blacklist_closed"))
-
-
-async def on_list_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db = _db(context)
-    user_id = update.effective_user.id
-    lang = db.get_language(user_id)
-    if db.get_user_status(user_id) != "approved":
-        await update.callback_query.answer(t(lang, "denied"))
-        return
-    page = int(update.callback_query.data.split(":", 1)[1])
-    context.user_data["list_page"] = page
-    context.user_data["list_view"] = "list"
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_reply_markup(
-        reply_markup=_user_keyboard(db, user_id, lang, page=page),
-    )
-
-
-async def on_list_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db = _db(context)
-    user_id = update.effective_user.id
-    lang = db.get_language(user_id)
-    if db.get_user_status(user_id) != "approved":
-        await update.callback_query.answer(t(lang, "denied"))
-        return
-    channel_id = int(update.callback_query.data.split(":", 1)[1])
-    if db.get_channel(channel_id) is None:
-        await update.callback_query.answer(t(lang, "channel_unavailable"))
-        return
-    context.user_data["list_view"] = ("details", channel_id)
-    text, kb = _details_view(db, user_id, lang, channel_id)
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(
-        text, reply_markup=kb,
-        parse_mode="HTML", disable_web_page_preview=True,
-    )
-
-
-async def on_list_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db = _db(context)
-    user_id = update.effective_user.id
-    lang = db.get_language(user_id)
-    if db.get_user_status(user_id) != "approved":
-        await update.callback_query.answer(t(lang, "denied"))
-        return
-    context.user_data["list_view"] = "list"
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(
-        t(lang, "pick_channels"),
-        reply_markup=_user_keyboard(
-            db, user_id, lang, page=context.user_data.get("list_page", 0)
-        ),
-    )
 
 
 async def on_blacklist_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -478,10 +238,6 @@ async def on_blacklist_page(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await update.callback_query.edit_message_reply_markup(
         reply_markup=_admin_keyboard(db, lang, page=page),
     )
-
-
-async def on_noop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.callback_query.answer()
 
 
 async def on_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -569,136 +325,5 @@ async def on_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
-async def on_filter_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db = _db(context)
-    user_id = update.effective_user.id
-    lang = db.get_language(user_id)
-    channel_id = int(update.callback_query.data.split(":", 1)[1])
-
-    if db.get_user_status(user_id) != "approved":
-        log.info("filter edit rejected: user=%s not approved", user_id)
-        await update.callback_query.answer(t(lang, "denied"))
-        return
-
-    title = db.get_channel_title(channel_id)
-    if title is None:
-        await update.callback_query.answer(t(lang, "channel_unavailable"))
-        return
-
-    context.user_data["awaiting_filter_for"] = channel_id
-    log.info("user=%s queued filter edit for channel=%s", user_id, channel_id)
+async def on_noop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.callback_query.answer()
-    current = db.get_channel_filter(user_id, channel_id)
-    tips = t(lang, "filter_tips")
-    if current:
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=t(lang, "filter_ask_with_current", title=title),
-        )
-        await context.bot.send_message(chat_id=user_id, text=current)
-        await context.bot.send_message(chat_id=user_id, text=tips)
-    else:
-        await context.bot.send_message(
-            chat_id=user_id,
-            text=t(lang, "filter_ask", title=title, tips=tips),
-        )
-
-
-async def on_filter_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db = _db(context)
-    user_id = update.effective_user.id
-    lang = db.get_language(user_id)
-    channel_id = int(update.callback_query.data.split(":", 1)[1])
-
-    if db.get_user_status(user_id) != "approved":
-        log.info("filter delete rejected: user=%s not approved", user_id)
-        await update.callback_query.answer(t(lang, "denied"))
-        return
-
-    title = db.get_channel_title(channel_id)
-    if title is None:
-        await update.callback_query.answer(t(lang, "channel_unavailable"))
-        return
-
-    if not db.get_channel_filter(user_id, channel_id):
-        await update.callback_query.answer(t(lang, "filter_no_prompt_to_delete"))
-        return
-
-    db.set_channel_filter(user_id=user_id, channel_id=channel_id, filter_prompt=None)
-    log.info("user=%s deleted filter for channel=%s", user_id, channel_id)
-    await update.callback_query.answer(t(lang, "filter_deleted_for", title=title))
-    await _rerender_list_or_details(update, context, db, user_id, lang)
-
-
-async def on_filter_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    channel_id = context.user_data.pop("awaiting_filter_for", None)
-    if channel_id is None:
-        return
-    db = _db(context)
-    user_id = update.effective_user.id
-    lang = db.get_language(user_id)
-    if db.get_user_status(user_id) != "approved":
-        await update.message.reply_text(t(lang, "denied"))
-        return
-    title = db.get_channel_title(channel_id)
-    if title is None:
-        await update.message.reply_text(t(lang, "channel_unavailable"))
-        return
-    payload = (update.message.text or "").strip()
-    if not payload:
-        await update.message.reply_text(t(lang, "filter_no_pending"))
-        return
-    current_mode = db.get_subscription_mode(user_id, channel_id)
-    db.set_channel_filter(user_id=user_id, channel_id=channel_id, filter_prompt=payload)
-    if current_mode in (None, "off"):
-        db.subscribe(user_id, channel_id, mode="filtered")
-    log.info(
-        "user=%s set filter for channel=%s (%d chars)", user_id, channel_id, len(payload)
-    )
-    await update.message.reply_text(
-        t(lang, "filter_saved_for", title=title, filter=payload)
-    )
-
-
-async def on_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db = _db(context)
-    user_id = update.effective_user.id
-    lang = db.get_language(user_id)
-    _, raw_channel, mode = update.callback_query.data.split(":", 2)
-    channel_id = int(raw_channel)
-
-    if db.get_user_status(user_id) != "approved":
-        log.info("subscribe rejected: user=%s not approved", user_id)
-        await update.callback_query.answer(t(lang, "denied"))
-        return
-    if mode not in ("filtered", "debug", "all"):
-        await update.callback_query.answer()
-        return
-
-    title = db.get_channel_title(channel_id)
-    if title is None:
-        await update.callback_query.answer(t(lang, "channel_unavailable"))
-        return
-
-    db.subscribe(user_id, channel_id, mode=mode)
-    log.info("user=%s subscribed to channel=%s mode=%s", user_id, channel_id, mode)
-    mode_label = t(lang, f"subscribe_{mode}_button")
-    await update.callback_query.answer(
-        t(lang, "subscribed_toast", title=title, mode=mode_label)
-    )
-    await update.callback_query.edit_message_reply_markup(reply_markup=None)
-
-
-async def on_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db = _db(context)
-    user_id = update.effective_user.id
-    code = update.callback_query.data.split(":", 1)[1]
-    if code not in LANGUAGES:
-        await update.callback_query.answer()
-        return
-    db.set_language(user_id=user_id, language=code)
-    log.info("user=%s language -> %s", user_id, code)
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(
-        t(code, "language_prompt", current=LANGUAGE_NAMES[code])
-    )

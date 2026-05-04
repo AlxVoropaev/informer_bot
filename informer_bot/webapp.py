@@ -17,6 +17,7 @@ from aiohttp import web
 
 from informer_bot.db import Database
 from informer_bot.i18n import LANGUAGES
+from informer_bot.summarizer import estimate_cost_usd, estimate_embedding_cost_usd
 
 log = logging.getLogger(__name__)
 
@@ -152,6 +153,46 @@ async def _filter(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "channels": _channel_payload(db, user_id)})
 
 
+async def _usage(request: web.Request) -> web.Response:
+    db: Database = request.app["db"]
+    owner_id: int = request.app["owner_id"]
+    user_id: int = request["user_id"]
+    if db.get_user_status(user_id) != "approved":
+        return web.json_response({"error": "not_approved"}, status=403)
+    inp, out = db.get_usage(user_id)
+    payload: dict = {
+        "is_owner": user_id == owner_id,
+        "user": {
+            "input_tokens": inp,
+            "output_tokens": out,
+            "cost_usd": estimate_cost_usd(inp, out),
+        },
+    }
+    if user_id == owner_id:
+        sys_in, sys_out = db.get_system_usage()
+        emb_tokens = db.get_embedding_usage()
+        payload["per_user"] = [
+            {
+                "user_id": uid,
+                "label": label,
+                "input_tokens": ui,
+                "output_tokens": uo,
+                "cost_usd": estimate_cost_usd(ui, uo),
+            }
+            for uid, label, ui, uo in db.list_all_usage()
+        ]
+        payload["system"] = {
+            "input_tokens": sys_in,
+            "output_tokens": sys_out,
+            "cost_usd": estimate_cost_usd(sys_in, sys_out),
+        }
+        payload["embeddings"] = {
+            "tokens": emb_tokens,
+            "cost_usd": estimate_embedding_cost_usd(emb_tokens),
+        }
+    return web.json_response(payload)
+
+
 async def _language(request: web.Request) -> web.Response:
     db: Database = request.app["db"]
     user_id: int = request["user_id"]
@@ -173,6 +214,7 @@ def build_app(*, db: Database, bot_token: str, owner_id: int) -> web.Application
     app.router.add_post("/api/subscription", _subscription)
     app.router.add_post("/api/filter", _filter)
     app.router.add_post("/api/language", _language)
+    app.router.add_get("/api/usage", _usage)
 
     async def index(_req: web.Request) -> web.FileResponse:
         return web.FileResponse(_STATIC_DIR / "index.html")
