@@ -20,6 +20,8 @@ from informer_bot.bot import (
     on_filter_edit,
     on_filter_text,
     on_language,
+    on_list_back,
+    on_list_info,
     on_list_page,
     on_noop,
     on_toggle,
@@ -268,9 +270,11 @@ async def test_list_shows_only_non_blacklisted_with_unchecked_marker(db: Databas
     assert any("Alpha" in t and t.startswith("⬜") for t in toggle_titles)
     assert any("Beta" in t and t.startswith("⬜") for t in toggle_titles)
     toggles = [d for _, d in flat if d.startswith("toggle:")]
+    infos = [d for _, d in flat if d.startswith("linfo:")]
     fedits = [d for _, d in flat if d.startswith("fedit:")]
     fdels = [d for _, d in flat if d.startswith("fdel:")]
     assert len(toggles) == 2
+    assert len(infos) == 2
     assert len(fedits) == 2
     assert len(fdels) == 0
     assert flat[-1] == ("Done", "done")
@@ -750,3 +754,185 @@ async def test_noop_callback_just_answers(db: Database) -> None:
     upd.callback_query.answer.assert_awaited()
     upd.callback_query.edit_message_text.assert_not_called()
     upd.callback_query.edit_message_reply_markup.assert_not_called()
+
+
+# ---------- channel details (info) ----------
+
+async def test_list_info_renders_title_description_and_open_button(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="Alpha", username="alpha_chan", about="Daily AI news.")
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, "linfo:1")
+
+    await on_list_info(upd, ctx)
+
+    assert ctx.user_data["list_view"] == ("details", 1)
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_text.assert_awaited_once()
+    text = upd.callback_query.edit_message_text.await_args.args[0]
+    kwargs = upd.callback_query.edit_message_text.await_args.kwargs
+    assert "<b>Alpha</b>" in text
+    assert "Daily AI news." in text
+    assert kwargs["parse_mode"] == "HTML"
+    rows = [[(b.text, b.callback_data, getattr(b, "url", None)) for b in row]
+            for row in kwargs["reply_markup"].inline_keyboard]
+    flat = [btn for row in rows for btn in row]
+    open_btn = next(b for b in flat if b[2] is not None)
+    assert open_btn[2] == "https://t.me/alpha_chan"
+    assert any(d == "lback" for _, d, _ in flat)
+    toggle_btn = next(b for b in flat if b[1] == "toggle:1")
+    assert "⬜" in toggle_btn[0]
+
+
+async def test_list_info_uses_placeholder_when_no_description(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="Alpha", username="alpha_chan")
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, "linfo:1")
+
+    await on_list_info(upd, ctx)
+
+    text = upd.callback_query.edit_message_text.await_args.args[0]
+    assert "No description" in text
+
+
+async def test_list_info_hides_open_button_when_no_username(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="Alpha", about="x")
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, "linfo:1")
+
+    await on_list_info(upd, ctx)
+
+    kwargs = upd.callback_query.edit_message_text.await_args.kwargs
+    rows = [[getattr(b, "url", None) for b in row]
+            for row in kwargs["reply_markup"].inline_keyboard]
+    urls = [u for row in rows for u in row if u is not None]
+    assert urls == []
+
+
+async def test_list_info_escapes_html_in_title_and_about(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A <b>x</b>", username="a", about="5 < 10")
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, "linfo:1")
+
+    await on_list_info(upd, ctx)
+
+    text = upd.callback_query.edit_message_text.await_args.args[0]
+    assert "A &lt;b&gt;x&lt;/b&gt;" in text
+    assert "5 &lt; 10" in text
+
+
+async def test_list_info_blocks_non_approved_user(db: Database) -> None:
+    new_user = 555
+    ctx = _ctx(db)
+    upd = _cb_update(new_user, "linfo:1")
+
+    await on_list_info(upd, ctx)
+
+    upd.callback_query.edit_message_text.assert_not_called()
+
+
+async def test_list_info_shows_delete_filter_button_when_filter_set(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="Alpha", username="a")
+    db.subscribe(user_id=USER_ID, channel_id=1, mode="filtered")
+    db.set_channel_filter(user_id=USER_ID, channel_id=1, filter_prompt="only AI")
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, "linfo:1")
+
+    await on_list_info(upd, ctx)
+
+    kwargs = upd.callback_query.edit_message_text.await_args.kwargs
+    rows = [[(b.text, b.callback_data) for b in row]
+            for row in kwargs["reply_markup"].inline_keyboard]
+    callbacks = [d for row in rows for _, d in row]
+    assert "fdel:1" in callbacks
+    assert "fedit:1" in callbacks
+
+
+async def test_list_info_hides_delete_filter_button_when_no_filter(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="Alpha", username="a")
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, "linfo:1")
+
+    await on_list_info(upd, ctx)
+
+    kwargs = upd.callback_query.edit_message_text.await_args.kwargs
+    rows = [[(b.text, b.callback_data) for b in row]
+            for row in kwargs["reply_markup"].inline_keyboard]
+    callbacks = [d for row in rows for _, d in row]
+    assert "fdel:1" not in callbacks
+    assert "fedit:1" in callbacks
+
+
+async def test_list_back_returns_to_list_at_saved_page(db: Database) -> None:
+    _seed_many_channels(db, 28)
+    ctx = _ctx(db)
+    ctx.user_data["list_page"] = 1
+    ctx.user_data["list_view"] = ("details", 1000)
+    upd = _cb_update(USER_ID, "lback")
+
+    await on_list_back(upd, ctx)
+
+    assert ctx.user_data["list_view"] == "list"
+    upd.callback_query.edit_message_text.assert_awaited_once()
+    markup = upd.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
+    rows = [[(b.text, b.callback_data) for b in row] for row in markup.inline_keyboard]
+    flat = [btn for row in rows for btn in row]
+    nav_pairs = [(t, d) for t, d in flat if d == "noop" or d.startswith("lpage:")]
+    assert ("2/2", "noop") in nav_pairs
+
+
+async def test_toggle_in_details_view_re_renders_details(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="Alpha", username="a", about="x")
+    ctx = _ctx(db)
+    ctx.user_data["list_view"] = ("details", 1)
+    upd = _cb_update(USER_ID, "toggle:1")
+
+    await on_toggle(upd, ctx)
+
+    assert db.get_subscription_mode(USER_ID, 1) == "filtered"
+    upd.callback_query.edit_message_text.assert_awaited_once()
+    text = upd.callback_query.edit_message_text.await_args.args[0]
+    kwargs = upd.callback_query.edit_message_text.await_args.kwargs
+    assert "<b>Alpha</b>" in text
+    assert kwargs["parse_mode"] == "HTML"
+    rows = [[(b.text, b.callback_data) for b in row]
+            for row in kwargs["reply_markup"].inline_keyboard]
+    callbacks = [d for row in rows for _, d in row]
+    assert "lback" in callbacks
+
+
+async def test_filter_delete_in_details_view_re_renders_details(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="Alpha", username="a", about="x")
+    db.subscribe(user_id=USER_ID, channel_id=1, mode="filtered")
+    db.set_channel_filter(user_id=USER_ID, channel_id=1, filter_prompt="kill me")
+    ctx = _ctx(db)
+    ctx.user_data["list_view"] = ("details", 1)
+    upd = _cb_update(USER_ID, "fdel:1")
+
+    await on_filter_delete(upd, ctx)
+
+    assert db.get_channel_filter(user_id=USER_ID, channel_id=1) is None
+    upd.callback_query.edit_message_text.assert_awaited_once()
+    kwargs = upd.callback_query.edit_message_text.await_args.kwargs
+    text = upd.callback_query.edit_message_text.await_args.args[0]
+    assert "<b>Alpha</b>" in text
+    assert kwargs["parse_mode"] == "HTML"
+
+
+async def test_list_info_unknown_channel_replies_unavailable(db: Database) -> None:
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, "linfo:9999")
+
+    await on_list_info(upd, ctx)
+
+    upd.callback_query.edit_message_text.assert_not_called()
+    upd.callback_query.answer.assert_awaited()
+
+
+async def test_cmd_list_resets_list_view(db: Database) -> None:
+    ctx = _ctx(db)
+    ctx.user_data["list_view"] = ("details", 1)
+    update = _msg_update(USER_ID)
+
+    await cmd_list(update, ctx)
+
+    assert ctx.user_data["list_view"] == "list"

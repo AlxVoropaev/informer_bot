@@ -169,7 +169,11 @@ CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
   filter buttons, and the pending-filter text capture. The owner is auto-approved
   on startup.
 - **Storage:**
-  - `channels(id, title, blacklisted)`
+  - `channels(id, title, blacklisted, username, about)` — `username` and
+    `about` are populated during `refresh_channels` (admin-side Telethon
+    `GetFullChannelRequest`). Used by the /list details view (ℹ️). Both fields
+    are nullable; `upsert_channel` uses `COALESCE(excluded.x, channels.x)` so
+    callers passing only `(id, title)` preserve any existing username/about.
   - `subscriptions(user_id, channel_id, mode, filter_prompt)` —
     `mode IN ('off','filtered','debug','all')`. `'off'` rows are kept (instead
     of being deleted on toggle-off) so the per-channel `filter_prompt` survives
@@ -200,8 +204,9 @@ CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
 - **Bot UX:**
   - `/start` — for new users, requests admin approval (see Access gate). For approved
     users, greet + point at `/list`. For pending/denied, the appropriate notice.
-  - `/list` — inline keyboard. Each channel row has three buttons (last one
-    conditional): the toggle button (`toggle:<channel_id>`), an ✏️ edit button
+  - `/list` — inline keyboard. Each channel row has three or four buttons (the
+    last one conditional): the toggle button (`toggle:<channel_id>`), an ℹ️
+    info button (`linfo:<channel_id>`), an ✏️ edit button
     (`fedit:<channel_id>`), and a 🗑 delete button (`fdel:<channel_id>`, only
     rendered when a `filter_prompt` exists for that user/channel). The toggle
     cycles `⬜ off/None → 🔀 filtered → 🐞 debug → ✅ all → 🗑-preserved 'off'
@@ -216,6 +221,19 @@ CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
     more than one page. The current page is held in
     `context.user_data['list_page']` so toggle/filter-delete re-renders return
     to the same page.
+  - **Channel details (ℹ️) flow:** tapping ℹ️ replaces the list message with a
+    details view for that channel: bold title, the author-supplied
+    `channels.about` text (or a localized "no description" placeholder), an
+    `🔗 Open in Telegram` URL button (omitted when the channel has no
+    username), the toggle button (mode emoji + verbose label, same callback
+    `toggle:<channel_id>`), `✏️ Edit filter` / `🗑 Delete filter` rows
+    (delete shown only when a filter exists), and an `⬅ Back to list`
+    button (callback `lback`) that returns to the saved list page.
+    `context.user_data['list_view']` tracks state: `"list"` (default) or
+    `("details", channel_id)`. The shared `_rerender_list_or_details` helper
+    inspects this on toggle / filter-delete callbacks so they re-render the
+    correct surface; `cmd_list` and `on_list_back` reset it to `"list"`.
+    Details view is rendered with `parse_mode="HTML"`.
   - **Filter edit flow:** tapping ✏️ DMs the user the current prompt (if any)
     plus tips and sets `context.user_data['awaiting_filter_for'] = channel_id`.
     The next non-command text message from that user is captured by
@@ -235,8 +253,9 @@ CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
   - `/update` (owner only) — refresh the channel list from the admin's Telegram
     subscriptions on demand. Non-owners get "not allowed".
 - **Channel-list refresh:** triggered manually by the admin via `/update` (also runs
-  once at startup). Calls Telethon to fetch the admin's current subscriptions and
-  `db.upsert_channel`s them. When a previously-active channel disappears (admin
+  once at startup). Calls Telethon to fetch the admin's current subscriptions —
+  for each channel, also issues `GetFullChannelRequest` to pull the `about`
+  description — and `db.upsert_channel`s them with `(id, title, username, about)`. When a previously-active channel disappears (admin
   unsubscribed) or becomes blacklisted, the bot DMs each affected subscriber:
   "Channel '<title>' is no longer available." When a brand-new channel id
   (not previously in `channels`) appears, every `approved` user is DM'd a

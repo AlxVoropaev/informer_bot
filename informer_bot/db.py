@@ -14,13 +14,17 @@ class Channel:
     id: int
     title: str
     blacklisted: bool
+    username: str | None = None
+    about: str | None = None
 
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS channels (
     id          INTEGER PRIMARY KEY,
     title       TEXT NOT NULL,
-    blacklisted INTEGER NOT NULL DEFAULT 0
+    blacklisted INTEGER NOT NULL DEFAULT 0,
+    username    TEXT,
+    about       TEXT
 );
 CREATE TABLE IF NOT EXISTS subscriptions (
     user_id       INTEGER NOT NULL,
@@ -157,17 +161,34 @@ class Database:
             self._conn.execute(
                 "ALTER TABLE delivered ADD COLUMN dup_links_json TEXT NOT NULL DEFAULT '[]'"
             )
+        channel_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(channels)")}
+        if "username" not in channel_cols:
+            self._conn.execute("ALTER TABLE channels ADD COLUMN username TEXT")
+        if "about" not in channel_cols:
+            self._conn.execute("ALTER TABLE channels ADD COLUMN about TEXT")
         self._conn.commit()
         log.debug("opened sqlite at %s", path)
 
-    def upsert_channel(self, channel_id: int, title: str) -> None:
+    def upsert_channel(
+        self,
+        channel_id: int,
+        title: str,
+        username: str | None = None,
+        about: str | None = None,
+    ) -> None:
         self._conn.execute(
-            "INSERT INTO channels (id, title) VALUES (?, ?) "
-            "ON CONFLICT(id) DO UPDATE SET title = excluded.title",
-            (channel_id, title),
+            "INSERT INTO channels (id, title, username, about) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "title = excluded.title, "
+            "username = COALESCE(excluded.username, channels.username), "
+            "about = COALESCE(excluded.about, channels.about)",
+            (channel_id, title, username, about),
         )
         self._conn.commit()
-        log.debug("upsert_channel id=%s title=%r", channel_id, title)
+        log.debug(
+            "upsert_channel id=%s title=%r username=%r about_chars=%s",
+            channel_id, title, username, len(about) if about else 0,
+        )
 
     def set_blacklisted(self, channel_id: int, blacklisted: bool) -> None:
         self._conn.execute(
@@ -183,12 +204,30 @@ class Database:
         ).fetchone()
         return row[0] if row else None
 
+    def get_channel(self, channel_id: int) -> Channel | None:
+        row = self._conn.execute(
+            "SELECT id, title, blacklisted, username, about FROM channels WHERE id = ?",
+            (channel_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return Channel(
+            id=row[0], title=row[1], blacklisted=bool(row[2]),
+            username=row[3], about=row[4],
+        )
+
     def list_channels(self, include_blacklisted: bool = False) -> list[Channel]:
-        sql = "SELECT id, title, blacklisted FROM channels"
+        sql = "SELECT id, title, blacklisted, username, about FROM channels"
         if not include_blacklisted:
             sql += " WHERE blacklisted = 0"
         sql += " ORDER BY title"
-        return [Channel(id=r[0], title=r[1], blacklisted=bool(r[2])) for r in self._conn.execute(sql)]
+        return [
+            Channel(
+                id=r[0], title=r[1], blacklisted=bool(r[2]),
+                username=r[3], about=r[4],
+            )
+            for r in self._conn.execute(sql)
+        ]
 
     def subscribe(self, user_id: int, channel_id: int, mode: str = "filtered") -> None:
         self._conn.execute(
