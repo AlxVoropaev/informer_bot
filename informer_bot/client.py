@@ -35,8 +35,11 @@ def register_new_post_handler(tg: TelegramClient, buffer: AlbumBuffer) -> None:
         chat = await event.get_chat()
         if not (isinstance(chat, Channel) and chat.broadcast and chat.username):
             log.info(
-                "incoming dropped: non-broadcast/no-username chat=%s msg=%s",
+                "incoming dropped: chat=%s msg=%s type=%s broadcast=%s username=%s",
                 getattr(chat, "id", "?"), event.message.id,
+                type(chat).__name__,
+                getattr(chat, "broadcast", None),
+                getattr(chat, "username", None),
             )
             return
         log.info(
