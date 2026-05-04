@@ -409,6 +409,23 @@ class Database:
         self._conn.commit()
         return cursor.rowcount == 1
 
+    def max_seen_message_id(self, channel_id: int) -> int | None:
+        row = self._conn.execute(
+            "SELECT MAX(message_id) FROM seen WHERE channel_id = ?",
+            (channel_id,),
+        ).fetchone()
+        return row[0] if row and row[0] is not None else None
+
+    def channels_with_active_subscribers(self) -> list[int]:
+        return [
+            r[0]
+            for r in self._conn.execute(
+                "SELECT DISTINCT s.channel_id FROM subscriptions s "
+                "JOIN channels c ON c.id = s.channel_id "
+                "WHERE c.blacklisted = 0 AND s.mode != 'off'"
+            )
+        ]
+
     # ---------- dedup ----------
 
     def store_post_embedding(

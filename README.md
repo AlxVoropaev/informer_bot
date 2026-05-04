@@ -37,6 +37,7 @@ If you're the bot's `OWNER_ID`, you also get:
 - Albums (multi-photo posts) arrive as a single summary with the album's first photo.
 - Image- or video-only posts (no text/caption) are skipped.
 - Edits to existing posts are ignored.
+- **Restart catch-up.** If the bot was offline for a while, on startup it replays posts that arrived during the downtime (per channel, capped to the last 48h via `CATCH_UP_WINDOW_HOURS`). Channels you've never received anything from yet aren't backfilled.
 - **Duplicates merge.** If the same story shows up in another channel within ~48 hours, the bot adds a new inline URL button (labeled with the source channel) under your original DM instead of sending a second one. In 🐞 debug mode, you instead get a fresh DM prefixed with `🔁 DUPLICATE` so you can see what was deduped.
 
 ## Notes
@@ -71,6 +72,7 @@ Optional, controls how summary embeddings for dedup are computed:
 | `LOCAL_EMBEDDING_DEVICE` | `cpu` \| `cuda` | `cpu` | `cuda` requires installing `fastembed-gpu` instead of `fastembed`. |
 | `DEDUP_THRESHOLD` | float 0..1 | `0.85` | Cosine similarity at or above which two posts count as the same story. |
 | `DEDUP_WINDOW_HOURS` | int | `48` | How far back to look for duplicates per user. |
+| `CATCH_UP_WINDOW_HOURS` | int | `48` | On restart, replay missed posts up to this age. Set to `0` if you don't want any backfill. |
 
 - `openai` — `text-embedding-3-small` @ 512 dims, paid (~$0.02 / 1M tokens).
 - `local` — runs the model via fastembed (ONNX, no PyTorch). Default model is

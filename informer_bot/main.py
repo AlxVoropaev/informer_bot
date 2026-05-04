@@ -36,7 +36,11 @@ from informer_bot.bot import (
     on_language,
     on_toggle,
 )
-from informer_bot.client import fetch_subscribed_channels, register_new_post_handler
+from informer_bot.client import (
+    catch_up,
+    fetch_subscribed_channels,
+    register_new_post_handler,
+)
 from informer_bot.config import load_config
 from informer_bot.db import Database
 from informer_bot.i18n import t
@@ -200,6 +204,10 @@ async def main() -> None:
     await app.initialize()
     await app.start()
     await app.updater.start_polling()
+
+    await catch_up(
+        tg, db, buffer, max_age_seconds=cfg.catch_up_window_hours * 3600,
+    )
 
     for user_id in db.list_user_ids():
         try:
