@@ -78,7 +78,7 @@ Optional, controls how summary embeddings for dedup are computed:
 | `MINIAPP_URL` | full HTTPS URL | *(unset)* | Public URL where Telegram can fetch the Mini App frontend. See [Where do I get this URL?](#where-do-i-get-miniapp_url) below. When set, the bot starts an in-process aiohttp server on `WEBAPP_HOST:WEBAPP_PORT`, registers the burger-menu launcher, and `/app` becomes available. |
 | `MINIAPP_URL_FILE` | path | *(unset)* | Alternative to `MINIAPP_URL` — point at a file (typically the cloudflared sidecar's log) and the bot extracts the latest `https://*.trycloudflare.com` URL from it on startup. Already wired in `compose.yaml`. Ignored if `MINIAPP_URL` is set. |
 | `WEBAPP_HOST` | host | `0.0.0.0` | Bind address for the Mini App server. |
-| `WEBAPP_PORT` | int | `8080` | Bind port for the Mini App server. |
+| `WEBAPP_PORT` | int | `8085` | Bind port for the Mini App server. |
 
 #### Where do I get `MINIAPP_URL`?
 
@@ -91,14 +91,14 @@ Three common ways:
 
 1. **Quick local test — cloudflared (no signup, no account):**
    ```sh
-   cloudflared tunnel --url http://localhost:8080
+   cloudflared tunnel --url http://localhost:8085
    # → https://random-words-1234.trycloudflare.com
    ```
    Put that URL into `MINIAPP_URL`, restart the bot. URL changes every run.
 
 2. **Quick local test — ngrok (free account):**
    ```sh
-   ngrok http 8080
+   ngrok http 8085
    # → https://abcd-1-2-3-4.ngrok-free.app
    ```
 
@@ -107,7 +107,7 @@ Three common ways:
    `WEBAPP_PORT` and use that HTTPS domain. With Caddy:
    ```caddyfile
    miniapp.example.com {
-       reverse_proxy localhost:8080
+       reverse_proxy localhost:8085
    }
    ```
    Then `MINIAPP_URL=https://miniapp.example.com`.
