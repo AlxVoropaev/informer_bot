@@ -545,6 +545,60 @@ async def test_refresh_notifies_subscribers_when_channel_disappears(db: Database
     assert {c.id for c in db.list_channels(include_blacklisted=True)} == {1}
 
 
+async def test_refresh_announces_new_channels_to_approved_users(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="Existing")
+    db.add_pending_user(user_id=10, username="alice")
+    db.set_user_status(user_id=10, status="approved")
+    db.add_pending_user(user_id=20, username="bob")
+    db.set_user_status(user_id=20, status="approved")
+    db.add_pending_user(user_id=30, username="eve")  # pending, must be skipped
+
+    fetch = AsyncMock(return_value=[(1, "Existing"), (2, "Fresh"), (3, "Brand")])
+    send_dm = _send_dm()
+    announce = AsyncMock()
+
+    await refresh_channels(
+        fetch_fn=fetch, db=db, send_dm=send_dm,
+        announce_new_channel=announce,
+    )
+
+    assert announce.await_count == 4  # 2 new channels x 2 approved users
+    announced = {(c.args[0], c.args[1], c.args[2]) for c in announce.await_args_list}
+    assert announced == {
+        (10, 2, "Fresh"), (20, 2, "Fresh"),
+        (10, 3, "Brand"), (20, 3, "Brand"),
+    }
+
+
+async def test_refresh_skips_announce_on_first_run_empty_db(db: Database) -> None:
+    db.add_pending_user(user_id=10, username="alice")
+    db.set_user_status(user_id=10, status="approved")
+
+    fetch = AsyncMock(return_value=[(1, "Alpha"), (2, "Beta")])
+    announce = AsyncMock()
+
+    await refresh_channels(
+        fetch_fn=fetch, db=db, send_dm=_send_dm(),
+        announce_new_channel=announce,
+    )
+
+    announce.assert_not_called()
+    assert {c.id for c in db.list_channels()} == {1, 2}
+
+
+async def test_refresh_announce_optional(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="Existing")
+    db.add_pending_user(user_id=10, username="alice")
+    db.set_user_status(user_id=10, status="approved")
+
+    fetch = AsyncMock(return_value=[(1, "Existing"), (2, "Fresh")])
+
+    # Must not raise when announce_new_channel is omitted.
+    await refresh_channels(fetch_fn=fetch, db=db, send_dm=_send_dm())
+
+    assert {c.id for c in db.list_channels()} == {1, 2}
+
+
 async def test_refresh_silent_for_disappeared_blacklisted_channels(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="Alpha")
     db.upsert_channel(channel_id=2, title="WasBanned")

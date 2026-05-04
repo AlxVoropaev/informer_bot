@@ -16,6 +16,7 @@ SendDmFn = Callable[..., Awaitable[int | None]]
 EditDmFn = Callable[[int, int, list[tuple[str, str]]], Awaitable[None]]
 EmbedFn = Callable[[str], Awaitable[Embedding]]
 FetchChannelsFn = Callable[[], Awaitable[list[tuple[int, str]]]]
+AnnounceNewChannelFn = Callable[[int, int, str], Awaitable[None]]
 
 
 def _format_post(
@@ -184,10 +185,18 @@ async def refresh_channels(
     fetch_fn: FetchChannelsFn,
     db: Database,
     send_dm: SendDmFn,
+    announce_new_channel: AnnounceNewChannelFn | None = None,
 ) -> None:
     fresh = await fetch_fn()
     fresh_ids = {channel_id for channel_id, _ in fresh}
     log.debug("refresh: %d fresh channel(s) from telethon", len(fresh))
+
+    known_before_ids = {c.id for c in db.list_channels(include_blacklisted=True)}
+    new_channels: list[tuple[int, str]] = (
+        [(cid, title) for cid, title in fresh if cid not in known_before_ids]
+        if known_before_ids
+        else []
+    )
 
     for channel_id, title in fresh:
         db.upsert_channel(channel_id=channel_id, title=title)
@@ -209,7 +218,17 @@ async def refresh_channels(
             notified += len(subs)
         db.delete_channel(channel_id=channel.id)
         removed += 1
+
+    announced = 0
+    if announce_new_channel is not None and new_channels:
+        approved = db.list_approved_user_ids()
+        for channel_id, title in new_channels:
+            for user_id in approved:
+                await announce_new_channel(user_id, channel_id, title)
+                announced += 1
+
     log.info(
-        "refresh done: %d known, %d removed, %d subscriber(s) notified",
-        len(fresh), removed, notified,
+        "refresh done: %d known, %d removed, %d subscriber(s) notified, "
+        "%d new channel(s), %d announcement(s) sent",
+        len(fresh), removed, notified, len(new_channels), announced,
     )
