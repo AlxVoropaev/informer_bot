@@ -15,7 +15,7 @@ IsRelevantFn = Callable[[str, str], Awaitable[RelevanceCheck]]
 SendDmFn = Callable[..., Awaitable[int | None]]
 EditDmFn = Callable[[int, int, list[tuple[str, str]]], Awaitable[None]]
 EmbedFn = Callable[[str], Awaitable[Embedding]]
-FetchChannelsFn = Callable[[], Awaitable[list[tuple[int, str, str | None, str | None]]]]
+FetchChannelsFn = Callable[[], Awaitable[list[tuple[int, str, str, str | None]]]]
 AnnounceNewChannelFn = Callable[[int, int, str], Awaitable[None]]
 
 
@@ -59,14 +59,14 @@ async def handle_new_post(
         log.info("skip post %s/%s: no subscribers", channel_id, message_id)
         return
 
-    recipients: list[tuple[int, bool]] = []
+    recipients: list[tuple[int, str, bool]] = []
     for user_id, mode in subscribers:
         if mode == "all":
-            recipients.append((user_id, False))
+            recipients.append((user_id, mode, False))
             continue
         filter_prompt = db.get_channel_filter(user_id=user_id, channel_id=channel_id)
         if not filter_prompt:
-            recipients.append((user_id, False))
+            recipients.append((user_id, mode, False))
             continue
         check = await is_relevant_fn(text, filter_prompt)
         db.add_system_usage(
@@ -78,9 +78,9 @@ async def handle_new_post(
             output_tokens=check.output_tokens,
         )
         if check.relevant:
-            recipients.append((user_id, False))
+            recipients.append((user_id, mode, False))
         elif mode == "debug":
-            recipients.append((user_id, True))
+            recipients.append((user_id, mode, True))
         else:
             log.info("filter excluded user=%s for post %s/%s", user_id, channel_id, message_id)
 
@@ -108,9 +108,8 @@ async def handle_new_post(
     now_ts = int(time.time()) if now is None else now
     channel_title = db.get_channel_title(channel_id) or ""
 
-    for user_id, marked_filter in recipients:
+    for user_id, mode, marked_filter in recipients:
         lang = db.get_language(user_id)
-        mode = db.get_subscription_mode(user_id, channel_id)
         marker = t(lang, "debug_filtered_marker") if marked_filter else None
         body = _format_post(channel_title, summary.text, link, marker)
 
