@@ -11,7 +11,7 @@ log = logging.getLogger(__name__)
 MODEL = "claude-haiku-4-5"
 EMBED_MODEL = "text-embedding-3-small"
 EMBED_DIMENSIONS = 512
-LOCAL_EMBED_MODEL_DEFAULT = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+LOCAL_EMBED_MODEL_DEFAULT = "intfloat/multilingual-e5-small"
 LOCAL_EMBED_DIMENSIONS = 384
 MAX_TOKENS = 256
 SYSTEM_PROMPT = (
@@ -139,6 +139,8 @@ class LocalEmbedder:
         from fastembed import TextEmbedding
 
         self.model_name = model_name
+        self._needs_e5_prefix = "e5" in model_name.lower()
+        self._maybe_register_default(model_name)
         log.info("local embedder: loading %s", model_name)
         t0 = time.perf_counter()
         self._model = TextEmbedding(model_name=model_name, threads=1)
@@ -146,9 +148,34 @@ class LocalEmbedder:
             "local embedder: loaded %s in %.2fs", model_name, time.perf_counter() - t0
         )
 
+    @staticmethod
+    def _maybe_register_default(model_name: str) -> None:
+        # fastembed's built-in mirror for the multilingual MiniLM is currently
+        # broken; the maintainers recommend add_custom_model with a direct HF
+        # source. We pre-register our default e5-small model the same way so
+        # users get a reliable download out of the box.
+        if model_name != LOCAL_EMBED_MODEL_DEFAULT:
+            return
+        from fastembed import TextEmbedding
+        from fastembed.common.model_description import ModelSource, PoolingType
+
+        if any(
+            m["model"] == model_name for m in TextEmbedding.list_supported_models()
+        ):
+            return
+        TextEmbedding.add_custom_model(
+            model=model_name,
+            pooling=PoolingType.MEAN,
+            normalization=True,
+            sources=ModelSource(hf=model_name),
+            dim=LOCAL_EMBED_DIMENSIONS,
+            model_file="onnx/model.onnx",
+        )
+
     def _embed_sync(self, text: str) -> list[float]:
+        prefixed = f"passage: {text}" if self._needs_e5_prefix else text
         t0 = time.perf_counter()
-        vector = next(iter(self._model.embed([text]))).tolist()
+        vector = next(iter(self._model.embed([prefixed]))).tolist()
         log.info(
             "local embed: %d chars -> %d dims in %.0f ms (model=%s)",
             len(text), len(vector), (time.perf_counter() - t0) * 1000, self.model_name,

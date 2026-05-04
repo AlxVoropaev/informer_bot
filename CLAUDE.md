@@ -112,7 +112,7 @@ One Python process runs both the client and the bot inside a single asyncio loop
 - LLM: **anthropic** SDK, model `claude-haiku-4-5` (cheap & fast for summaries).
 - Embeddings (dedup): pluggable. **OpenAI** `text-embedding-3-small` @ 512 dims
   (paid) or **fastembed** local CPU model (default
-  `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`, 384 dims, ONNX,
+  `sentence-transformers/intfloat/multilingual-e5-small`, 384 dims, ONNX,
   no PyTorch). Provider chosen via `EMBEDDING_PROVIDER`.
 - Storage: **SQLite** (single file, `data/informer.db`) + Telethon
   `data/informer.session` file. The `data/` directory holds all mutable state
@@ -135,7 +135,7 @@ OPENAI_API_KEY=...         # optional — only consulted when EMBEDDING_PROVIDER
 OWNER_ID=...               # admin's Telegram user id (numeric)
 LOG_LEVEL=INFO             # optional, default INFO
 EMBEDDING_PROVIDER=auto    # optional: auto|openai|local|none (auto picks openai if key set, else none)
-LOCAL_EMBEDDING_MODEL=...  # optional, fastembed model name; default paraphrase-multilingual-MiniLM-L12-v2
+LOCAL_EMBEDDING_MODEL=...  # optional, fastembed model name; default intfloat/multilingual-e5-small
 DEDUP_THRESHOLD=0.85       # optional, cosine threshold for "same story"
 DEDUP_WINDOW_HOURS=48      # optional, lookback window for dedup
 ```
@@ -229,7 +229,7 @@ DEDUP_WINDOW_HOURS=48      # optional, lookback window for dedup
   - **Provider** is `EMBEDDING_PROVIDER`: `auto` (default — `openai` if
     `OPENAI_API_KEY` set, else `none`), `openai`
     (`text-embedding-3-small` @ 512 dims, paid), `local` (fastembed on CPU,
-    default `paraphrase-multilingual-MiniLM-L12-v2` @ 384 dims, no API cost,
+    default `intfloat/multilingual-e5-small` @ 384 dims, no API cost,
     timed in logs as `local embed: ... ms`), or `none` (disabled).
   - **Model-switch purge:** the active provider+model+dims is stored in
     `meta.embedding_id`. On startup, if it differs from the previous run,
