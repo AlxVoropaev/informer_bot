@@ -86,7 +86,6 @@ Optional, controls how summary embeddings for dedup are computed:
 | `DEDUP_WINDOW_HOURS` | int | `48` | How far back to look for duplicates per user. |
 | `CATCH_UP_WINDOW_HOURS` | int | `48` | On restart, replay missed posts up to this age. Set to `0` if you don't want any backfill. |
 | `MINIAPP_URL` | full HTTPS URL | *(unset)* | Public URL where Telegram can fetch the Mini App frontend. **Required for regular users** — channel selection, filters, and language live only in the Mini App. See [Where do I get this URL?](#where-do-i-get-miniapp_url) below. When set, the bot starts an in-process aiohttp server on `WEBAPP_HOST:WEBAPP_PORT`, registers the burger-menu launcher, and `/app` becomes available. |
-| `MINIAPP_URL_FILE` | path | *(unset)* | Alternative to `MINIAPP_URL` — point at a file (typically the cloudflared sidecar's log) and the bot extracts the latest `https://*.trycloudflare.com` URL from it on startup. Already wired in `compose.yaml`. Ignored if `MINIAPP_URL` is set. |
 | `WEBAPP_HOST` | host | `0.0.0.0` | Bind address for the Mini App server. |
 | `WEBAPP_PORT` | int | `8085` | Bind port for the Mini App server. |
 
@@ -170,10 +169,6 @@ Caveats:
 - Free dynamic DNS subdomains (DuckDNS, FreeDNS) work fine but propagate
   slowly the first time — wait a couple of minutes after creating the
   record before starting Caddy.
-- For ad-hoc tunnels (still useful when you have no domain), set
-  `MINIAPP_URL_FILE=/cloudflared/cloudflared.log` and add a cloudflared
-  service back to `compose.yaml` — see the `feat: add Telegram Mini App`
-  commit in the git history for that variant.
 
 - `openai` — `text-embedding-3-small` @ 512 dims, paid (~$0.02 / 1M tokens).
 - `local` — runs the model via fastembed (ONNX, no PyTorch). Default model is

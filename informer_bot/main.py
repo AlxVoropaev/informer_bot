@@ -2,7 +2,6 @@ import asyncio
 import contextlib
 import functools
 import logging
-import re
 import signal
 import time
 from urllib.parse import quote
@@ -10,6 +9,7 @@ from urllib.parse import quote
 from openai import AsyncOpenAI
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, WebAppInfo
 from telegram.ext import (
+    Application,
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
@@ -18,6 +18,7 @@ from telethon import TelegramClient
 
 from informer_bot.album import AlbumBuffer
 from informer_bot.bot import (
+    BotState,
     cmd_app,
     cmd_blacklist,
     cmd_help,
@@ -36,10 +37,17 @@ from informer_bot.client import (
     fetch_subscribed_channels,
     register_new_post_handler,
 )
-from informer_bot.config import load_config
+from informer_bot.config import Config, load_config
 from informer_bot.db import Database
 from informer_bot.i18n import t
-from informer_bot.pipeline import EditDmFn, EmbedFn, handle_new_post
+from informer_bot.pipeline import (
+    AnnounceNewChannelFn,
+    EditDmFn,
+    EmbedFn,
+    FetchChannelsFn,
+    SendDmFn,
+    handle_new_post,
+)
 from informer_bot.summarizer import (
     EMBED_DIMENSIONS,
     EMBED_MODEL,
@@ -53,67 +61,15 @@ from informer_bot.webapp import start_server as start_webapp_server
 
 log = logging.getLogger(__name__)
 
-_QUICK_TUNNEL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 
+def setup_embedder(
+    cfg: Config, db: Database
+) -> tuple[EmbedFn | None, str | None]:
+    """Pick an embedding provider, return (embed_fn, embedding_id).
 
-async def _discover_miniapp_url(path: str, timeout: float = 60.0) -> str | None:
-    """Poll cloudflared's logfile for a quick-tunnel URL. Returns the latest match."""
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
-        try:
-            with open(path, encoding="utf-8", errors="ignore") as f:
-                matches = _QUICK_TUNNEL_RE.findall(f.read())
-            if matches:
-                return matches[-1]
-        except FileNotFoundError:
-            pass
-        await asyncio.sleep(1)
-    return None
-
-
-async def main() -> None:
-    cfg = load_config()
-    logging.getLogger().setLevel(cfg.log_level)
-    log.info("starting informer_bot (log_level=%s, db=%s)", cfg.log_level, cfg.db_path)
-    db = Database(cfg.db_path)
-    db.set_user_status(user_id=cfg.owner_id, status="approved")
-
-    miniapp_url = cfg.miniapp_url
-    if not miniapp_url and cfg.miniapp_url_file:
-        log.info("waiting for cloudflared URL in %s ...", cfg.miniapp_url_file)
-        miniapp_url = await _discover_miniapp_url(cfg.miniapp_url_file)
-        if miniapp_url:
-            log.info("discovered miniapp URL: %s", miniapp_url)
-        else:
-            log.warning(
-                "MINIAPP_URL_FILE=%s contained no trycloudflare URL within timeout; "
-                "Mini App will be disabled this run",
-                cfg.miniapp_url_file,
-            )
-
-    tg = TelegramClient(cfg.session_path, cfg.telegram_api_id, cfg.telegram_api_hash)
-    await tg.connect()
-    if not await tg.is_user_authorized():
-        raise SystemExit("No Telethon session. Run: uv run python login.py")
-    log.info("telethon authorized")
-
-    app = ApplicationBuilder().token(cfg.telegram_bot_token).build()
-    app.bot_data["db"] = db
-    app.bot_data["owner_id"] = cfg.owner_id
-    app.bot_data["miniapp_url"] = miniapp_url
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("app", cmd_app))
-    app.add_handler(CommandHandler("blacklist", cmd_blacklist))
-    app.add_handler(CommandHandler("usage", cmd_usage))
-    app.add_handler(CommandHandler("update", cmd_update))
-    app.add_handler(CallbackQueryHandler(on_blacklist, pattern=r"^bl:"))
-    app.add_handler(CallbackQueryHandler(on_blacklist_done, pattern=r"^bl_done$"))
-    app.add_handler(CallbackQueryHandler(on_blacklist_page, pattern=r"^blpage:"))
-    app.add_handler(CallbackQueryHandler(on_noop, pattern=r"^noop$"))
-    app.add_handler(CallbackQueryHandler(on_approve, pattern=r"^approve:"))
-    app.add_handler(CallbackQueryHandler(on_deny, pattern=r"^deny:"))
-
+    embed_fn is None when dedup is disabled. embedding_id is a stable string
+    used to detect provider/model switches across restarts.
+    """
     embed_fn: EmbedFn | None = None
     embedding_id: str | None = None
     provider = cfg.embedding_provider
@@ -154,6 +110,10 @@ async def main() -> None:
             cutoff=int(time.time()) - cfg.dedup_window_hours * 3600
         )
 
+    return embed_fn, embedding_id
+
+
+def _make_send_dm(app: Application) -> SendDmFn:
     async def send_dm(
         user_id: int, text: str, photo: bytes | None = None
     ) -> int | None:
@@ -179,6 +139,10 @@ async def main() -> None:
             log.exception("send_dm to %s failed", user_id)
             return None
 
+    return send_dm
+
+
+def _make_edit_dm(app: Application) -> EditDmFn:
     async def edit_dm(
         user_id: int, bot_message_id: int, dup_links: list[tuple[str, str]]
     ) -> None:
@@ -198,8 +162,12 @@ async def main() -> None:
                 "edit_dm failed for user=%s msg=%s", user_id, bot_message_id
             )
 
-    edit_dm_fn: EditDmFn | None = edit_dm if embed_fn is not None else None
+    return edit_dm
 
+
+def _make_announce_new_channel(
+    app: Application, db: Database, miniapp_url: str | None
+) -> AnnounceNewChannelFn:
     async def announce_new_channel(
         user_id: int, channel_id: int, channel_title: str
     ) -> None:
@@ -228,13 +196,53 @@ async def main() -> None:
                 user_id, channel_id,
             )
 
+    return announce_new_channel
+
+
+async def main() -> None:
+    cfg = load_config()
+    logging.getLogger().setLevel(cfg.log_level)
+    log.info("starting informer_bot (log_level=%s, db=%s)", cfg.log_level, cfg.db_path)
+    db = Database(cfg.db_path)
+    db.set_user_status(user_id=cfg.owner_id, status="approved")
+
+    miniapp_url = cfg.miniapp_url
+
+    tg = TelegramClient(cfg.session_path, cfg.telegram_api_id, cfg.telegram_api_hash)
+    await tg.connect()
+    if not await tg.is_user_authorized():
+        raise SystemExit("No Telethon session. Run: uv run python login.py")
+    log.info("telethon authorized")
+
+    app = ApplicationBuilder().token(cfg.telegram_bot_token).build()
+    for handler in (
+        CommandHandler("start", cmd_start),
+        CommandHandler("help", cmd_help),
+        CommandHandler("app", cmd_app),
+        CommandHandler("blacklist", cmd_blacklist),
+        CommandHandler("usage", cmd_usage),
+        CommandHandler("update", cmd_update),
+        CallbackQueryHandler(on_blacklist, pattern=r"^bl:"),
+        CallbackQueryHandler(on_blacklist_done, pattern=r"^bl_done$"),
+        CallbackQueryHandler(on_blacklist_page, pattern=r"^blpage:"),
+        CallbackQueryHandler(on_noop, pattern=r"^noop$"),
+        CallbackQueryHandler(on_approve, pattern=r"^approve:"),
+        CallbackQueryHandler(on_deny, pattern=r"^deny:"),
+    ):
+        app.add_handler(handler)
+
+    embed_fn, _embedding_id = setup_embedder(cfg, db)
+    send_dm = _make_send_dm(app)
+    edit_dm: EditDmFn | None = _make_edit_dm(app) if embed_fn is not None else None
+    announce_new_channel = _make_announce_new_channel(app, db, miniapp_url)
+
     async def on_post(
         channel_id: int, message_id: int, text: str, link: str, photo: bytes | None,
     ) -> None:
         await handle_new_post(
             channel_id=channel_id, message_id=message_id, text=text, link=link,
             db=db, summarize_fn=summarize, is_relevant_fn=is_relevant, send_dm=send_dm,
-            embed_fn=embed_fn, edit_dm=edit_dm_fn,
+            embed_fn=embed_fn, edit_dm=edit_dm,
             dedup_threshold=cfg.dedup_threshold,
             dedup_window_seconds=cfg.dedup_window_hours * 3600,
             photo=photo,
@@ -243,12 +251,18 @@ async def main() -> None:
     buffer = AlbumBuffer(on_flush=on_post, delay=1.5)
     register_new_post_handler(tg, buffer)
 
-    async def fetch() -> list[tuple[int, str, str | None, str | None]]:
+    async def fetch() -> list[tuple[int, str, str, str | None]]:
         return await fetch_subscribed_channels(tg)
 
-    app.bot_data["fetch_channels"] = fetch
-    app.bot_data["send_dm"] = send_dm
-    app.bot_data["announce_new_channel"] = announce_new_channel
+    fetch_channels: FetchChannelsFn = fetch
+    app.bot_data["state"] = BotState(
+        db=db,
+        owner_id=cfg.owner_id,
+        miniapp_url=miniapp_url,
+        fetch_channels=fetch_channels,
+        send_dm=send_dm,
+        announce_new_channel=announce_new_channel,
+    )
 
     await app.initialize()
     await app.start()
@@ -282,6 +296,8 @@ async def main() -> None:
         db.update_user_name(
             user_id=user_id, username=chat.username, first_name=chat.first_name
         )
+        # Throttle to ~20 RPS — well under Telegram's flood-wait threshold.
+        await asyncio.sleep(0.05)
 
     if embed_fn is None:
         await send_dm(
@@ -306,23 +322,39 @@ async def main() -> None:
             return_when=asyncio.FIRST_COMPLETED,
         )
     finally:
-        log.info("shutting down")
-        with contextlib.suppress(Exception):
-            await send_dm(
-                cfg.owner_id, t(db.get_language(cfg.owner_id), "shutdown_notice")
-            )
-        for task in (disconnect_task, stop_task):
-            task.cancel()
-        for task in (disconnect_task, stop_task):
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
-        await app.updater.stop()
-        await app.stop()
-        await app.shutdown()
-        if webapp_runner is not None:
-            await webapp_runner.cleanup()
-        await tg.disconnect()
-        log.info("shutdown complete")
+        await graceful_shutdown(
+            app=app, tg=tg, db=db, cfg=cfg, send_dm=send_dm,
+            tasks=(disconnect_task, stop_task), webapp_runner=webapp_runner,
+        )
+
+
+async def graceful_shutdown(
+    *,
+    app: Application,
+    tg: TelegramClient,
+    db: Database,
+    cfg: Config,
+    send_dm: SendDmFn,
+    tasks: tuple[asyncio.Task, ...],
+    webapp_runner,
+) -> None:
+    log.info("shutting down")
+    with contextlib.suppress(Exception):
+        await send_dm(
+            cfg.owner_id, t(db.get_language(cfg.owner_id), "shutdown_notice")
+        )
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    await app.updater.stop()
+    await app.stop()
+    await app.shutdown()
+    if webapp_runner is not None:
+        await webapp_runner.cleanup()
+    await tg.disconnect()
+    log.info("shutdown complete")
 
 
 if __name__ == "__main__":

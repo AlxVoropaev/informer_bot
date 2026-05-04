@@ -1,22 +1,47 @@
 import logging
+from dataclasses import dataclass
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
 from telegram.ext import ContextTypes
 
 from informer_bot.db import Database
 from informer_bot.i18n import t
-from informer_bot.pipeline import refresh_channels
+from informer_bot.pipeline import (
+    AnnounceNewChannelFn,
+    FetchChannelsFn,
+    SendDmFn,
+    refresh_channels,
+)
 from informer_bot.summarizer import estimate_cost_usd, estimate_embedding_cost_usd
 
 log = logging.getLogger(__name__)
 
 
+@dataclass
+class BotState:
+    """All long-lived deps the PTB handlers need from main.py.
+
+    Stored in `app.bot_data["state"]` to keep handler signatures clean.
+    """
+
+    db: Database
+    owner_id: int
+    miniapp_url: str | None
+    fetch_channels: FetchChannelsFn
+    send_dm: SendDmFn
+    announce_new_channel: AnnounceNewChannelFn | None
+
+
+def _state(context: ContextTypes.DEFAULT_TYPE) -> BotState:
+    return context.bot_data["state"]
+
+
 def _db(context: ContextTypes.DEFAULT_TYPE) -> Database:
-    return context.bot_data["db"]
+    return _state(context).db
 
 
 def _owner_id(context: ContextTypes.DEFAULT_TYPE) -> int:
-    return context.bot_data["owner_id"]
+    return _state(context).owner_id
 
 
 def _lang(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
@@ -123,7 +148,7 @@ async def cmd_app(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if _db(context).get_user_status(user_id) != "approved":
         await update.message.reply_text(t(lang, "denied"))
         return
-    url = context.bot_data.get("miniapp_url")
+    url = _state(context).miniapp_url
     if not url:
         await update.message.reply_text(t(lang, "miniapp_unconfigured"))
         return
@@ -184,12 +209,13 @@ async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     log.info("/update from owner=%s", user_id)
     await update.message.reply_text(t(lang, "refreshing"))
+    state = _state(context)
     try:
         await refresh_channels(
-            fetch_fn=context.bot_data["fetch_channels"],
-            db=_db(context),
-            send_dm=context.bot_data["send_dm"],
-            announce_new_channel=context.bot_data.get("announce_new_channel"),
+            fetch_fn=state.fetch_channels,
+            db=state.db,
+            send_dm=state.send_dm,
+            announce_new_channel=state.announce_new_channel,
         )
     except Exception:
         log.exception("/update refresh failed")

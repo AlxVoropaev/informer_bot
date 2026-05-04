@@ -140,7 +140,6 @@ DEDUP_THRESHOLD=0.85       # optional, cosine threshold for "same story"
 DEDUP_WINDOW_HOURS=48      # optional, lookback window for dedup
 CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
 MINIAPP_URL=               # optional, public HTTPS URL of the Mini App; enables /app, the burger-menu launcher, and the in-process aiohttp server
-MINIAPP_URL_FILE=          # optional, path to a file (typically the cloudflared logfile) the bot polls at startup to extract a https://*.trycloudflare.com URL; ignored if MINIAPP_URL is set
 WEBAPP_HOST=0.0.0.0        # optional, bind host for the Mini App server (default 0.0.0.0)
 WEBAPP_PORT=8085           # optional, bind port for the Mini App server (default 8085)
 ```
@@ -197,13 +196,6 @@ service mounts named volumes `caddy_data` (cert storage) and
 Russian mobile carriers DPI-block `*.trycloudflare.com` while Telegram's
 in-app WebView inherits the app's bypass-tunnel routing — a plain VPS IP
 behind a regular domain bypasses both issues.
-
-The bot still supports `MINIAPP_URL_FILE` (poll-a-logfile-for-the-URL) as
-a second-priority discovery path — `_discover_miniapp_url` in `main.py`
-polls 1 Hz / 60 s timeout, extracting the latest
-`https://*.trycloudflare.com` URL via regex — but it's no longer wired in
-the default compose.yaml; set the env var manually if you bring back a
-cloudflared sidecar.
 
 ## Behaviour rules
 

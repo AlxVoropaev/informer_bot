@@ -23,7 +23,6 @@ class Config:
     local_embedding_model: str = LOCAL_EMBED_MODEL_DEFAULT
     local_embedding_device: str = "cpu"  # 'cpu' or 'cuda' (needs fastembed-gpu)
     miniapp_url: str | None = None
-    miniapp_url_file: str | None = None
     webapp_host: str = "0.0.0.0"
     webapp_port: int = 8085
 
@@ -60,7 +59,6 @@ def load_config() -> Config:
         ),
         local_embedding_device=device,
         miniapp_url=os.environ.get("MINIAPP_URL") or None,
-        miniapp_url_file=os.environ.get("MINIAPP_URL_FILE") or None,
         webapp_host=os.environ.get("WEBAPP_HOST", "0.0.0.0"),
         webapp_port=int(os.environ.get("WEBAPP_PORT", "8085")),
     )
