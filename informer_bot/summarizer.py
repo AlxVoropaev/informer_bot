@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import time
 from dataclasses import dataclass
 
 from anthropic import AsyncAnthropic
@@ -9,6 +11,8 @@ log = logging.getLogger(__name__)
 MODEL = "claude-haiku-4-5"
 EMBED_MODEL = "text-embedding-3-small"
 EMBED_DIMENSIONS = 512
+LOCAL_EMBED_MODEL_DEFAULT = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+LOCAL_EMBED_DIMENSIONS = 384
 MAX_TOKENS = 256
 SYSTEM_PROMPT = (
     "You summarize Telegram channel posts. "
@@ -126,3 +130,31 @@ async def embed_summary(
         len(vector), response.usage.total_tokens,
     )
     return Embedding(vector=vector, tokens=response.usage.total_tokens)
+
+
+class LocalEmbedder:
+    """fastembed-based embedder; runs ONNX on CPU, no token cost."""
+
+    def __init__(self, model_name: str = LOCAL_EMBED_MODEL_DEFAULT) -> None:
+        from fastembed import TextEmbedding
+
+        self.model_name = model_name
+        log.info("local embedder: loading %s", model_name)
+        t0 = time.perf_counter()
+        self._model = TextEmbedding(model_name=model_name, threads=1)
+        log.info(
+            "local embedder: loaded %s in %.2fs", model_name, time.perf_counter() - t0
+        )
+
+    def _embed_sync(self, text: str) -> list[float]:
+        t0 = time.perf_counter()
+        vector = next(iter(self._model.embed([text]))).tolist()
+        log.info(
+            "local embed: %d chars -> %d dims in %.0f ms (model=%s)",
+            len(text), len(vector), (time.perf_counter() - t0) * 1000, self.model_name,
+        )
+        return vector
+
+    async def embed(self, summary_text: str) -> Embedding:
+        vector = await asyncio.to_thread(self._embed_sync, summary_text)
+        return Embedding(vector=vector, tokens=0)

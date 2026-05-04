@@ -139,6 +139,37 @@ async def test_embed_summary_uses_configured_model_and_dims() -> None:
     assert kwargs["input"] == "Brief."
 
 
+async def test_local_embedder_wraps_fastembed_with_zero_tokens(monkeypatch) -> None:
+    import sys
+
+    from informer_bot import summarizer
+
+    class FakeVector:
+        def __init__(self, values: list[float]) -> None:
+            self._values = values
+
+        def tolist(self) -> list[float]:
+            return list(self._values)
+
+    class FakeTextEmbedding:
+        def __init__(self, model_name: str, threads: int | None = None) -> None:
+            self.model_name = model_name
+            self.threads = threads
+
+        def embed(self, texts):
+            for _ in texts:
+                yield FakeVector([0.5, -0.5, 0.25])
+
+    monkeypatch.setitem(sys.modules, "fastembed", SimpleNamespace(TextEmbedding=FakeTextEmbedding))
+
+    embedder = summarizer.LocalEmbedder(model_name="fake/model")
+    result = await embedder.embed("Brief summary.")
+
+    assert result.tokens == 0
+    assert result.vector == [0.5, -0.5, 0.25]
+    assert embedder.model_name == "fake/model"
+
+
 def test_estimate_cost_usd_matches_per_mtok_pricing() -> None:
     cost = estimate_cost_usd(input_tokens=1_000_000, output_tokens=0)
     assert cost == pytest.approx(PRICE_PER_MTOK_INPUT)

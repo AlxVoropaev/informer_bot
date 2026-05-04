@@ -3,6 +3,8 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+from informer_bot.summarizer import LOCAL_EMBED_MODEL_DEFAULT
+
 
 @dataclass(frozen=True)
 class Config:
@@ -16,12 +18,19 @@ class Config:
     log_level: str = "INFO"
     dedup_threshold: float = 0.85
     dedup_window_hours: int = 48
+    embedding_provider: str = "auto"  # 'auto', 'openai', 'local', 'none'
+    local_embedding_model: str = LOCAL_EMBED_MODEL_DEFAULT
 
 
 def load_config() -> Config:
     load_dotenv("data/.env")
     if not os.environ.get("ANTHROPIC_API_KEY"):
         raise SystemExit("ANTHROPIC_API_KEY missing in .env")
+    provider = os.environ.get("EMBEDDING_PROVIDER", "auto").lower()
+    if provider not in {"auto", "openai", "local", "none"}:
+        raise SystemExit(
+            f"EMBEDDING_PROVIDER must be one of auto/openai/local/none, got {provider!r}"
+        )
     return Config(
         telegram_api_id=int(os.environ["TELEGRAM_API_ID"]),
         telegram_api_hash=os.environ["TELEGRAM_API_HASH"],
@@ -33,4 +42,8 @@ def load_config() -> Config:
         log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         dedup_threshold=float(os.environ.get("DEDUP_THRESHOLD", "0.85")),
         dedup_window_hours=int(os.environ.get("DEDUP_WINDOW_HOURS", "48")),
+        embedding_provider=provider,
+        local_embedding_model=os.environ.get(
+            "LOCAL_EMBEDDING_MODEL", LOCAL_EMBED_MODEL_DEFAULT
+        ),
     )

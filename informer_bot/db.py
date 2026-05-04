@@ -80,6 +80,10 @@ CREATE TABLE IF NOT EXISTS embedding_usage (
     tokens INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO embedding_usage (id, tokens) VALUES (1, 0);
+CREATE TABLE IF NOT EXISTS meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -499,6 +503,26 @@ class Database:
     def purge_dedup_older_than(self, *, cutoff: int) -> None:
         self._conn.execute("DELETE FROM delivered WHERE created_at < ?", (cutoff,))
         self._conn.execute("DELETE FROM post_embeddings WHERE created_at < ?", (cutoff,))
+        self._conn.commit()
+
+    def purge_dedup_all(self) -> None:
+        self._conn.execute("DELETE FROM delivered")
+        self._conn.execute("DELETE FROM post_embeddings")
+        self._conn.commit()
+        log.info("purged all delivered + post_embeddings rows")
+
+    def get_meta(self, key: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (key,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self._conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
         self._conn.commit()
 
     def add_embedding_usage(self, tokens: int) -> None:
