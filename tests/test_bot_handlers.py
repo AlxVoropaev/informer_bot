@@ -10,6 +10,7 @@ from informer_bot.bot import (
     cmd_blacklist,
     cmd_help,
     cmd_start,
+    cmd_update,
     cmd_usage,
     on_approve,
     on_blacklist,
@@ -456,3 +457,62 @@ async def test_noop_callback_just_answers(db: Database) -> None:
     upd.callback_query.answer.assert_awaited()
     upd.callback_query.edit_message_text.assert_not_called()
     upd.callback_query.edit_message_reply_markup.assert_not_called()
+
+
+# ---------- /update ----------
+
+async def test_update_denies_non_owner(
+    db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    refresh = AsyncMock()
+    monkeypatch.setattr("informer_bot.bot.refresh_channels", refresh)
+
+    update = _msg_update(USER_ID)
+    await cmd_update(update, _ctx(db))
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "not allowed" in text or "denied" in text
+    refresh.assert_not_called()
+
+
+async def test_update_for_owner_calls_refresh_channels_with_state_deps(
+    db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    refresh = AsyncMock()
+    monkeypatch.setattr("informer_bot.bot.refresh_channels", refresh)
+
+    ctx = _ctx(db)
+    state: BotState = ctx.bot_data["state"]
+    update = _msg_update(OWNER_ID)
+
+    await cmd_update(update, ctx)
+
+    refresh.assert_awaited_once()
+    kwargs = refresh.await_args.kwargs
+    assert kwargs["fetch_fn"] is state.fetch_channels
+    assert kwargs["db"] is state.db
+    assert kwargs["send_dm"] is state.send_dm
+    assert kwargs["announce_new_channel"] is state.announce_new_channel
+
+    # Two replies on the happy path: "refreshing..." and "refresh_done".
+    assert update.message.reply_text.await_count == 2
+    final_text = update.message.reply_text.await_args.args[0].lower()
+    assert "fail" not in final_text
+
+
+async def test_update_swallows_refresh_exception_and_replies_failure(
+    db: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    refresh = AsyncMock(side_effect=RuntimeError("boom"))
+    monkeypatch.setattr("informer_bot.bot.refresh_channels", refresh)
+
+    update = _msg_update(OWNER_ID)
+    # The handler is expected to swallow the exception, not re-raise.
+    await cmd_update(update, _ctx(db))
+
+    refresh.assert_awaited_once()
+    # First reply was the "refreshing..." one; the failure reply must be the last.
+    assert update.message.reply_text.await_count == 2
+    final_text = update.message.reply_text.await_args.args[0].lower()
+    assert "fail" in final_text or "log" in final_text
