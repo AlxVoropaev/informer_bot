@@ -1,16 +1,20 @@
 import html
 import logging
+import time
 from collections.abc import Awaitable, Callable
 
 from informer_bot.db import Database
+from informer_bot.dedup import find_duplicate
 from informer_bot.i18n import t
-from informer_bot.summarizer import RelevanceCheck, Summary
+from informer_bot.summarizer import Embedding, RelevanceCheck, Summary
 
 log = logging.getLogger(__name__)
 
 SummarizeFn = Callable[[str], Awaitable[Summary]]
 IsRelevantFn = Callable[[str, str], Awaitable[RelevanceCheck]]
-SendDmFn = Callable[..., Awaitable[None]]
+SendDmFn = Callable[..., Awaitable[int | None]]
+EditDmFn = Callable[[int, int, list[tuple[str, str]]], Awaitable[None]]
+EmbedFn = Callable[[str], Awaitable[Embedding]]
 FetchChannelsFn = Callable[[], Awaitable[list[tuple[int, str]]]]
 
 
@@ -36,7 +40,12 @@ async def handle_new_post(
     summarize_fn: SummarizeFn,
     is_relevant_fn: IsRelevantFn,
     send_dm: SendDmFn,
+    embed_fn: EmbedFn | None = None,
+    edit_dm: EditDmFn | None = None,
     photo: bytes | None = None,
+    dedup_threshold: float = 0.85,
+    dedup_window_seconds: int = 48 * 3600,
+    now: int | None = None,
 ) -> None:
     if not text.strip():
         log.debug("skip post %s/%s: empty text", channel_id, message_id)
@@ -89,17 +98,84 @@ async def handle_new_post(
     db.add_system_usage(
         input_tokens=summary.input_tokens, output_tokens=summary.output_tokens
     )
+
+    emb: Embedding | None = None
+    if embed_fn is not None:
+        emb = await embed_fn(summary.text)
+        db.add_embedding_usage(emb.tokens)
+
+    now_ts = int(time.time()) if now is None else now
     channel_title = db.get_channel_title(channel_id) or ""
-    for user_id, marked in recipients:
-        marker = (
-            t(db.get_language(user_id), "debug_filtered_marker") if marked else None
-        )
+
+    for user_id, marked_filter in recipients:
+        lang = db.get_language(user_id)
+        mode = db.get_subscription_mode(user_id, channel_id)
+        marker = t(lang, "debug_filtered_marker") if marked_filter else None
         body = _format_post(channel_title, summary.text, link, marker)
-        await send_dm(user_id, body, photo)
+
+        duplicate = (
+            find_duplicate(
+                db=db,
+                user_id=user_id,
+                vec=emb.vector,
+                threshold=dedup_threshold,
+                window_seconds=dedup_window_seconds,
+                now=now_ts,
+            )
+            if emb is not None
+            else None
+        )
+
+        if duplicate is not None and mode == "debug":
+            dup_marker = t(lang, "debug_duplicate_marker")
+            body = _format_post(channel_title, summary.text, link, dup_marker)
+            bot_msg_id = await send_dm(user_id, body, photo)
+            if bot_msg_id is not None:
+                db.record_delivered(
+                    user_id=user_id,
+                    channel_id=channel_id,
+                    message_id=message_id,
+                    bot_message_id=bot_msg_id,
+                    is_photo=photo is not None,
+                    body=body,
+                    now=now_ts,
+                )
+        elif duplicate is not None and edit_dm is not None:
+            new_dup_links = duplicate.dup_links + [(channel_title, link)]
+            await edit_dm(user_id, duplicate.bot_message_id, new_dup_links)
+            db.set_delivered_dup_links(
+                user_id=user_id,
+                channel_id=duplicate.channel_id,
+                message_id=duplicate.message_id,
+                dup_links=new_dup_links,
+            )
+        else:
+            bot_msg_id = await send_dm(user_id, body, photo)
+            if bot_msg_id is not None and emb is not None:
+                db.record_delivered(
+                    user_id=user_id,
+                    channel_id=channel_id,
+                    message_id=message_id,
+                    bot_message_id=bot_msg_id,
+                    is_photo=photo is not None,
+                    body=body,
+                    now=now_ts,
+                )
+
         db.add_usage(
             user_id=user_id,
             input_tokens=summary.input_tokens,
             output_tokens=summary.output_tokens,
+        )
+
+    if emb is not None:
+        db.store_post_embedding(
+            channel_id=channel_id,
+            message_id=message_id,
+            embedding=emb.vector,
+            summary=summary.text,
+            link=link,
+            now=now_ts,
         )
 
 

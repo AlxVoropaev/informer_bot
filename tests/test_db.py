@@ -343,3 +343,138 @@ def test_update_user_name_can_clear_username(db: Database) -> None:
     db.update_user_name(user_id=10, username=None, first_name="Alice")
 
     assert db.get_user_label(user_id=10) == "Alice (10)"
+
+
+# ---------- dedup ----------
+
+def test_store_and_list_dedup_candidates_round_trip(db: Database) -> None:
+    db.store_post_embedding(
+        channel_id=1, message_id=100, embedding=[0.1, 0.2, 0.3],
+        summary="s1", link="l1", now=1000,
+    )
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=999,
+        is_photo=False, body="body1", now=1000,
+    )
+
+    rows = db.list_dedup_candidates(user_id=10, since=0)
+
+    assert len(rows) == 1
+    cid, mid, bmid, is_p, dup_links, vec, link = rows[0]
+    assert (cid, mid, bmid, is_p, dup_links, link) == (1, 100, 999, False, [], "l1")
+    assert vec == pytest.approx([0.1, 0.2, 0.3], rel=1e-5)
+
+
+def test_list_dedup_candidates_filters_by_user(db: Database) -> None:
+    db.store_post_embedding(
+        channel_id=1, message_id=100, embedding=[1.0, 0.0],
+        summary="s", link="l", now=1000,
+    )
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=1,
+        is_photo=False, body="b10", now=1000,
+    )
+    db.record_delivered(
+        user_id=20, channel_id=1, message_id=100, bot_message_id=2,
+        is_photo=True, body="b20", now=1000,
+    )
+
+    rows10 = db.list_dedup_candidates(user_id=10, since=0)
+    rows20 = db.list_dedup_candidates(user_id=20, since=0)
+
+    assert [r[2] for r in rows10] == [1]
+    assert [r[2] for r in rows20] == [2]
+    assert [r[3] for r in rows10] == [False]
+    assert [r[3] for r in rows20] == [True]
+
+
+def test_list_dedup_candidates_filters_by_since(db: Database) -> None:
+    db.store_post_embedding(
+        channel_id=1, message_id=100, embedding=[1.0],
+        summary="old", link="l1", now=500,
+    )
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=1,
+        is_photo=False, body="b1", now=500,
+    )
+    db.store_post_embedding(
+        channel_id=1, message_id=200, embedding=[1.0],
+        summary="new", link="l2", now=2000,
+    )
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=200, bot_message_id=2,
+        is_photo=False, body="b2", now=2000,
+    )
+
+    rows = db.list_dedup_candidates(user_id=10, since=1000)
+
+    assert [r[1] for r in rows] == [200]
+
+
+def test_list_dedup_candidates_skips_delivered_without_embedding(db: Database) -> None:
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=1,
+        is_photo=False, body="b", now=1000,
+    )
+
+    assert db.list_dedup_candidates(user_id=10, since=0) == []
+
+
+def test_dup_links_default_empty_and_round_trip(db: Database) -> None:
+    db.store_post_embedding(
+        channel_id=1, message_id=100, embedding=[1.0],
+        summary="s", link="l", now=1000,
+    )
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=1,
+        is_photo=False, body="orig", now=1000,
+    )
+
+    assert db.get_delivered_dup_links(
+        user_id=10, channel_id=1, message_id=100
+    ) == []
+
+    db.set_delivered_dup_links(
+        user_id=10, channel_id=1, message_id=100,
+        dup_links=[("Channel B", "https://t.me/b/200")],
+    )
+
+    assert db.get_delivered_dup_links(
+        user_id=10, channel_id=1, message_id=100
+    ) == [("Channel B", "https://t.me/b/200")]
+
+    [(_, _, _, _, dup_links, _, _)] = db.list_dedup_candidates(user_id=10, since=0)
+    assert dup_links == [("Channel B", "https://t.me/b/200")]
+
+
+def test_purge_dedup_older_than_cutoff(db: Database) -> None:
+    db.store_post_embedding(
+        channel_id=1, message_id=100, embedding=[1.0], summary="o", link="l", now=500,
+    )
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=1,
+        is_photo=False, body="b", now=500,
+    )
+    db.store_post_embedding(
+        channel_id=1, message_id=200, embedding=[1.0], summary="n", link="l", now=2000,
+    )
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=200, bot_message_id=2,
+        is_photo=False, body="b", now=2000,
+    )
+
+    db.purge_dedup_older_than(cutoff=1000)
+
+    rows = db.list_dedup_candidates(user_id=10, since=0)
+    assert [r[1] for r in rows] == [200]
+
+
+def test_get_embedding_usage_starts_at_zero(db: Database) -> None:
+    assert db.get_embedding_usage() == 0
+
+
+def test_add_embedding_usage_accumulates(db: Database) -> None:
+    db.add_embedding_usage(50)
+    db.add_embedding_usage(25)
+
+    assert db.get_embedding_usage() == 75

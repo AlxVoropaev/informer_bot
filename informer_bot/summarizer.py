@@ -2,10 +2,13 @@ import logging
 from dataclasses import dataclass
 
 from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 
 log = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-4-5"
+EMBED_MODEL = "text-embedding-3-small"
+EMBED_DIMENSIONS = 512
 MAX_TOKENS = 256
 SYSTEM_PROMPT = (
     "You summarize Telegram channel posts. "
@@ -22,6 +25,8 @@ FILTER_MAX_TOKENS = 4
 # Pricing for claude-haiku-4-5 (USD per 1M tokens).
 PRICE_PER_MTOK_INPUT = 1.00
 PRICE_PER_MTOK_OUTPUT = 5.00
+# Pricing for text-embedding-3-small (USD per 1M input tokens).
+EMBED_PRICE_PER_MTOK = 0.02
 
 
 @dataclass(frozen=True)
@@ -38,11 +43,21 @@ class RelevanceCheck:
     output_tokens: int
 
 
+@dataclass(frozen=True)
+class Embedding:
+    vector: list[float]
+    tokens: int
+
+
 def estimate_cost_usd(input_tokens: int, output_tokens: int) -> float:
     return (
         input_tokens / 1_000_000 * PRICE_PER_MTOK_INPUT
         + output_tokens / 1_000_000 * PRICE_PER_MTOK_OUTPUT
     )
+
+
+def estimate_embedding_cost_usd(tokens: int) -> float:
+    return tokens / 1_000_000 * EMBED_PRICE_PER_MTOK
 
 
 async def summarize(text: str, client: AsyncAnthropic | None = None) -> Summary:
@@ -92,3 +107,22 @@ async def is_relevant(
         input_tokens=response.usage.input_tokens,
         output_tokens=response.usage.output_tokens,
     )
+
+
+async def embed_summary(
+    summary_text: str, client: AsyncOpenAI | None = None
+) -> Embedding:
+    client = client or AsyncOpenAI()
+    log.debug("embed_summary: %d chars to %s", len(summary_text), EMBED_MODEL)
+    response = await client.embeddings.create(
+        model=EMBED_MODEL,
+        input=summary_text,
+        dimensions=EMBED_DIMENSIONS,
+        encoding_format="float",
+    )
+    vector = list(response.data[0].embedding)
+    log.debug(
+        "embed_summary: got %d dims (tokens=%d)",
+        len(vector), response.usage.total_tokens,
+    )
+    return Embedding(vector=vector, tokens=response.usage.total_tokens)

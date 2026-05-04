@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 from informer_bot.db import Database
 from informer_bot.i18n import LANGUAGE_NAMES, LANGUAGES, t
 from informer_bot.pipeline import refresh_channels
-from informer_bot.summarizer import estimate_cost_usd
+from informer_bot.summarizer import estimate_cost_usd, estimate_embedding_cost_usd
 
 log = logging.getLogger(__name__)
 
@@ -144,6 +144,7 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if user_id == _owner_id(context):
         rows = db.list_all_usage()
         sys_in, sys_out = db.get_system_usage()
+        emb_tokens = db.get_embedding_usage()
         lines = [t(lang, "usage_admin_header")]
         if rows:
             for _uid, label, inp, out in rows:
@@ -152,6 +153,12 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             lines.append(t(lang, "usage_admin_none"))
         lines.append("")
         lines.append(_format_usage_line(t(lang, "usage_admin_system_label"), sys_in, sys_out))
+        lines.append(t(
+            lang, "usage_admin_embedding_line",
+            label=t(lang, "usage_admin_embedding_label"),
+            tokens=emb_tokens,
+            cost=estimate_embedding_cost_usd(emb_tokens),
+        ))
         await update.message.reply_text("\n".join(lines))
         return
 

@@ -110,6 +110,7 @@ One Python process runs both the client and the bot inside a single asyncio loop
 - Telegram client: **Telethon** (MTProto user account, real-time `events.NewMessage`).
 - Telegram bot: **python-telegram-bot** (v21+, asyncio).
 - LLM: **anthropic** SDK, model `claude-haiku-4-5` (cheap & fast for summaries).
+- Embeddings (dedup): **openai** SDK, model `text-embedding-3-small` at 512 dims.
 - Storage: **SQLite** (single file, `data/informer.db`) + Telethon
   `data/informer.session` file. The `data/` directory holds all mutable state
   and is bind-mounted into the Docker container.
@@ -127,8 +128,11 @@ TELEGRAM_API_ID=...        # from my.telegram.org
 TELEGRAM_API_HASH=...      # from my.telegram.org
 TELEGRAM_BOT_TOKEN=...     # from @BotFather
 ANTHROPIC_API_KEY=...
+OPENAI_API_KEY=...         # optional — used for summary embeddings (dedup); if missing, dedup is disabled and the owner is DM'd once at startup
 OWNER_ID=...               # admin's Telegram user id (numeric)
 LOG_LEVEL=INFO             # optional, default INFO
+DEDUP_THRESHOLD=0.85       # optional, cosine threshold for "same story"
+DEDUP_WINDOW_HOURS=48      # optional, lookback window for dedup
 ```
 
 ## Behaviour rules
@@ -163,6 +167,17 @@ LOG_LEVEL=INFO             # optional, default INFO
     `status IN ('pending','approved','denied')`, `language IN ('en','ru')`
   - `usage(user_id, input_tokens, output_tokens)` — per-user delivered-summary tokens
   - `system_usage(id=1, input_tokens, output_tokens)` — total API spend (incl. filter checks)
+  - `post_embeddings(channel_id, message_id, created_at, embedding, summary, link)` —
+    one row per post that reached at least one recipient. `embedding` is a
+    little-endian packed `float32` array (`db.pack_vector`/`unpack_vector`).
+    Indexed on `created_at`; pruned via `purge_dedup_older_than` at startup.
+  - `delivered(user_id, channel_id, message_id, bot_message_id, is_photo, body,
+    created_at, dup_links_json)` — per-user record of every DM that was actually
+    sent (including debug-mode duplicate DMs). `body` is the original rendered
+    HTML at send time (never mutated). `dup_links_json` is a JSON array of
+    `[title, link]` tuples for duplicates that have been chained onto this DM
+    via inline URL buttons.
+  - `embedding_usage(id=1, tokens)` — running total of OpenAI embedding tokens.
 - **Localization:** bot UI is per-user English / Russian. Default `en`. Strings live in
   `informer_bot/i18n.py` (`_STRINGS[lang][key]`, `t(lang, key, **fmt)` helper); the
   user's choice is persisted in `users.language`. Summaries are NOT translated — they
@@ -203,6 +218,28 @@ LOG_LEVEL=INFO             # optional, default INFO
   `db.upsert_channel`s them. When a previously-active channel disappears (admin
   unsubscribed) or becomes blacklisted, the bot DMs each affected subscriber:
   "Channel '<title>' is no longer available."
+- **Deduplication:** after summarising, the summary text is embedded once
+  (`text-embedding-3-small` @ 512 dims) and compared against this user's
+  recent `delivered` rows (last `DEDUP_WINDOW_HOURS`). Cosine ≥
+  `DEDUP_THRESHOLD` counts as a duplicate.
+  - **No `OPENAI_API_KEY`:** `main.py` passes `embed_fn=None` /
+    `edit_dm=None`. `handle_new_post` then skips embedding, dedup lookup,
+    `delivered` records, and `post_embeddings` writes — DMs go out as if dedup
+    didn't exist. The owner is DM'd `dedup_disabled_notice` once at startup
+    (no recurring nag).
+  - **Normal modes (`filtered`, `all`):** the previous DM gets a new inline URL
+    button (one button row per duplicate, button text = source channel title)
+    via `bot.edit_message_reply_markup`. The DM body is never mutated — this
+    sidesteps Telegram's 1024-char caption / 4096-char text limits. The new
+    post is NOT inserted into `delivered` for this user — future duplicates
+    keep chaining onto the original DM via `delivered.dup_links_json`. The post
+    IS inserted into `post_embeddings` so other users can still match against
+    it.
+  - **Debug mode:** a fresh DM is sent with a localized `🔁 DUPLICATE` marker
+    prefix (i18n key `debug_duplicate_marker`), and `delivered` is recorded
+    normally. The "Also:" edit path is not taken.
+  - Embedding tokens are tracked in `embedding_usage` and surfaced in `/usage`
+    for the owner only.
 - **Session security:** `.session` is `chmod 600` + git-ignored. Encrypted-at-rest is a
   later TODO.
 
@@ -223,7 +260,8 @@ informer_bot/
 │   ├── config.py        # loads .env, exposes typed settings
 │   ├── db.py            # sqlite schema + queries (sync, single-file)
 │   ├── i18n.py          # EN/RU UI strings + t() helper
-│   ├── summarizer.py    # claude api call → summarize() + is_relevant() + cost estimate
+│   ├── summarizer.py    # claude summarize/is_relevant + openai embed_summary + cost estimates
+│   ├── dedup.py         # cosine similarity + find_duplicate(per-user, time-windowed)
 │   ├── client.py        # telethon: list channels, NewMessage handler
 │   ├── album.py         # buffer-and-flush coalescer for multi-photo albums
 │   ├── pipeline.py      # handle_new_post + refresh_channels glue
@@ -235,6 +273,7 @@ informer_bot/
     ├── test_summarizer.py
     ├── test_bot_handlers.py
     ├── test_album.py
+    ├── test_dedup.py
     └── test_pipeline.py
 ```
 

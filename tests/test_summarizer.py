@@ -4,8 +4,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from informer_bot.summarizer import (
+    EMBED_DIMENSIONS,
+    EMBED_MODEL,
     PRICE_PER_MTOK_INPUT,
     PRICE_PER_MTOK_OUTPUT,
+    embed_summary,
     estimate_cost_usd,
     is_relevant,
     summarize,
@@ -101,6 +104,39 @@ async def test_is_relevant_passes_filter_and_post_to_user_message(
     user_content = kwargs["messages"][0]["content"]
     assert "FILTER_TEXT" in user_content
     assert "POST_BODY" in user_content
+
+
+def _fake_embed_response(vector: list[float], total_tokens: int = 8) -> SimpleNamespace:
+    return SimpleNamespace(
+        data=[SimpleNamespace(embedding=vector, index=0)],
+        usage=SimpleNamespace(total_tokens=total_tokens, prompt_tokens=total_tokens),
+    )
+
+
+async def test_embed_summary_returns_vector_and_tokens() -> None:
+    client = AsyncMock()
+    client.embeddings.create = AsyncMock(
+        return_value=_fake_embed_response([0.1, 0.2, 0.3], total_tokens=11)
+    )
+
+    result = await embed_summary("Brief summary.", client=client)
+
+    assert result.vector == [0.1, 0.2, 0.3]
+    assert result.tokens == 11
+
+
+async def test_embed_summary_uses_configured_model_and_dims() -> None:
+    client = AsyncMock()
+    client.embeddings.create = AsyncMock(
+        return_value=_fake_embed_response([0.0])
+    )
+
+    await embed_summary("Brief.", client=client)
+
+    kwargs = client.embeddings.create.await_args.kwargs
+    assert kwargs["model"] == EMBED_MODEL
+    assert kwargs["dimensions"] == EMBED_DIMENSIONS
+    assert kwargs["input"] == "Brief."
 
 
 def test_estimate_cost_usd_matches_per_mtok_pricing() -> None:

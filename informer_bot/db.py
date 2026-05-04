@@ -1,5 +1,8 @@
+import json
 import logging
 import sqlite3
+import struct
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,7 +53,43 @@ CREATE TABLE IF NOT EXISTS system_usage (
     output_tokens INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO system_usage (id, input_tokens, output_tokens) VALUES (1, 0, 0);
+CREATE TABLE IF NOT EXISTS post_embeddings (
+    channel_id INTEGER NOT NULL,
+    message_id INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    embedding  BLOB NOT NULL,
+    summary    TEXT NOT NULL,
+    link       TEXT NOT NULL,
+    PRIMARY KEY (channel_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_post_embeddings_created_at ON post_embeddings(created_at);
+CREATE TABLE IF NOT EXISTS delivered (
+    user_id        INTEGER NOT NULL,
+    channel_id     INTEGER NOT NULL,
+    message_id     INTEGER NOT NULL,
+    bot_message_id INTEGER NOT NULL,
+    is_photo       INTEGER NOT NULL,
+    body           TEXT NOT NULL,
+    created_at     INTEGER NOT NULL,
+    dup_links_json TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (user_id, channel_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_delivered_user_created ON delivered(user_id, created_at);
+CREATE TABLE IF NOT EXISTS embedding_usage (
+    id     INTEGER PRIMARY KEY CHECK (id = 1),
+    tokens INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO embedding_usage (id, tokens) VALUES (1, 0);
 """
+
+
+def pack_vector(vec: list[float]) -> bytes:
+    return struct.pack(f"{len(vec)}f", *vec)
+
+
+def unpack_vector(blob: bytes) -> list[float]:
+    n = len(blob) // 4
+    return list(struct.unpack(f"{n}f", blob))
 
 
 class Database:
@@ -108,6 +147,11 @@ class Database:
                 DROP TABLE subscriptions;
                 ALTER TABLE subscriptions_new RENAME TO subscriptions;
                 """
+            )
+        delivered_cols = {r[1] for r in self._conn.execute("PRAGMA table_info(delivered)")}
+        if delivered_cols and "dup_links_json" not in delivered_cols:
+            self._conn.execute(
+                "ALTER TABLE delivered ADD COLUMN dup_links_json TEXT NOT NULL DEFAULT '[]'"
             )
         self._conn.commit()
         log.debug("opened sqlite at %s", path)
@@ -360,3 +404,112 @@ class Database:
         )
         self._conn.commit()
         return cursor.rowcount == 1
+
+    # ---------- dedup ----------
+
+    def store_post_embedding(
+        self,
+        *,
+        channel_id: int,
+        message_id: int,
+        embedding: list[float],
+        summary: str,
+        link: str,
+        now: int | None = None,
+    ) -> None:
+        ts = int(time.time()) if now is None else now
+        self._conn.execute(
+            "INSERT OR REPLACE INTO post_embeddings "
+            "(channel_id, message_id, created_at, embedding, summary, link) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (channel_id, message_id, ts, pack_vector(embedding), summary, link),
+        )
+        self._conn.commit()
+
+    def record_delivered(
+        self,
+        *,
+        user_id: int,
+        channel_id: int,
+        message_id: int,
+        bot_message_id: int,
+        is_photo: bool,
+        body: str,
+        now: int | None = None,
+    ) -> None:
+        ts = int(time.time()) if now is None else now
+        self._conn.execute(
+            "INSERT OR REPLACE INTO delivered "
+            "(user_id, channel_id, message_id, bot_message_id, is_photo, body, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (user_id, channel_id, message_id, bot_message_id, 1 if is_photo else 0, body, ts),
+        )
+        self._conn.commit()
+
+    def get_delivered_dup_links(
+        self, *, user_id: int, channel_id: int, message_id: int
+    ) -> list[tuple[str, str]]:
+        row = self._conn.execute(
+            "SELECT dup_links_json FROM delivered "
+            "WHERE user_id = ? AND channel_id = ? AND message_id = ?",
+            (user_id, channel_id, message_id),
+        ).fetchone()
+        if not row or not row[0]:
+            return []
+        return [tuple(item) for item in json.loads(row[0])]
+
+    def set_delivered_dup_links(
+        self,
+        *,
+        user_id: int,
+        channel_id: int,
+        message_id: int,
+        dup_links: list[tuple[str, str]],
+    ) -> None:
+        self._conn.execute(
+            "UPDATE delivered SET dup_links_json = ? "
+            "WHERE user_id = ? AND channel_id = ? AND message_id = ?",
+            (json.dumps(dup_links), user_id, channel_id, message_id),
+        )
+        self._conn.commit()
+
+    def list_dedup_candidates(
+        self, *, user_id: int, since: int
+    ) -> list[tuple[int, int, int, bool, list[tuple[str, str]], list[float], str]]:
+        """Return (channel_id, message_id, bot_message_id, is_photo, dup_links, vec, link)
+        for delivered+embedded posts for this user newer than `since`."""
+        rows = self._conn.execute(
+            "SELECT d.channel_id, d.message_id, d.bot_message_id, d.is_photo, "
+            "       d.dup_links_json, p.embedding, p.link "
+            "FROM delivered d "
+            "JOIN post_embeddings p "
+            "  ON p.channel_id = d.channel_id AND p.message_id = d.message_id "
+            "WHERE d.user_id = ? AND d.created_at >= ?",
+            (user_id, since),
+        ).fetchall()
+        return [
+            (
+                cid, mid, bmid, bool(is_p),
+                [tuple(item) for item in json.loads(dup_json or "[]")],
+                unpack_vector(blob), link,
+            )
+            for cid, mid, bmid, is_p, dup_json, blob, link in rows
+        ]
+
+    def purge_dedup_older_than(self, *, cutoff: int) -> None:
+        self._conn.execute("DELETE FROM delivered WHERE created_at < ?", (cutoff,))
+        self._conn.execute("DELETE FROM post_embeddings WHERE created_at < ?", (cutoff,))
+        self._conn.commit()
+
+    def add_embedding_usage(self, tokens: int) -> None:
+        self._conn.execute(
+            "UPDATE embedding_usage SET tokens = tokens + ? WHERE id = 1",
+            (tokens,),
+        )
+        self._conn.commit()
+
+    def get_embedding_usage(self) -> int:
+        row = self._conn.execute(
+            "SELECT tokens FROM embedding_usage WHERE id = 1"
+        ).fetchone()
+        return row[0] if row else 0
