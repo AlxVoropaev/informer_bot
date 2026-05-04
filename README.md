@@ -10,20 +10,29 @@ A Telegram bot that summarises posts from public channels and DMs you a short br
 
 ## Commands
 
-- `/start` — request access. New users wait for the admin to approve; once approved you're pointed at `/list`.
-- `/list` — show the available channels. Each channel has a full-width title button and an icon row below it: ℹ️ info, 🔗 open in Telegram (only for public channels with a username), ✏️ edit filter (plus 🗑 when a filter is set). Tap the channel name to cycle delivery modes:
-  - ⬜ — off (you don't get posts from this channel; saved filter is preserved)
-  - 🔀 — filtered (only posts matching this channel's filter are delivered)
-  - 🐞 — debug (every post is delivered, but ones the filter would have rejected are prefixed with `🐞 FILTERED`)
-  - ✅ — all (every post is delivered)
-  Tap 🔗 to open the channel in Telegram for a quick look. Tap ℹ️ for the full details view: the channel's description (from the author), the same 🔗 open-in-Telegram button, plus toggle / edit-filter / delete-filter — `⬅ Back to list` returns to the same page.
-  Tap ✏️ to set or update the filter prompt for that one channel — the bot asks you to send the prompt as your next message. Tap 🗑 to delete it. Filters are stored per channel; setting a filter from "off" automatically activates 🔀 for that channel.
-- `/usage` — show your token usage and estimated cost.
-- `/language` — switch interface language (English / Русский).
-- `/help` — list all available commands.
-- `/app` — *experimental, branch `miniapp-test`* — opens a Telegram Mini App with the same channel manager (search, mode picker, filter editor) in a real HTML UI. Only available when the admin sets `MINIAPP_URL`. Once configured, the bot's burger-menu (≡, left of the input box) also opens it directly.
+Channel selection, filters, and language all live in the **Mini App** —
+Telegram's in-app HTML surface. Open it from the bot's burger menu (≡, left of
+the input box) or run `/app`. Every Telegram client (mobile, desktop, web)
+supports Mini Apps, so use it for everything below.
 
-That's it. No pagination, no spam — toggle what you want, optionally narrow it with a per-channel filter, and read the briefs as they arrive.
+In the Mini App you can:
+- Tap a channel to open its details and pick a delivery mode:
+  - ⬜ Off — saved filter is preserved
+  - 🔀 Filtered — only posts matching this channel's filter
+  - 🐞 Debug — every post; ones the filter would have rejected are tagged `🐞 FILTERED`
+  - ✅ All — every post
+- Set a per-channel filter (plain language) in the textarea. Saving a filter
+  from Off auto-bumps the channel to Filtered.
+- Switch interface language (English / Русский) and view your usage from the
+  top bar (📊 button).
+- Open the source channel in Telegram via the 🔗 link.
+
+Telegram commands (small surface — everything else is in the Mini App):
+
+- `/start` — request access. New users wait for the admin to approve.
+- `/app` — replies with a button that opens the Mini App.
+- `/usage` — your token usage and estimated cost (also in the Mini App).
+- `/help` — list available commands.
 
 ### Admin commands
 
@@ -44,7 +53,8 @@ If you're the bot's `OWNER_ID`, you also get:
 
 ## Notes
 
-- If a channel disappears from `/list`, the admin either unsubscribed from it or blacklisted it. You'll get a one-time DM saying it's no longer available.
+- If a channel disappears from the Mini App, the admin either unsubscribed from it or blacklisted it. You'll get a one-time DM saying it's no longer available.
+- When the admin adds a new channel, you'll get a DM with a button that opens the Mini App straight to that channel's details — pick a mode there.
 - Only the admin can add or remove channels from the list — there's no way to request new ones through the bot.
 
 ## Setup (self-hosting)
@@ -75,7 +85,7 @@ Optional, controls how summary embeddings for dedup are computed:
 | `DEDUP_THRESHOLD` | float 0..1 | `0.85` | Cosine similarity at or above which two posts count as the same story. |
 | `DEDUP_WINDOW_HOURS` | int | `48` | How far back to look for duplicates per user. |
 | `CATCH_UP_WINDOW_HOURS` | int | `48` | On restart, replay missed posts up to this age. Set to `0` if you don't want any backfill. |
-| `MINIAPP_URL` | full HTTPS URL | *(unset)* | Public URL where Telegram can fetch the Mini App frontend. See [Where do I get this URL?](#where-do-i-get-miniapp_url) below. When set, the bot starts an in-process aiohttp server on `WEBAPP_HOST:WEBAPP_PORT`, registers the burger-menu launcher, and `/app` becomes available. |
+| `MINIAPP_URL` | full HTTPS URL | *(unset)* | Public URL where Telegram can fetch the Mini App frontend. **Required for regular users** — channel selection, filters, and language live only in the Mini App. See [Where do I get this URL?](#where-do-i-get-miniapp_url) below. When set, the bot starts an in-process aiohttp server on `WEBAPP_HOST:WEBAPP_PORT`, registers the burger-menu launcher, and `/app` becomes available. |
 | `MINIAPP_URL_FILE` | path | *(unset)* | Alternative to `MINIAPP_URL` — point at a file (typically the cloudflared sidecar's log) and the bot extracts the latest `https://*.trycloudflare.com` URL from it on startup. Already wired in `compose.yaml`. Ignored if `MINIAPP_URL` is set. |
 | `WEBAPP_HOST` | host | `0.0.0.0` | Bind address for the Mini App server. |
 | `WEBAPP_PORT` | int | `8085` | Bind port for the Mini App server. |
