@@ -162,7 +162,7 @@ State (`.env`, `informer.db`, `informer.session`) all live in `./data/` on the h
 
 ### Auto-update from GitHub
 
-Pull-based: a cron job checks `origin/main` every 5 minutes and rebuilds the container only when there's a new commit. No inbound ports, no secrets, no GitHub Actions.
+Pull-based: a cron job checks `origin/main` every minute and rebuilds the container only when there's a new commit. No inbound ports, no secrets, no GitHub Actions.
 
 1. Install the cron entry once:
    ```sh

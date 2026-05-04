@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Install (or refresh) the cron entry that runs scripts/deploy.sh every 5 minutes.
+# Install (or refresh) the cron entry that runs scripts/deploy.sh every 1 minutes.
 # Idempotent — re-running replaces the existing entry instead of duplicating it.
 set -euo pipefail
 
 deploy_script="$(cd "$(dirname "$0")" && pwd)/deploy.sh"
 marker="# informer_bot deploy"
-schedule="*/5 * * * *"
+schedule="*/1 * * * *"
 
 if [[ ! -x "$deploy_script" ]]; then
     echo "deploy.sh not found or not executable at $deploy_script" >&2
