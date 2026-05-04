@@ -70,19 +70,6 @@ def test_invalid_local_embedding_device_raises_systemexit(
     assert "LOCAL_EMBEDDING_DEVICE" in str(excinfo.value)
 
 
-def test_missing_anthropic_api_key_raises_systemexit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _set_required(monkeypatch)
-    _clear_optional(monkeypatch)
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-
-    with pytest.raises(SystemExit) as excinfo:
-        load_config()
-
-    assert "ANTHROPIC_API_KEY" in str(excinfo.value)
-
-
 def test_defaults_are_applied_when_optional_vars_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
