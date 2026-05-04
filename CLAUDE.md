@@ -153,9 +153,11 @@ LOG_LEVEL=INFO             # optional, default INFO
 - **Storage:**
   - `channels(id, title, blacklisted)`
   - `subscriptions(user_id, channel_id, mode, filter_prompt)` —
-    `mode IN ('off','filtered','all')`. `'off'` rows are kept (instead of being
-    deleted on toggle-off) so the per-channel `filter_prompt` survives a
-    temporary disable.
+    `mode IN ('off','filtered','debug','all')`. `'off'` rows are kept (instead
+    of being deleted on toggle-off) so the per-channel `filter_prompt` survives
+    a temporary disable. `'debug'` delivers every post but prefixes a localized
+    marker (i18n key `debug_filtered_marker`, e.g. `🐞 FILTERED`) on posts the
+    filter would have excluded; with no `filter_prompt` it behaves like `'all'`.
   - `seen(channel_id, message_id)` — restart catch-up dedupe
   - `users(user_id, status, username, first_name, language)` —
     `status IN ('pending','approved','denied')`, `language IN ('en','ru')`
@@ -172,11 +174,14 @@ LOG_LEVEL=INFO             # optional, default INFO
     conditional): the toggle button (`toggle:<channel_id>`), an ✏️ edit button
     (`fedit:<channel_id>`), and a 🗑 delete button (`fdel:<channel_id>`, only
     rendered when a `filter_prompt` exists for that user/channel). The toggle
-    cycles `⬜ off/None → 🔀 filtered → ✅ all → 🗑-preserved 'off' (if a
-    filter_prompt exists) or row-deleted None (if not)`. `🔀 filtered` runs the
-    per-channel filter prompt via `summarizer.is_relevant`; if no prompt is set
-    for that channel, every post passes (same as `✅ all`). A `Done` button
-    (callback `done`) closes the keyboard. No pagination.
+    cycles `⬜ off/None → 🔀 filtered → 🐞 debug → ✅ all → 🗑-preserved 'off'
+    (if a filter_prompt exists) or row-deleted None (if not)`. `🔀 filtered`
+    runs the per-channel filter prompt via `summarizer.is_relevant`; if no
+    prompt is set for that channel, every post passes (same as `✅ all`). `🐞
+    debug` always delivers, but posts the filter would have rejected get a
+    localized `🐞 FILTERED` line prepended to the body (filter tokens are still
+    charged). A `Done` button (callback `done`) closes the keyboard. No
+    pagination.
   - **Filter edit flow:** tapping ✏️ DMs the user the current prompt (if any)
     plus tips and sets `context.user_data['awaiting_filter_for'] = channel_id`.
     The next non-command text message from that user is captured by

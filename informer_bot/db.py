@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS channels (
 CREATE TABLE IF NOT EXISTS subscriptions (
     user_id       INTEGER NOT NULL,
     channel_id    INTEGER NOT NULL,
-    mode          TEXT NOT NULL DEFAULT 'filtered' CHECK(mode IN ('off','filtered','all')),
+    mode          TEXT NOT NULL DEFAULT 'filtered' CHECK(mode IN ('off','filtered','debug','all')),
     filter_prompt TEXT,
     PRIMARY KEY (user_id, channel_id),
     FOREIGN KEY (channel_id) REFERENCES channels(id)
@@ -78,13 +78,33 @@ class Database:
                 CREATE TABLE subscriptions_new (
                     user_id       INTEGER NOT NULL,
                     channel_id    INTEGER NOT NULL,
-                    mode          TEXT NOT NULL DEFAULT 'filtered' CHECK(mode IN ('off','filtered','all')),
+                    mode          TEXT NOT NULL DEFAULT 'filtered' CHECK(mode IN ('off','filtered','debug','all')),
                     filter_prompt TEXT,
                     PRIMARY KEY (user_id, channel_id),
                     FOREIGN KEY (channel_id) REFERENCES channels(id)
                 );
                 INSERT INTO subscriptions_new (user_id, channel_id, mode)
                     SELECT user_id, channel_id, mode FROM subscriptions;
+                DROP TABLE subscriptions;
+                ALTER TABLE subscriptions_new RENAME TO subscriptions;
+                """
+            )
+        sub_sql_row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='subscriptions'"
+        ).fetchone()
+        if sub_sql_row and "'debug'" not in sub_sql_row[0]:
+            self._conn.executescript(
+                """
+                CREATE TABLE subscriptions_new (
+                    user_id       INTEGER NOT NULL,
+                    channel_id    INTEGER NOT NULL,
+                    mode          TEXT NOT NULL DEFAULT 'filtered' CHECK(mode IN ('off','filtered','debug','all')),
+                    filter_prompt TEXT,
+                    PRIMARY KEY (user_id, channel_id),
+                    FOREIGN KEY (channel_id) REFERENCES channels(id)
+                );
+                INSERT INTO subscriptions_new (user_id, channel_id, mode, filter_prompt)
+                    SELECT user_id, channel_id, mode, filter_prompt FROM subscriptions;
                 DROP TABLE subscriptions;
                 ALTER TABLE subscriptions_new RENAME TO subscriptions;
                 """

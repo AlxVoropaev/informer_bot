@@ -13,7 +13,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "user_help": (
             "Commands:\n"
             "/start — request access / get started\n"
-            "/list — pick channels to follow (tap title to cycle: ⬜ off → 🔀 filtered → ✅ all; "
+            "/list — pick channels to follow (tap title to cycle: ⬜ off → 🔀 filtered → 🐞 debug → ✅ all; "
             "✏️ edits the per-channel filter, 🗑 deletes it)\n"
             "/language — switch interface language\n"
             "/usage — your token usage and estimated cost\n"
@@ -61,6 +61,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "channel_blocked": "Admin blocked channel '{title}', you will not get updates anymore.",
         "channel_gone": "Channel '{title}' is no longer available.",
         "language_prompt": "Current language: {current}\nChoose:",
+        "debug_filtered_marker": "🐞 FILTERED",
     },
     "ru": {
         "greeting": "Привет, я informer. Используй /list, чтобы выбрать каналы. /help — все команды.",
@@ -72,7 +73,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "user_help": (
             "Команды:\n"
             "/start — запросить доступ / начать\n"
-            "/list — выбрать каналы (нажми на название, чтобы переключить: ⬜ выкл → 🔀 фильтр → ✅ все; "
+            "/list — выбрать каналы (нажми на название, чтобы переключить: ⬜ выкл → 🔀 фильтр → 🐞 отладка → ✅ все; "
             "✏️ редактирует фильтр канала, 🗑 удаляет его)\n"
             "/language — сменить язык интерфейса\n"
             "/usage — расход токенов и примерная стоимость\n"
@@ -120,6 +121,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "channel_blocked": "Админ заблокировал канал '{title}', ты больше не будешь получать обновления.",
         "channel_gone": "Канал '{title}' больше недоступен.",
         "language_prompt": "Текущий язык: {current}\nВыбери:",
+        "debug_filtered_marker": "🐞 ОТФИЛЬТРОВАНО",
     },
 }
 
