@@ -19,5 +19,6 @@ fi
 
 echo "updating $local_sha -> $remote_sha"
 git pull --ff-only origin main
+export HOST_UID=$(id -u) HOST_GID=$(id -g)
 docker compose up -d --build
 echo "deploy complete"
