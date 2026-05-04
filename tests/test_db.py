@@ -67,6 +67,13 @@ def test_subscribe_with_mode_all(db: Database) -> None:
     assert db.get_subscription_mode(user_id=42, channel_id=1) == "all"
 
 
+def test_subscribe_with_mode_debug(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.subscribe(user_id=42, channel_id=1, mode="debug")
+
+    assert db.get_subscription_mode(user_id=42, channel_id=1) == "debug"
+
+
 def test_subscribe_updates_existing_mode(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="A")
     db.subscribe(user_id=42, channel_id=1, mode="filtered")

@@ -14,8 +14,16 @@ SendDmFn = Callable[..., Awaitable[None]]
 FetchChannelsFn = Callable[[], Awaitable[list[tuple[int, str]]]]
 
 
-def _format_post(channel_title: str, summary: str, link: str) -> str:
-    return f'<a href="{html.escape(link, quote=True)}">{html.escape(channel_title)}</a>\n{html.escape(summary)}'
+def _format_post(
+    channel_title: str, summary: str, link: str, marker: str | None = None
+) -> str:
+    body = (
+        f'<a href="{html.escape(link, quote=True)}">{html.escape(channel_title)}</a>'
+        f'\n{html.escape(summary)}'
+    )
+    if marker:
+        return f"{html.escape(marker)}\n{body}"
+    return body
 
 
 async def handle_new_post(
@@ -41,14 +49,14 @@ async def handle_new_post(
         log.debug("skip post %s/%s: no subscribers", channel_id, message_id)
         return
 
-    recipients: list[int] = []
+    recipients: list[tuple[int, bool]] = []
     for user_id, mode in subscribers:
         if mode == "all":
-            recipients.append(user_id)
+            recipients.append((user_id, False))
             continue
         filter_prompt = db.get_channel_filter(user_id=user_id, channel_id=channel_id)
         if not filter_prompt:
-            recipients.append(user_id)
+            recipients.append((user_id, False))
             continue
         check = await is_relevant_fn(text, filter_prompt)
         db.add_system_usage(
@@ -60,7 +68,9 @@ async def handle_new_post(
             output_tokens=check.output_tokens,
         )
         if check.relevant:
-            recipients.append(user_id)
+            recipients.append((user_id, False))
+        elif mode == "debug":
+            recipients.append((user_id, True))
         else:
             log.debug("filter excluded user=%s for post %s/%s", user_id, channel_id, message_id)
 
@@ -80,8 +90,11 @@ async def handle_new_post(
         input_tokens=summary.input_tokens, output_tokens=summary.output_tokens
     )
     channel_title = db.get_channel_title(channel_id) or ""
-    body = _format_post(channel_title, summary.text, link)
-    for user_id in recipients:
+    for user_id, marked in recipients:
+        marker = (
+            t(db.get_language(user_id), "debug_filtered_marker") if marked else None
+        )
+        body = _format_post(channel_title, summary.text, link, marker)
         await send_dm(user_id, body, photo)
         db.add_usage(
             user_id=user_id,

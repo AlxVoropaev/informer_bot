@@ -322,6 +322,141 @@ async def test_handle_new_post_mixes_modes_per_user(db: Database) -> None:
     send_dm.assert_awaited_once_with(10, expected, None)
 
 
+async def test_handle_new_post_debug_mode_relevant_no_marker(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="Channel A")
+    db.add_pending_user(user_id=10, username="alice")
+    db.set_user_status(user_id=10, status="approved")
+    db.subscribe(user_id=10, channel_id=1, mode="debug")
+    db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="only AI")
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock(return_value=_relevance(True))
+    send_dm = AsyncMock()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="AI news",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+    )
+
+    is_rel.assert_awaited_once_with("AI news", "only AI")
+    expected = _expected_body("Channel A", "Brief.", "https://t.me/a/100")
+    send_dm.assert_awaited_once_with(10, expected, None)
+
+
+async def test_handle_new_post_debug_mode_irrelevant_marks_filtered(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="Channel A")
+    db.add_pending_user(user_id=10, username="alice")
+    db.set_user_status(user_id=10, status="approved")
+    db.subscribe(user_id=10, channel_id=1, mode="debug")
+    db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="only AI")
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock(return_value=_relevance(False))
+    send_dm = AsyncMock()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="Crypto pump",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+    )
+
+    is_rel.assert_awaited_once_with("Crypto pump", "only AI")
+    summarize.assert_awaited_once()
+    send_dm.assert_awaited_once()
+    body = send_dm.await_args.args[1]
+    assert body.startswith("🐞 FILTERED\n")
+    assert _expected_body("Channel A", "Brief.", "https://t.me/a/100") in body
+
+
+async def test_handle_new_post_debug_mode_no_filter_no_marker(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="Channel A")
+    db.add_pending_user(user_id=10, username="alice")
+    db.set_user_status(user_id=10, status="approved")
+    db.subscribe(user_id=10, channel_id=1, mode="debug")
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock()
+    send_dm = AsyncMock()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="anything",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+    )
+
+    is_rel.assert_not_called()
+    expected = _expected_body("Channel A", "Brief.", "https://t.me/a/100")
+    send_dm.assert_awaited_once_with(10, expected, None)
+
+
+async def test_handle_new_post_debug_marker_uses_user_language(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="Channel A")
+    db.add_pending_user(user_id=10, username="alice")
+    db.set_user_status(user_id=10, status="approved")
+    db.set_language(user_id=10, language="ru")
+    db.subscribe(user_id=10, channel_id=1, mode="debug")
+    db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="only AI")
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock(return_value=_relevance(False))
+    send_dm = AsyncMock()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="Crypto pump",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+    )
+
+    body = send_dm.await_args.args[1]
+    assert body.startswith("🐞 ОТФИЛЬТРОВАНО\n")
+
+
+async def test_handle_new_post_debug_charges_filter_tokens_when_excluded(
+    db: Database,
+) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.add_pending_user(user_id=10, username="alice")
+    db.set_user_status(user_id=10, status="approved")
+    db.subscribe(user_id=10, channel_id=1, mode="debug")
+    db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="AI")
+    summarize = AsyncMock(return_value=_summary("Brief.", input_tokens=100, output_tokens=20))
+    is_rel = AsyncMock(return_value=_relevance(False, input_tokens=30, output_tokens=1))
+    send_dm = AsyncMock()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="Crypto",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+    )
+
+    assert db.get_usage(user_id=10) == (130, 21)
+    assert db.get_system_usage() == (130, 21)
+
+
+async def test_handle_new_post_debug_mixed_with_filtered_recipient(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="Channel A")
+    db.add_pending_user(user_id=10, username="alice")
+    db.add_pending_user(user_id=20, username="bob")
+    db.set_user_status(user_id=10, status="approved")
+    db.set_user_status(user_id=20, status="approved")
+    db.subscribe(user_id=10, channel_id=1, mode="filtered")
+    db.subscribe(user_id=20, channel_id=1, mode="debug")
+    db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="AI")
+    db.set_channel_filter(user_id=20, channel_id=1, filter_prompt="AI")
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock(return_value=_relevance(False))
+    send_dm = AsyncMock()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="Crypto",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+    )
+
+    summarize.assert_awaited_once()
+    send_dm.assert_awaited_once()
+    sent_user_id, body, _ = send_dm.await_args.args
+    assert sent_user_id == 20
+    assert body.startswith("🐞 FILTERED\n")
+
+
 async def test_handle_new_post_filter_tokens_recorded_even_when_user_excluded(
     db: Database,
 ) -> None:

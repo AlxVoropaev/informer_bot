@@ -23,7 +23,7 @@ def _lang(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
     return _db(context).get_language(user_id)
 
 
-_MODE_EMOJI = {None: "⬜", "off": "⬜", "filtered": "🔀", "all": "✅"}
+_MODE_EMOJI = {None: "⬜", "off": "⬜", "filtered": "🔀", "debug": "🐞", "all": "✅"}
 
 
 def _user_keyboard(db: Database, user_id: int, lang: str) -> InlineKeyboardMarkup:
@@ -230,6 +230,9 @@ async def on_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         next_mode: str | None = "filtered"
         db.subscribe(user_id, channel_id, mode="filtered")
     elif current == "filtered":
+        next_mode = "debug"
+        db.subscribe(user_id, channel_id, mode="debug")
+    elif current == "debug":
         next_mode = "all"
         db.subscribe(user_id, channel_id, mode="all")
     else:

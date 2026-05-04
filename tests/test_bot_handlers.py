@@ -299,7 +299,7 @@ async def test_list_marks_filtered_and_all_modes_distinctly(db: Database) -> Non
 
 # ---------- toggle callback ----------
 
-async def test_toggle_cycles_disabled_filtered_all_disabled(db: Database) -> None:
+async def test_toggle_cycles_disabled_filtered_debug_all_disabled(db: Database) -> None:
     ctx = _ctx(db)
 
     upd1 = _cb_update(USER_ID, "toggle:1")
@@ -310,10 +310,14 @@ async def test_toggle_cycles_disabled_filtered_all_disabled(db: Database) -> Non
 
     upd2 = _cb_update(USER_ID, "toggle:1")
     await on_toggle(upd2, ctx)
-    assert db.get_subscription_mode(USER_ID, 1) == "all"
+    assert db.get_subscription_mode(USER_ID, 1) == "debug"
 
     upd3 = _cb_update(USER_ID, "toggle:1")
     await on_toggle(upd3, ctx)
+    assert db.get_subscription_mode(USER_ID, 1) == "all"
+
+    upd4 = _cb_update(USER_ID, "toggle:1")
+    await on_toggle(upd4, ctx)
     assert db.get_subscription_mode(USER_ID, 1) is None
     assert db.is_subscribed(USER_ID, 1) is False
 
