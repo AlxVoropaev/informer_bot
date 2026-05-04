@@ -62,8 +62,12 @@ def _user_keyboard(
         )])
         icon_row = [
             InlineKeyboardButton(text="ℹ️", callback_data=f"linfo:{c.id}"),
-            InlineKeyboardButton(text="✏️", callback_data=f"fedit:{c.id}"),
         ]
+        if c.username:
+            icon_row.append(InlineKeyboardButton(
+                text="🔗", url=f"https://t.me/{c.username}",
+            ))
+        icon_row.append(InlineKeyboardButton(text="✏️", callback_data=f"fedit:{c.id}"))
         if filters.get(c.id):
             icon_row.append(InlineKeyboardButton(text="🗑", callback_data=f"fdel:{c.id}"))
         rows.append(icon_row)

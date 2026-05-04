@@ -928,6 +928,28 @@ async def test_list_info_unknown_channel_replies_unavailable(db: Database) -> No
     upd.callback_query.answer.assert_awaited()
 
 
+async def test_list_renders_link_button_when_channel_has_username(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="Alpha", username="alpha_chan")
+    update = _msg_update(USER_ID)
+    await cmd_list(update, _ctx(db))
+
+    rows = update.message.reply_text.await_args.kwargs["reply_markup"].inline_keyboard
+    flat = [b for row in rows for b in row]
+    link_btns = [b for b in flat if getattr(b, "url", None) == "https://t.me/alpha_chan"]
+    assert len(link_btns) == 1
+    assert link_btns[0].text == "🔗"
+
+
+async def test_list_omits_link_button_when_channel_has_no_username(db: Database) -> None:
+    update = _msg_update(USER_ID)
+    await cmd_list(update, _ctx(db))
+
+    rows = update.message.reply_text.await_args.kwargs["reply_markup"].inline_keyboard
+    flat = [b for row in rows for b in row]
+    urls = [getattr(b, "url", None) for b in flat]
+    assert all(u is None for u in urls)
+
+
 async def test_cmd_list_resets_list_view(db: Database) -> None:
     ctx = _ctx(db)
     ctx.user_data["list_view"] = ("details", 1)
