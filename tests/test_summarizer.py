@@ -152,21 +152,19 @@ async def test_local_embedder_wraps_fastembed_with_zero_tokens(monkeypatch) -> N
             return list(self._values)
 
     class FakeTextEmbedding:
-        def __init__(self, model_name: str, threads: int | None = None) -> None:
+        def __init__(
+            self,
+            model_name: str,
+            threads: int | None = None,
+            providers: list[str] | None = None,
+        ) -> None:
             self.model_name = model_name
             self.threads = threads
+            self.providers = providers
 
         def embed(self, texts):
             for _ in texts:
                 yield FakeVector([0.5, -0.5, 0.25])
-
-        @staticmethod
-        def list_supported_models():
-            return [{"model": "fake/model"}]
-
-        @staticmethod
-        def add_custom_model(**kwargs) -> None:
-            pass
 
     monkeypatch.setitem(sys.modules, "fastembed", SimpleNamespace(TextEmbedding=FakeTextEmbedding))
 

@@ -102,12 +102,15 @@ async def main() -> None:
         embedding_id = f"openai:{EMBED_MODEL}:{EMBED_DIMENSIONS}"
         log.info("embedding provider: openai (%s, %d dims)", EMBED_MODEL, EMBED_DIMENSIONS)
     elif provider == "local":
-        local = LocalEmbedder(model_name=cfg.local_embedding_model)
+        local = LocalEmbedder(
+            model_name=cfg.local_embedding_model,
+            device=cfg.local_embedding_device,
+        )
         embed_fn = local.embed
         embedding_id = f"local:{cfg.local_embedding_model}:{LOCAL_EMBED_DIMENSIONS}"
         log.info(
-            "embedding provider: local (%s, ~%d dims)",
-            cfg.local_embedding_model, LOCAL_EMBED_DIMENSIONS,
+            "embedding provider: local (%s on %s, ~%d dims)",
+            cfg.local_embedding_model, cfg.local_embedding_device, LOCAL_EMBED_DIMENSIONS,
         )
     else:
         log.warning("embedding provider: none — deduplication disabled")
