@@ -169,7 +169,8 @@ class LocalEmbedder:
             normalization=True,
             sources=ModelSource(hf=model_name),
             dim=LOCAL_EMBED_DIMENSIONS,
-            model_file="onnx/model.onnx",
+            # INT8-quantized variant: ~118MB instead of 470MB, faster on CPU.
+            model_file="onnx/model_qint8_avx512_vnni.onnx",
         )
 
     def _embed_sync(self, text: str) -> list[float]:
