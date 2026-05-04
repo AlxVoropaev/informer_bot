@@ -193,6 +193,7 @@ async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             fetch_fn=context.bot_data["fetch_channels"],
             db=_db(context),
             send_dm=context.bot_data["send_dm"],
+            announce_new_channel=context.bot_data.get("announce_new_channel"),
         )
     except Exception:
         log.exception("/update refresh failed")
@@ -453,6 +454,35 @@ async def on_filter_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await update.message.reply_text(
         t(lang, "filter_saved_for", title=title, filter=payload)
     )
+
+
+async def on_subscribe(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db = _db(context)
+    user_id = update.effective_user.id
+    lang = db.get_language(user_id)
+    _, raw_channel, mode = update.callback_query.data.split(":", 2)
+    channel_id = int(raw_channel)
+
+    if db.get_user_status(user_id) != "approved":
+        log.info("subscribe rejected: user=%s not approved", user_id)
+        await update.callback_query.answer(t(lang, "denied"))
+        return
+    if mode not in ("filtered", "debug", "all"):
+        await update.callback_query.answer()
+        return
+
+    title = db.get_channel_title(channel_id)
+    if title is None:
+        await update.callback_query.answer(t(lang, "channel_unavailable"))
+        return
+
+    db.subscribe(user_id, channel_id, mode=mode)
+    log.info("user=%s subscribed to channel=%s mode=%s", user_id, channel_id, mode)
+    mode_label = t(lang, f"subscribe_{mode}_button")
+    await update.callback_query.answer(
+        t(lang, "subscribed_toast", title=title, mode=mode_label)
+    )
+    await update.callback_query.edit_message_reply_markup(reply_markup=None)
 
 
 async def on_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

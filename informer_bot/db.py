@@ -280,6 +280,14 @@ class Database:
     def list_user_ids(self) -> list[int]:
         return [r[0] for r in self._conn.execute("SELECT user_id FROM users ORDER BY user_id")]
 
+    def list_approved_user_ids(self) -> list[int]:
+        return [
+            r[0]
+            for r in self._conn.execute(
+                "SELECT user_id FROM users WHERE status = 'approved' ORDER BY user_id"
+            )
+        ]
+
     def update_user_name(
         self, user_id: int, username: str | None, first_name: str | None
     ) -> None:

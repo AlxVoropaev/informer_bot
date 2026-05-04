@@ -232,7 +232,13 @@ CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
   once at startup). Calls Telethon to fetch the admin's current subscriptions and
   `db.upsert_channel`s them. When a previously-active channel disappears (admin
   unsubscribed) or becomes blacklisted, the bot DMs each affected subscriber:
-  "Channel '<title>' is no longer available."
+  "Channel '<title>' is no longer available." When a brand-new channel id
+  (not previously in `channels`) appears, every `approved` user is DM'd a
+  localized `channel_new` notice with a 3-button inline keyboard
+  (`🔀 Filtered / 🐞 Debug / ✅ All`, callback `sub:<channel_id>:<mode>`); a
+  tap subscribes in that mode and clears the keyboard. First-run guard: if
+  `channels` was empty before the refresh, no announcements are sent (avoids
+  spamming the owner with the entire initial fetch).
 - **Deduplication:** after summarising, the summary text is embedded once
   and compared against this user's recent `delivered` rows (last
   `DEDUP_WINDOW_HOURS`). Cosine ≥ `DEDUP_THRESHOLD` counts as a duplicate.

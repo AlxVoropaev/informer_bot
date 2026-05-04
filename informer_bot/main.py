@@ -34,6 +34,7 @@ from informer_bot.bot import (
     on_filter_edit,
     on_filter_text,
     on_language,
+    on_subscribe,
     on_toggle,
 )
 from informer_bot.client import (
@@ -90,6 +91,7 @@ async def main() -> None:
     app.add_handler(CallbackQueryHandler(on_approve, pattern=r"^approve:"))
     app.add_handler(CallbackQueryHandler(on_deny, pattern=r"^deny:"))
     app.add_handler(CallbackQueryHandler(on_language, pattern=r"^lang:"))
+    app.add_handler(CallbackQueryHandler(on_subscribe, pattern=r"^sub:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_filter_text))
 
     embed_fn: EmbedFn | None = None
@@ -178,6 +180,40 @@ async def main() -> None:
 
     edit_dm_fn: EditDmFn | None = edit_dm if embed_fn is not None else None
 
+    async def announce_new_channel(
+        user_id: int, channel_id: int, channel_title: str
+    ) -> None:
+        lang = db.get_language(user_id)
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                text=t(lang, "subscribe_filtered_button"),
+                callback_data=f"sub:{channel_id}:filtered",
+            ),
+            InlineKeyboardButton(
+                text=t(lang, "subscribe_debug_button"),
+                callback_data=f"sub:{channel_id}:debug",
+            ),
+            InlineKeyboardButton(
+                text=t(lang, "subscribe_all_button"),
+                callback_data=f"sub:{channel_id}:all",
+            ),
+        ]])
+        try:
+            await app.bot.send_message(
+                chat_id=user_id,
+                text=t(lang, "channel_new", title=channel_title),
+                reply_markup=keyboard,
+            )
+            log.info(
+                "outgoing: new-channel announce user=%s channel=%s",
+                user_id, channel_id,
+            )
+        except Exception:
+            log.exception(
+                "announce_new_channel to user=%s channel=%s failed",
+                user_id, channel_id,
+            )
+
     async def on_post(
         channel_id: int, message_id: int, text: str, link: str, photo: bytes | None,
     ) -> None:
@@ -196,10 +232,14 @@ async def main() -> None:
     async def fetch() -> list[tuple[int, str]]:
         return await fetch_subscribed_channels(tg)
 
-    await refresh_channels(fetch_fn=fetch, db=db, send_dm=send_dm)
+    await refresh_channels(
+        fetch_fn=fetch, db=db, send_dm=send_dm,
+        announce_new_channel=announce_new_channel,
+    )
 
     app.bot_data["fetch_channels"] = fetch
     app.bot_data["send_dm"] = send_dm
+    app.bot_data["announce_new_channel"] = announce_new_channel
 
     await app.initialize()
     await app.start()
