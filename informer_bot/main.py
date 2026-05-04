@@ -41,7 +41,15 @@ from informer_bot.config import load_config
 from informer_bot.db import Database
 from informer_bot.i18n import t
 from informer_bot.pipeline import EditDmFn, EmbedFn, handle_new_post, refresh_channels
-from informer_bot.summarizer import embed_summary, is_relevant, summarize
+from informer_bot.summarizer import (
+    EMBED_DIMENSIONS,
+    EMBED_MODEL,
+    LOCAL_EMBED_DIMENSIONS,
+    LocalEmbedder,
+    embed_summary,
+    is_relevant,
+    summarize,
+)
 
 log = logging.getLogger(__name__)
 
@@ -80,16 +88,42 @@ async def main() -> None:
     app.add_handler(CallbackQueryHandler(on_language, pattern=r"^lang:"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_filter_text))
 
-    embed_fn: EmbedFn | None
-    if cfg.openai_api_key:
+    embed_fn: EmbedFn | None = None
+    embedding_id: str | None = None
+    provider = cfg.embedding_provider
+    if provider == "auto":
+        provider = "openai" if cfg.openai_api_key else "none"
+
+    if provider == "openai":
+        if not cfg.openai_api_key:
+            raise SystemExit("EMBEDDING_PROVIDER=openai but OPENAI_API_KEY is missing")
         openai_client = AsyncOpenAI(api_key=cfg.openai_api_key)
         embed_fn = functools.partial(embed_summary, client=openai_client)
+        embedding_id = f"openai:{EMBED_MODEL}:{EMBED_DIMENSIONS}"
+        log.info("embedding provider: openai (%s, %d dims)", EMBED_MODEL, EMBED_DIMENSIONS)
+    elif provider == "local":
+        local = LocalEmbedder(model_name=cfg.local_embedding_model)
+        embed_fn = local.embed
+        embedding_id = f"local:{cfg.local_embedding_model}:{LOCAL_EMBED_DIMENSIONS}"
+        log.info(
+            "embedding provider: local (%s, ~%d dims)",
+            cfg.local_embedding_model, LOCAL_EMBED_DIMENSIONS,
+        )
+    else:
+        log.warning("embedding provider: none — deduplication disabled")
+
+    if embed_fn is not None and embedding_id is not None:
+        prev = db.get_meta("embedding_id")
+        if prev is not None and prev != embedding_id:
+            log.warning(
+                "embedding model changed (%s -> %s); dropping dedup index",
+                prev, embedding_id,
+            )
+            db.purge_dedup_all()
+        db.set_meta("embedding_id", embedding_id)
         db.purge_dedup_older_than(
             cutoff=int(time.time()) - cfg.dedup_window_hours * 3600
         )
-    else:
-        embed_fn = None
-        log.warning("OPENAI_API_KEY missing — deduplication disabled")
 
     async def send_dm(
         user_id: int, text: str, photo: bytes | None = None

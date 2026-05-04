@@ -478,3 +478,32 @@ def test_add_embedding_usage_accumulates(db: Database) -> None:
     db.add_embedding_usage(25)
 
     assert db.get_embedding_usage() == 75
+
+
+def test_purge_dedup_all_clears_both_tables(db: Database) -> None:
+    db.store_post_embedding(
+        channel_id=1, message_id=100, embedding=[1.0], summary="s", link="l", now=500,
+    )
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=1,
+        is_photo=False, body="b", now=500,
+    )
+
+    db.purge_dedup_all()
+
+    assert db.list_dedup_candidates(user_id=10, since=0) == []
+
+
+def test_meta_get_returns_none_when_unset(db: Database) -> None:
+    assert db.get_meta("anything") is None
+
+
+def test_meta_set_then_get_roundtrips(db: Database) -> None:
+    db.set_meta("embedding_id", "openai:text-embedding-3-small:512")
+    assert db.get_meta("embedding_id") == "openai:text-embedding-3-small:512"
+
+
+def test_meta_set_overwrites(db: Database) -> None:
+    db.set_meta("embedding_id", "v1")
+    db.set_meta("embedding_id", "v2")
+    assert db.get_meta("embedding_id") == "v2"
