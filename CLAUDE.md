@@ -172,17 +172,19 @@ Mini App via `InlineKeyboardButton(web_app=WebAppInfo(url=MINIAPP_URL))` and
 bot's burger menu launches it.
 
 `compose.yaml` ships a `caddy` (caddy:2-alpine) sidecar that reverse-proxies
-`https://$MINIAPP_DOMAIN` → `bot:8085`, with TLS certs auto-fetched/renewed
-from Let's Encrypt. Caddyfile at the repo root is just `{$MINIAPP_DOMAIN} {
+`https://$MINIAPP_DOMAIN:8443` → `bot:8085`, with TLS certs auto-fetched/renewed
+from Let's Encrypt. Caddyfile at the repo root is `{$MINIAPP_DOMAIN}:8443 {
 reverse_proxy bot:8085 }`; the domain comes from `data/.env` via
 `env_file`. Required env vars: `MINIAPP_DOMAIN` (used by Caddy) and
-`MINIAPP_URL=https://<same-domain>` (used by the bot for the WebApp button).
-Caddy needs ports 80 (ACME HTTP-01) and 443 reachable from the public
-internet. The Caddy service mounts named volumes `caddy_data` (cert
-storage) and `caddy_config`. We chose Caddy over Cloudflare's quick tunnel
-because Russian mobile carriers DPI-block `*.trycloudflare.com` while
-Telegram's in-app WebView inherits the app's bypass-tunnel routing — a
-plain VPS IP behind a regular domain bypasses both issues.
+`MINIAPP_URL=https://<same-domain>:8443` (used by the bot for the WebApp
+button). Caddy listens on host ports 80 (ACME HTTP-01) and 8443 (HTTPS).
+We use 8443 instead of 443 because the deployment host has MTProto VPN
+already on 443; Telegram Mini Apps accept non-443 HTTPS URLs. The Caddy
+service mounts named volumes `caddy_data` (cert storage) and
+`caddy_config`. We chose Caddy over Cloudflare's quick tunnel because
+Russian mobile carriers DPI-block `*.trycloudflare.com` while Telegram's
+in-app WebView inherits the app's bypass-tunnel routing — a plain VPS IP
+behind a regular domain bypasses both issues.
 
 The bot still supports `MINIAPP_URL_FILE` (poll-a-logfile-for-the-URL) as
 a second-priority discovery path — `_discover_miniapp_url` in `main.py`
