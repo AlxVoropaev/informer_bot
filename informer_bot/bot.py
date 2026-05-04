@@ -23,19 +23,21 @@ def _lang(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
     return _db(context).get_language(user_id)
 
 
-_MODE_EMOJI = {None: "⬜", "filtered": "🔀", "all": "✅"}
-_NEXT_MODE = {None: "filtered", "filtered": "all", "all": None}
+_MODE_EMOJI = {None: "⬜", "off": "⬜", "filtered": "🔀", "all": "✅"}
 
 
 def _user_keyboard(db: Database, user_id: int, lang: str) -> InlineKeyboardMarkup:
     modes = db.list_user_subscription_modes(user_id)
-    rows = [
-        [InlineKeyboardButton(
+    filters = db.list_user_subscription_filters(user_id)
+    rows: list[list[InlineKeyboardButton]] = []
+    for c in db.list_channels():
+        row = [InlineKeyboardButton(
             text=f"{_MODE_EMOJI[modes.get(c.id)]} {c.title}",
             callback_data=f"toggle:{c.id}",
-        )]
-        for c in db.list_channels()
-    ]
+        ), InlineKeyboardButton(text="✏️", callback_data=f"fedit:{c.id}")]
+        if filters.get(c.id):
+            row.append(InlineKeyboardButton(text="🗑", callback_data=f"fdel:{c.id}"))
+        rows.append(row)
     rows.append([InlineKeyboardButton(text=t(lang, "done_button"), callback_data="done")])
     return InlineKeyboardMarkup(rows)
 
@@ -160,39 +162,6 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def cmd_filter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db = _db(context)
-    user_id = update.effective_user.id
-    log.debug("/filter from user=%s", user_id)
-    lang = db.get_language(user_id)
-    if db.get_user_status(user_id) != "approved":
-        await update.message.reply_text(t(lang, "denied"))
-        return
-
-    args_text = (update.message.text or "").split(maxsplit=1)
-    filter_help = t(lang, "filter_help")
-    if len(args_text) < 2:
-        current = db.get_filter(user_id=user_id)
-        if current:
-            await update.message.reply_text(t(lang, "filter_current_header"))
-            await update.message.reply_text(current)
-            await update.message.reply_text(filter_help)
-        else:
-            await update.message.reply_text(t(lang, "filter_none", help=filter_help))
-        return
-
-    payload = args_text[1].strip()
-    if payload.lower() == "clear":
-        db.set_filter(user_id=user_id, filter_prompt=None)
-        log.info("user=%s cleared filter", user_id)
-        await update.message.reply_text(t(lang, "filter_cleared"))
-        return
-
-    db.set_filter(user_id=user_id, filter_prompt=payload)
-    log.info("user=%s updated filter (%d chars)", user_id, len(payload))
-    await update.message.reply_text(t(lang, "filter_saved", filter=payload))
-
-
 async def cmd_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     log.debug("/language from user=%s", user_id)
@@ -257,11 +226,19 @@ async def on_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     current = db.get_subscription_mode(user_id, channel_id)
-    next_mode = _NEXT_MODE[current]
-    if next_mode is None:
-        db.unsubscribe(user_id, channel_id)
+    if current in (None, "off"):
+        next_mode: str | None = "filtered"
+        db.subscribe(user_id, channel_id, mode="filtered")
+    elif current == "filtered":
+        next_mode = "all"
+        db.subscribe(user_id, channel_id, mode="all")
     else:
-        db.subscribe(user_id, channel_id, mode=next_mode)
+        if db.get_channel_filter(user_id, channel_id):
+            next_mode = "off"
+            db.subscribe(user_id, channel_id, mode="off")
+        else:
+            next_mode = None
+            db.unsubscribe(user_id, channel_id)
     log.info("user=%s channel=%s mode %s -> %s", user_id, channel_id, current, next_mode)
 
     await update.callback_query.answer()
@@ -371,6 +348,100 @@ async def on_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.callback_query.edit_message_text(
         t(actor_lang, "admin_pick_blacklist"),
         reply_markup=_admin_keyboard(db, actor_lang),
+    )
+
+
+async def on_filter_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db = _db(context)
+    user_id = update.effective_user.id
+    lang = db.get_language(user_id)
+    channel_id = int(update.callback_query.data.split(":", 1)[1])
+
+    if db.get_user_status(user_id) != "approved":
+        log.info("filter edit rejected: user=%s not approved", user_id)
+        await update.callback_query.answer(t(lang, "denied"))
+        return
+
+    title = db.get_channel_title(channel_id)
+    if title is None:
+        await update.callback_query.answer(t(lang, "channel_unavailable"))
+        return
+
+    context.user_data["awaiting_filter_for"] = channel_id
+    log.info("user=%s queued filter edit for channel=%s", user_id, channel_id)
+    await update.callback_query.answer()
+    current = db.get_channel_filter(user_id, channel_id)
+    tips = t(lang, "filter_tips")
+    if current:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=t(lang, "filter_ask_with_current", title=title),
+        )
+        await context.bot.send_message(chat_id=user_id, text=current)
+        await context.bot.send_message(chat_id=user_id, text=tips)
+    else:
+        await context.bot.send_message(
+            chat_id=user_id,
+            text=t(lang, "filter_ask", title=title, tips=tips),
+        )
+
+
+async def on_filter_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db = _db(context)
+    user_id = update.effective_user.id
+    lang = db.get_language(user_id)
+    channel_id = int(update.callback_query.data.split(":", 1)[1])
+
+    if db.get_user_status(user_id) != "approved":
+        log.info("filter delete rejected: user=%s not approved", user_id)
+        await update.callback_query.answer(t(lang, "denied"))
+        return
+
+    title = db.get_channel_title(channel_id)
+    if title is None:
+        await update.callback_query.answer(t(lang, "channel_unavailable"))
+        return
+
+    if not db.get_channel_filter(user_id, channel_id):
+        await update.callback_query.answer(t(lang, "filter_no_prompt_to_delete"))
+        return
+
+    db.set_channel_filter(user_id=user_id, channel_id=channel_id, filter_prompt=None)
+    log.info("user=%s deleted filter for channel=%s", user_id, channel_id)
+    await update.callback_query.answer(t(lang, "filter_deleted_for", title=title))
+    await update.callback_query.edit_message_text(
+        t(lang, "pick_channels"),
+        reply_markup=_user_keyboard(db, user_id, lang),
+    )
+
+
+async def on_filter_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    channel_id = context.user_data.pop("awaiting_filter_for", None)
+    if channel_id is None:
+        return
+    db = _db(context)
+    user_id = update.effective_user.id
+    lang = db.get_language(user_id)
+    if db.get_user_status(user_id) != "approved":
+        await update.message.reply_text(t(lang, "denied"))
+        return
+    title = db.get_channel_title(channel_id)
+    if title is None:
+        await update.message.reply_text(t(lang, "channel_unavailable"))
+        return
+    payload = (update.message.text or "").strip()
+    if not payload:
+        await update.message.reply_text(t(lang, "filter_no_pending"))
+        return
+    current_mode = db.get_subscription_mode(user_id, channel_id)
+    db.set_channel_filter(user_id=user_id, channel_id=channel_id, filter_prompt=payload)
+    if current_mode in (None, "off"):
+        db.subscribe(user_id, channel_id, mode="filtered")
+    log.info(
+        "user=%s set filter for channel=%s (%d chars)", user_id, channel_id, len(payload)
+    )
+    await update.message.reply_text(
+        t(lang, "filter_saved_for", title=title, filter=payload)
     )
 
 

@@ -13,8 +13,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "user_help": (
             "Commands:\n"
             "/start — request access / get started\n"
-            "/list — pick channels to follow (tap to cycle: ⬜ off → 🔀 filtered → ✅ all)\n"
-            "/filter — set a personal content filter (used in 🔀 mode); /filter alone shows it, /filter clear removes it\n"
+            "/list — pick channels to follow (tap title to cycle: ⬜ off → 🔀 filtered → ✅ all; "
+            "✏️ edits the per-channel filter, 🗑 deletes it)\n"
             "/language — switch interface language\n"
             "/usage — your token usage and estimated cost\n"
             "/help — show this message"
@@ -33,11 +33,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "refreshing": "Refreshing channel list...",
         "refresh_failed": "Refresh failed. Check logs.",
         "refresh_done": "Channel list refreshed.",
-        "filter_help": (
-            "How to use:\n"
-            "• /filter <text> — set your filter\n"
-            "• /filter clear — remove the filter (deliver everything)\n"
-            "• /filter — show your current filter\n\n"
+        "filter_tips": (
             "Tips for a good filter:\n"
             "• Write in plain language; bullets work well.\n"
             "• Split into what you want and what you don't (e.g. \"Interesting:\" / \"Not interesting:\").\n"
@@ -45,10 +41,14 @@ _STRINGS: dict[str, dict[str, str]] = {
             "• Add exceptions when a broad rule has them (\"deaths/arrests, except in IT\").\n"
             "• Any language works; the filter doesn't have to match the post language."
         ),
-        "filter_current_header": "Your current filter (copy to edit):",
-        "filter_none": "No filter set — you receive everything.\n\n{help}",
-        "filter_cleared": "Filter cleared. You will receive everything.",
-        "filter_saved": "Filter saved:\n{filter}",
+        "filter_ask": "Send your filter prompt for '{title}' as your next message.\n\n{tips}",
+        "filter_ask_with_current": (
+            "Current filter for '{title}' (copy to edit):"
+        ),
+        "filter_saved_for": "Filter saved for '{title}':\n{filter}",
+        "filter_deleted_for": "Filter for '{title}' deleted.",
+        "filter_no_pending": "No pending filter request. Tap ✏️ next to a channel in /list first.",
+        "filter_no_prompt_to_delete": "No filter set for this channel.",
         "usage_admin_header": "Usage by user (delivered):",
         "usage_admin_none": "(none yet)",
         "usage_admin_system_label": "System total (actual API spend)",
@@ -72,8 +72,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "user_help": (
             "Команды:\n"
             "/start — запросить доступ / начать\n"
-            "/list — выбрать каналы (нажми, чтобы переключить: ⬜ выкл → 🔀 фильтр → ✅ все)\n"
-            "/filter — личный фильтр контента (для режима 🔀); /filter без аргументов покажет его, /filter clear удалит\n"
+            "/list — выбрать каналы (нажми на название, чтобы переключить: ⬜ выкл → 🔀 фильтр → ✅ все; "
+            "✏️ редактирует фильтр канала, 🗑 удаляет его)\n"
             "/language — сменить язык интерфейса\n"
             "/usage — расход токенов и примерная стоимость\n"
             "/help — показать это сообщение"
@@ -92,11 +92,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "refreshing": "Обновляю список каналов...",
         "refresh_failed": "Обновление не удалось. Смотри логи.",
         "refresh_done": "Список каналов обновлён.",
-        "filter_help": (
-            "Как пользоваться:\n"
-            "• /filter <текст> — задать фильтр\n"
-            "• /filter clear — убрать фильтр (получать всё)\n"
-            "• /filter — показать текущий фильтр\n\n"
+        "filter_tips": (
             "Советы по составлению фильтра:\n"
             "• Пиши обычным языком; списки работают хорошо.\n"
             "• Раздели на интересное и неинтересное (\"Интересно:\" / \"Не интересно:\").\n"
@@ -104,10 +100,14 @@ _STRINGS: dict[str, dict[str, str]] = {
             "• Добавляй исключения, если у широкого правила они есть (\"смерти/аресты, кроме IT\").\n"
             "• Можно писать на любом языке; язык фильтра не обязан совпадать с языком поста."
         ),
-        "filter_current_header": "Текущий фильтр (скопируй, чтобы изменить):",
-        "filter_none": "Фильтр не задан — получаешь всё.\n\n{help}",
-        "filter_cleared": "Фильтр очищен. Будешь получать всё.",
-        "filter_saved": "Фильтр сохранён:\n{filter}",
+        "filter_ask": "Отправь следующим сообщением фильтр для '{title}'.\n\n{tips}",
+        "filter_ask_with_current": (
+            "Текущий фильтр для '{title}' (скопируй, чтобы изменить):"
+        ),
+        "filter_saved_for": "Фильтр для '{title}' сохранён:\n{filter}",
+        "filter_deleted_for": "Фильтр для '{title}' удалён.",
+        "filter_no_pending": "Нет ожидающего запроса фильтра. Сначала нажми ✏️ у канала в /list.",
+        "filter_no_prompt_to_delete": "Для этого канала фильтр не задан.",
         "usage_admin_header": "Расход по пользователям (доставлено):",
         "usage_admin_none": "(пока пусто)",
         "usage_admin_system_label": "Системный итог (фактический расход API)",

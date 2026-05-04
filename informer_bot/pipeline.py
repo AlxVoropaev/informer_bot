@@ -46,7 +46,7 @@ async def handle_new_post(
         if mode == "all":
             recipients.append(user_id)
             continue
-        filter_prompt = db.get_filter(user_id=user_id)
+        filter_prompt = db.get_channel_filter(user_id=user_id, channel_id=channel_id)
         if not filter_prompt:
             recipients.append(user_id)
             continue

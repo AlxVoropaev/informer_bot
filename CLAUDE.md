@@ -147,13 +147,17 @@ LOG_LEVEL=INFO             # optional, default INFO
   `bot.send_message` is used.
 - **Access gate:** new users hit `/start` and land in `users.status='pending'`; the
   bot DMs the owner an Allow/Deny inline keyboard (callbacks `approve:<id>` /
-  `deny:<id>`). Only `approved` users can use `/list`, `/filter`, `/usage`. The owner
-  is auto-approved on startup.
+  `deny:<id>`). Only `approved` users can use `/list`, `/usage`, the per-channel
+  filter buttons, and the pending-filter text capture. The owner is auto-approved
+  on startup.
 - **Storage:**
   - `channels(id, title, blacklisted)`
-  - `subscriptions(user_id, channel_id, mode)` — `mode IN ('filtered','all')`
+  - `subscriptions(user_id, channel_id, mode, filter_prompt)` —
+    `mode IN ('off','filtered','all')`. `'off'` rows are kept (instead of being
+    deleted on toggle-off) so the per-channel `filter_prompt` survives a
+    temporary disable.
   - `seen(channel_id, message_id)` — restart catch-up dedupe
-  - `users(user_id, status, username, first_name, filter_prompt, language)` —
+  - `users(user_id, status, username, first_name, language)` —
     `status IN ('pending','approved','denied')`, `language IN ('en','ru')`
   - `usage(user_id, input_tokens, output_tokens)` — per-user delivered-summary tokens
   - `system_usage(id=1, input_tokens, output_tokens)` — total API spend (incl. filter checks)
@@ -164,12 +168,22 @@ LOG_LEVEL=INFO             # optional, default INFO
 - **Bot UX:**
   - `/start` — for new users, requests admin approval (see Access gate). For approved
     users, greet + point at `/list`. For pending/denied, the appropriate notice.
-  - `/list` — inline keyboard, three-mode cycle on each row: `⬜ off → 🔀 filtered → ✅ all`,
-    callback `toggle:<channel_id>`. `🔀 filtered` runs the user's `/filter` prompt
-    against each post via `summarizer.is_relevant`; `✅ all` delivers every post. A
-    `Done` button (callback `done`) closes the keyboard. No pagination.
-  - `/filter <text>` — set personal content filter (used in `🔀` mode). `/filter` alone
-    shows the current filter; `/filter clear` removes it.
+  - `/list` — inline keyboard. Each channel row has three buttons (last one
+    conditional): the toggle button (`toggle:<channel_id>`), an ✏️ edit button
+    (`fedit:<channel_id>`), and a 🗑 delete button (`fdel:<channel_id>`, only
+    rendered when a `filter_prompt` exists for that user/channel). The toggle
+    cycles `⬜ off/None → 🔀 filtered → ✅ all → 🗑-preserved 'off' (if a
+    filter_prompt exists) or row-deleted None (if not)`. `🔀 filtered` runs the
+    per-channel filter prompt via `summarizer.is_relevant`; if no prompt is set
+    for that channel, every post passes (same as `✅ all`). A `Done` button
+    (callback `done`) closes the keyboard. No pagination.
+  - **Filter edit flow:** tapping ✏️ DMs the user the current prompt (if any)
+    plus tips and sets `context.user_data['awaiting_filter_for'] = channel_id`.
+    The next non-command text message from that user is captured by
+    `on_filter_text` and stored as the filter for that channel. If the channel
+    was previously `off` or had no row, mode is bumped to `filtered` so the new
+    filter takes effect immediately; if it was already `filtered`/`all`, mode is
+    left alone. Tapping 🗑 nulls the prompt without changing mode.
   - `/usage` — show your input/output token totals + estimated USD cost. Owner sees
     a per-user breakdown plus the system total (actual API spend, including filter checks).
   - `/language` — inline keyboard `[English] [Русский]`, callback `lang:<code>`.

@@ -6,7 +6,6 @@ import pytest
 
 from informer_bot.bot import (
     cmd_blacklist,
-    cmd_filter,
     cmd_help,
     cmd_language,
     cmd_list,
@@ -16,6 +15,9 @@ from informer_bot.bot import (
     on_blacklist,
     on_blacklist_done,
     on_deny,
+    on_filter_delete,
+    on_filter_edit,
+    on_filter_text,
     on_language,
     on_toggle,
 )
@@ -41,6 +43,7 @@ def _ctx(db: Database) -> SimpleNamespace:
     return SimpleNamespace(
         bot_data={"db": db, "owner_id": OWNER_ID},
         bot=SimpleNamespace(send_message=AsyncMock()),
+        user_data={},
     )
 
 
@@ -80,7 +83,7 @@ async def test_help_for_regular_user_lists_user_commands_only(db: Database) -> N
 
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.await_args.args[0]
-    for cmd in ("/start", "/list", "/filter", "/usage", "/help"):
+    for cmd in ("/start", "/list", "/usage", "/help"):
         assert cmd in text
     assert "/blacklist" not in text
     assert "/update" not in text
@@ -92,7 +95,7 @@ async def test_help_for_owner_includes_admin_commands(db: Database) -> None:
 
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.await_args.args[0]
-    for cmd in ("/list", "/filter", "/blacklist", "/update"):
+    for cmd in ("/list", "/blacklist", "/update"):
         assert cmd in text
 
 
@@ -256,13 +259,29 @@ async def test_list_shows_only_non_blacklisted_with_unchecked_marker(db: Databas
 
     rows = _kb_rows(update.message.reply_text.await_args.kwargs)
     flat = [btn for row in rows for btn in row]
-    titles = [text for text, _ in flat]
-    assert "BannedChan" not in " ".join(titles)
-    assert any("Alpha" in t and t.startswith("⬜") for t in titles)
-    assert any("Beta" in t and t.startswith("⬜") for t in titles)
-    toggles = [(text, data) for text, data in flat if data.startswith("toggle:")]
-    assert len(toggles) == len(flat) - 1
+    toggle_titles = [text for text, data in flat if data.startswith("toggle:")]
+    assert "BannedChan" not in " ".join(toggle_titles)
+    assert any("Alpha" in t and t.startswith("⬜") for t in toggle_titles)
+    assert any("Beta" in t and t.startswith("⬜") for t in toggle_titles)
+    toggles = [d for _, d in flat if d.startswith("toggle:")]
+    fedits = [d for _, d in flat if d.startswith("fedit:")]
+    fdels = [d for _, d in flat if d.startswith("fdel:")]
+    assert len(toggles) == 2
+    assert len(fedits) == 2
+    assert len(fdels) == 0
     assert flat[-1] == ("Done", "done")
+
+
+async def test_list_shows_delete_button_only_when_filter_exists(db: Database) -> None:
+    db.subscribe(user_id=USER_ID, channel_id=1, mode="filtered")
+    db.set_channel_filter(user_id=USER_ID, channel_id=1, filter_prompt="for A")
+    update = _msg_update(USER_ID)
+    await cmd_list(update, _ctx(db))
+
+    rows = _kb_rows(update.message.reply_text.await_args.kwargs)
+    flat = [btn for row in rows for btn in row]
+    fdels = [d for _, d in flat if d.startswith("fdel:")]
+    assert fdels == ["fdel:1"]
 
 
 async def test_list_marks_filtered_and_all_modes_distinctly(db: Database) -> None:
@@ -297,6 +316,18 @@ async def test_toggle_cycles_disabled_filtered_all_disabled(db: Database) -> Non
     await on_toggle(upd3, ctx)
     assert db.get_subscription_mode(USER_ID, 1) is None
     assert db.is_subscribed(USER_ID, 1) is False
+
+
+async def test_toggle_off_preserves_row_when_filter_set(db: Database) -> None:
+    db.subscribe(user_id=USER_ID, channel_id=1, mode="all")
+    db.set_channel_filter(user_id=USER_ID, channel_id=1, filter_prompt="keep me")
+    ctx = _ctx(db)
+
+    upd = _cb_update(USER_ID, "toggle:1")
+    await on_toggle(upd, ctx)
+
+    assert db.get_subscription_mode(USER_ID, 1) == "off"
+    assert db.get_channel_filter(USER_ID, 1) == "keep me"
 
 
 async def test_toggle_refuses_blacklisted_channel(db: Database) -> None:
@@ -449,47 +480,114 @@ async def test_usage_for_admin_shows_per_user_breakdown_and_system_total(db: Dat
     assert "75" in text and "15" in text
 
 
-# ---------- /filter ----------
+# ---------- per-channel filter (edit/delete/text) ----------
 
-async def test_filter_blocks_non_approved_user(db: Database) -> None:
+async def test_filter_edit_dms_prompt_and_queues_pending(db: Database) -> None:
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, "fedit:1")
+
+    await on_filter_edit(upd, ctx)
+
+    assert ctx.user_data["awaiting_filter_for"] == 1
+    upd.callback_query.answer.assert_awaited()
+    ctx.bot.send_message.assert_awaited()
+    last = ctx.bot.send_message.await_args_list[-1]
+    assert last.kwargs["chat_id"] == USER_ID
+    body = last.kwargs["text"]
+    assert "Alpha" in body or "Tips" in body or "tips" in body.lower()
+
+
+async def test_filter_edit_includes_existing_filter_when_set(db: Database) -> None:
+    db.subscribe(user_id=USER_ID, channel_id=1)
+    db.set_channel_filter(user_id=USER_ID, channel_id=1, filter_prompt="only AI")
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, "fedit:1")
+
+    await on_filter_edit(upd, ctx)
+
+    sent = [c.kwargs["text"] for c in ctx.bot.send_message.await_args_list]
+    assert any("only AI" in t for t in sent)
+
+
+async def test_filter_edit_blocks_non_approved_user(db: Database) -> None:
     new_user = 555
-    update = _msg_update(new_user, text="/filter only AI")
+    ctx = _ctx(db)
+    upd = _cb_update(new_user, "fedit:1")
 
-    await cmd_filter(update, _ctx(db))
+    await on_filter_edit(upd, ctx)
 
-    update.message.reply_text.assert_awaited_once()
-    text = update.message.reply_text.await_args.args[0].lower()
-    assert "not allowed" in text
-    assert db.get_filter(user_id=new_user) is None
+    assert "awaiting_filter_for" not in ctx.user_data
+    ctx.bot.send_message.assert_not_called()
 
 
-async def test_filter_bare_shows_no_filter_message_when_unset(db: Database) -> None:
-    update = _msg_update(USER_ID, text="/filter")
+async def test_filter_text_saves_prompt_and_activates_filtered(db: Database) -> None:
+    ctx = _ctx(db)
+    ctx.user_data["awaiting_filter_for"] = 1
+    update = _msg_update(USER_ID, text="only AI news")
 
-    await cmd_filter(update, _ctx(db))
+    await on_filter_text(update, ctx)
 
+    assert db.get_channel_filter(user_id=USER_ID, channel_id=1) == "only AI news"
+    assert db.get_subscription_mode(user_id=USER_ID, channel_id=1) == "filtered"
+    assert "awaiting_filter_for" not in ctx.user_data
     text = update.message.reply_text.await_args.args[0]
-    assert "No filter" in text or "no filter" in text.lower()
+    assert "only AI news" in text
 
 
-async def test_filter_set_saves_payload(db: Database) -> None:
-    update = _msg_update(USER_ID, text="/filter only AI news, no crypto")
+async def test_filter_text_preserves_all_mode(db: Database) -> None:
+    db.subscribe(user_id=USER_ID, channel_id=1, mode="all")
+    ctx = _ctx(db)
+    ctx.user_data["awaiting_filter_for"] = 1
+    update = _msg_update(USER_ID, text="only AI")
 
-    await cmd_filter(update, _ctx(db))
+    await on_filter_text(update, ctx)
 
-    assert db.get_filter(user_id=USER_ID) == "only AI news, no crypto"
-    text = update.message.reply_text.await_args.args[0]
-    assert "only AI news, no crypto" in text
+    assert db.get_channel_filter(user_id=USER_ID, channel_id=1) == "only AI"
+    assert db.get_subscription_mode(user_id=USER_ID, channel_id=1) == "all"
 
 
-async def test_filter_bare_shows_current_filter_when_set(db: Database) -> None:
-    db.set_filter(user_id=USER_ID, filter_prompt="only AI news")
-    update = _msg_update(USER_ID, text="/filter")
+async def test_filter_text_no_pending_does_nothing(db: Database) -> None:
+    ctx = _ctx(db)
+    update = _msg_update(USER_ID, text="random message")
 
-    await cmd_filter(update, _ctx(db))
+    await on_filter_text(update, ctx)
 
-    texts = [c.args[0] for c in update.message.reply_text.await_args_list]
-    assert any("only AI news" in t for t in texts)
+    update.message.reply_text.assert_not_called()
+    assert db.get_channel_filter(user_id=USER_ID, channel_id=1) is None
+
+
+async def test_filter_delete_removes_prompt_and_refreshes_keyboard(db: Database) -> None:
+    db.subscribe(user_id=USER_ID, channel_id=1, mode="filtered")
+    db.set_channel_filter(user_id=USER_ID, channel_id=1, filter_prompt="kill me")
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, "fdel:1")
+
+    await on_filter_delete(upd, ctx)
+
+    assert db.get_channel_filter(user_id=USER_ID, channel_id=1) is None
+    assert db.get_subscription_mode(user_id=USER_ID, channel_id=1) == "filtered"
+    upd.callback_query.edit_message_text.assert_awaited()
+
+
+async def test_filter_delete_no_op_when_no_filter(db: Database) -> None:
+    db.subscribe(user_id=USER_ID, channel_id=1, mode="filtered")
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, "fdel:1")
+
+    await on_filter_delete(upd, ctx)
+
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_text.assert_not_called()
+
+
+async def test_filter_delete_blocks_non_approved_user(db: Database) -> None:
+    new_user = 555
+    ctx = _ctx(db)
+    upd = _cb_update(new_user, "fdel:1")
+
+    await on_filter_delete(upd, ctx)
+
+    upd.callback_query.edit_message_text.assert_not_called()
 
 
 # ---------- /language ----------
@@ -527,12 +625,3 @@ async def test_language_affects_subsequent_replies(db: Database) -> None:
     assert text == "Выбери каналы:"
 
 
-async def test_filter_clear_removes_filter(db: Database) -> None:
-    db.set_filter(user_id=USER_ID, filter_prompt="only AI news")
-    update = _msg_update(USER_ID, text="/filter clear")
-
-    await cmd_filter(update, _ctx(db))
-
-    assert db.get_filter(user_id=USER_ID) is None
-    text = update.message.reply_text.await_args.args[0].lower()
-    assert "clear" in text or "everything" in text

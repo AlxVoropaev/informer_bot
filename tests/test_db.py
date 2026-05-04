@@ -233,25 +233,88 @@ def test_update_user_name_overwrites_username_and_first_name(db: Database) -> No
     assert db.get_user_label(user_id=10) == "@new (10)"
 
 
-def test_get_filter_returns_none_when_unset(db: Database) -> None:
-    db.add_pending_user(user_id=10, username="alice")
-    assert db.get_filter(user_id=10) is None
-    assert db.get_filter(user_id=999) is None
+def test_get_channel_filter_returns_none_when_unset(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.subscribe(user_id=10, channel_id=1)
+    assert db.get_channel_filter(user_id=10, channel_id=1) is None
+    assert db.get_channel_filter(user_id=999, channel_id=1) is None
 
 
-def test_set_filter_round_trips(db: Database) -> None:
-    db.add_pending_user(user_id=10, username="alice")
-    db.set_filter(user_id=10, filter_prompt="I want AI news, no crypto")
+def test_set_channel_filter_round_trips(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.subscribe(user_id=10, channel_id=1)
+    db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="only AI")
 
-    assert db.get_filter(user_id=10) == "I want AI news, no crypto"
+    assert db.get_channel_filter(user_id=10, channel_id=1) == "only AI"
 
 
-def test_set_filter_clear_with_none_removes_filter(db: Database) -> None:
-    db.add_pending_user(user_id=10, username="alice")
-    db.set_filter(user_id=10, filter_prompt="something")
-    db.set_filter(user_id=10, filter_prompt=None)
+def test_set_channel_filter_clear_removes_prompt(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.subscribe(user_id=10, channel_id=1)
+    db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="x")
+    db.set_channel_filter(user_id=10, channel_id=1, filter_prompt=None)
 
-    assert db.get_filter(user_id=10) is None
+    assert db.get_channel_filter(user_id=10, channel_id=1) is None
+
+
+def test_set_channel_filter_creates_off_subscription_if_missing(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="only AI")
+
+    assert db.get_channel_filter(user_id=10, channel_id=1) == "only AI"
+    assert db.get_subscription_mode(user_id=10, channel_id=1) == "off"
+
+
+def test_set_channel_filter_preserves_existing_mode(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.subscribe(user_id=10, channel_id=1, mode="all")
+    db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="x")
+
+    assert db.get_subscription_mode(user_id=10, channel_id=1) == "all"
+
+
+def test_filter_per_channel_is_isolated(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.upsert_channel(channel_id=2, title="B")
+    db.subscribe(user_id=10, channel_id=1)
+    db.subscribe(user_id=10, channel_id=2)
+    db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="for A")
+    db.set_channel_filter(user_id=10, channel_id=2, filter_prompt="for B")
+
+    assert db.get_channel_filter(user_id=10, channel_id=1) == "for A"
+    assert db.get_channel_filter(user_id=10, channel_id=2) == "for B"
+
+
+def test_subscribers_for_channel_skips_off_mode(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.subscribe(user_id=10, channel_id=1, mode="filtered")
+    db.subscribe(user_id=20, channel_id=1, mode="off")
+    db.subscribe(user_id=30, channel_id=1, mode="all")
+
+    subs = sorted(db.subscribers_for_channel(channel_id=1))
+    assert subs == [(10, "filtered"), (30, "all")]
+
+
+def test_off_mode_preserves_filter_prompt(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.subscribe(user_id=10, channel_id=1, mode="filtered")
+    db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="keep me")
+    db.subscribe(user_id=10, channel_id=1, mode="off")
+
+    assert db.get_channel_filter(user_id=10, channel_id=1) == "keep me"
+
+    db.subscribe(user_id=10, channel_id=1, mode="filtered")
+    assert db.get_channel_filter(user_id=10, channel_id=1) == "keep me"
+
+
+def test_list_user_subscription_filters(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.upsert_channel(channel_id=2, title="B")
+    db.subscribe(user_id=10, channel_id=1)
+    db.subscribe(user_id=10, channel_id=2)
+    db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="for A")
+
+    assert db.list_user_subscription_filters(user_id=10) == {1: "for A", 2: None}
 
 
 def test_get_language_defaults_to_en(db: Database) -> None:
