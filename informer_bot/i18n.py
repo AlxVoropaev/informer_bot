@@ -18,7 +18,8 @@ _STRINGS: dict[str, dict[str, str]] = {
             "✏️ edits the per-channel filter, 🗑 deletes it)\n"
             "/language — switch interface language\n"
             "/usage — your token usage and estimated cost\n"
-            "/help — show this message"
+            "/help — show this message\n\n"
+            "Need a channel added to the list? Message @alxvoropaev and I'll add it."
         ),
         "owner_help_extra": (
             "\n\nAdmin:\n"
@@ -97,7 +98,8 @@ _STRINGS: dict[str, dict[str, str]] = {
             "✏️ редактирует фильтр канала, 🗑 удаляет его)\n"
             "/language — сменить язык интерфейса\n"
             "/usage — расход токенов и примерная стоимость\n"
-            "/help — показать это сообщение"
+            "/help — показать это сообщение\n\n"
+            "Если вам нужно добавить какой-то канал в список доступных — пишите @alxvoropaev, добавлю."
         ),
         "owner_help_extra": (
             "\n\nАдмин:\n"
