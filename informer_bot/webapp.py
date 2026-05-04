@@ -10,6 +10,7 @@ import hmac
 import json
 import logging
 import time
+from collections import defaultdict, deque
 from pathlib import Path
 from urllib.parse import parse_qsl
 
@@ -23,6 +24,11 @@ log = logging.getLogger(__name__)
 
 _INITDATA_MAX_AGE = 24 * 3600  # reject initData older than 24h
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "webapp"
+
+# Per-user token bucket: 30 requests / 60s sliding window.
+_RATE_LIMIT_REQUESTS = 30
+_RATE_LIMIT_WINDOW = 60.0
+_rate_state: dict[int, deque[float]] = defaultdict(deque)
 
 
 def verify_init_data(init_data: str, bot_token: str) -> dict | None:
@@ -47,7 +53,9 @@ def verify_init_data(init_data: str, bot_token: str) -> dict | None:
     if not hmac.compare_digest(expected, received_hash):
         return None
     auth_date = pairs.get("auth_date")
-    if auth_date and int(auth_date) + _INITDATA_MAX_AGE < int(time.time()):
+    if not auth_date:
+        return None
+    if int(auth_date) + _INITDATA_MAX_AGE < int(time.time()):
         return None
     return pairs
 
@@ -62,6 +70,19 @@ def _user_from_init(parsed: dict) -> dict | None:
         return None
 
 
+def _allow_request(user_id: int, *, now: float | None = None) -> bool:
+    """Sliding-window rate limit: True if request fits, False if over limit."""
+    ts = time.monotonic() if now is None else now
+    window_start = ts - _RATE_LIMIT_WINDOW
+    bucket = _rate_state[user_id]
+    while bucket and bucket[0] < window_start:
+        bucket.popleft()
+    if len(bucket) >= _RATE_LIMIT_REQUESTS:
+        return False
+    bucket.append(ts)
+    return True
+
+
 @web.middleware
 async def _auth_middleware(request: web.Request, handler):
     if not request.path.startswith("/api/"):
@@ -74,7 +95,13 @@ async def _auth_middleware(request: web.Request, handler):
     user = _user_from_init(parsed)
     if user is None or "id" not in user:
         return web.json_response({"error": "no_user"}, status=401)
-    request["user_id"] = int(user["id"])
+    user_id = int(user["id"])
+    if not _allow_request(user_id):
+        return web.json_response({"error": "rate_limited"}, status=429)
+    db: Database = request.app["db"]
+    if db.get_user_status(user_id) != "approved":
+        return web.json_response({"error": "not_approved"}, status=403)
+    request["user_id"] = user_id
     request["tg_user"] = user
     return await handler(request)
 
@@ -100,8 +127,6 @@ async def _state(request: web.Request) -> web.Response:
     db: Database = request.app["db"]
     owner_id: int = request.app["owner_id"]
     user_id: int = request["user_id"]
-    if db.get_user_status(user_id) != "approved":
-        return web.json_response({"error": "not_approved"}, status=403)
     return web.json_response({
         "user_id": user_id,
         "language": db.get_language(user_id),
@@ -113,8 +138,6 @@ async def _state(request: web.Request) -> web.Response:
 async def _subscription(request: web.Request) -> web.Response:
     db: Database = request.app["db"]
     user_id: int = request["user_id"]
-    if db.get_user_status(user_id) != "approved":
-        return web.json_response({"error": "not_approved"}, status=403)
     body = await request.json()
     channel_id = int(body["channel_id"])
     mode = body["mode"]
@@ -133,8 +156,6 @@ async def _subscription(request: web.Request) -> web.Response:
 async def _filter(request: web.Request) -> web.Response:
     db: Database = request.app["db"]
     user_id: int = request["user_id"]
-    if db.get_user_status(user_id) != "approved":
-        return web.json_response({"error": "not_approved"}, status=403)
     body = await request.json()
     channel_id = int(body["channel_id"])
     prompt = body.get("filter_prompt")
@@ -157,8 +178,6 @@ async def _usage(request: web.Request) -> web.Response:
     db: Database = request.app["db"]
     owner_id: int = request.app["owner_id"]
     user_id: int = request["user_id"]
-    if db.get_user_status(user_id) != "approved":
-        return web.json_response({"error": "not_approved"}, status=403)
     inp, out = db.get_usage(user_id)
     payload: dict = {
         "is_owner": user_id == owner_id,
