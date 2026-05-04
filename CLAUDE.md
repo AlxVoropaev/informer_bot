@@ -145,7 +145,12 @@ WEBAPP_HOST=0.0.0.0        # optional, bind host for the Mini App server (defaul
 WEBAPP_PORT=8085           # optional, bind port for the Mini App server (default 8085)
 ```
 
-## Mini App (experimental, branch `miniapp-test`)
+## Mini App (primary user surface)
+
+The Mini App is the only place regular users manage subscriptions, filters, or
+language — there are no `/list` or `/language` Telegram commands. The bot
+keeps `/start`, `/app`, `/help`, `/usage` for users, plus admin `/blacklist`
+and `/update`. `/help` tells users to open the Mini App for everything else.
 
 When `MINIAPP_URL` is set, `main.py` boots an **aiohttp** server alongside the
 PTB application (same asyncio loop, same SQLite, no separate process). The
@@ -162,6 +167,13 @@ Endpoints:
 - `POST /api/subscription` `{channel_id, mode}` (`mode` ∈ `off|filtered|debug|all|unsubscribe`)
 - `POST /api/filter` `{channel_id, filter_prompt}` (null/empty clears)
 - `POST /api/language` `{language}`
+- `GET /api/usage` → `{is_owner, user: {input_tokens, output_tokens, cost_usd}}` — owner payload also includes `per_user[]`, `system`, `embeddings`.
+
+Deep-linking: the new-channel announcement DM (sent on `/update`) attaches a
+`web_app=WebAppInfo(url=f"{MINIAPP_URL}?channel=<id>")` button. On open,
+`webapp/app.js` reads `?channel=<id>` (and falls back to
+`tg.initDataUnsafe.start_param` matching `^channel_(\d+)$`) and auto-opens
+that channel's details view.
 
 Subscription/filter behaviour mirrors the inline-keyboard handlers — setting a
 filter on an `off`/no-row channel auto-bumps it to `filtered`, same as
@@ -220,9 +232,8 @@ cloudflared sidecar.
   `bot.send_message` is used.
 - **Access gate:** new users hit `/start` and land in `users.status='pending'`; the
   bot DMs the owner an Allow/Deny inline keyboard (callbacks `approve:<id>` /
-  `deny:<id>`). Only `approved` users can use `/list`, `/usage`, the per-channel
-  filter buttons, and the pending-filter text capture. The owner is auto-approved
-  on startup.
+  `deny:<id>`). Only `approved` users can use `/usage`, `/app`, and any Mini App
+  endpoint. The owner is auto-approved on startup.
 - **Storage:**
   - `channels(id, title, blacklisted, username, about)` — `username` and
     `about` are populated during `refresh_channels` (admin-side Telethon
@@ -257,61 +268,32 @@ cloudflared sidecar.
   user's choice is persisted in `users.language`. Summaries are NOT translated — they
   stay in the source-post language (rule above).
 - **Bot UX:**
-  - `/start` — for new users, requests admin approval (see Access gate). For approved
-    users, greet + point at `/list`. For pending/denied, the appropriate notice.
-  - `/list` — inline keyboard. Each channel takes two keyboard rows: a
-    full-width title row with the toggle button (`toggle:<channel_id>`), and
-    an icon row underneath with an ℹ️ info button (`linfo:<channel_id>`), a
-    🔗 URL button (only when `channels.username` is set, links to
-    `https://t.me/<username>`), an ✏️ edit button (`fedit:<channel_id>`),
-    and a 🗑 delete button (`fdel:<channel_id>`, only rendered when a
-    `filter_prompt` exists for that user/channel). The toggle
-    cycles `⬜ off/None → 🔀 filtered → 🐞 debug → ✅ all → 🗑-preserved 'off'
-    (if a filter_prompt exists) or row-deleted None (if not)`. `🔀 filtered`
-    runs the per-channel filter prompt via `summarizer.is_relevant`; if no
-    prompt is set for that channel, every post passes (same as `✅ all`). `🐞
-    debug` always delivers, but posts the filter would have rejected get a
-    localized `🐞 FILTERED` line prepended to the body (filter tokens are still
-    charged). A `Done` button (callback `done`) closes the keyboard. The list
-    paginates at 15 channels per page; a nav row (`◀ N/M ▶`, callbacks
-    `lpage:<n>` and `noop` for the counter button) appears only when there's
-    more than one page. The current page is held in
-    `context.user_data['list_page']` so toggle/filter-delete re-renders return
-    to the same page.
-  - **Channel details (ℹ️) flow:** tapping ℹ️ replaces the list message with a
-    details view for that channel: bold title, the author-supplied
-    `channels.about` text (or a localized "no description" placeholder), an
-    `🔗 Open in Telegram` URL button (omitted when the channel has no
-    username), the toggle button (mode emoji + verbose label, same callback
-    `toggle:<channel_id>`), `✏️ Edit filter` / `🗑 Delete filter` rows
-    (delete shown only when a filter exists), and an `⬅ Back to list`
-    button (callback `lback`) that returns to the saved list page.
-    `context.user_data['list_view']` tracks state: `"list"` (default) or
-    `("details", channel_id)`. The shared `_rerender_list_or_details` helper
-    inspects this on toggle / filter-delete callbacks so they re-render the
-    correct surface; `cmd_list` and `on_list_back` reset it to `"list"`.
-    Details view is rendered with `parse_mode="HTML"`.
-  - **Filter edit flow:** tapping ✏️ DMs the user the current prompt (if any)
-    plus tips and sets `context.user_data['awaiting_filter_for'] = channel_id`.
-    The next non-command text message from that user is captured by
-    `on_filter_text` and stored as the filter for that channel. If the channel
-    was previously `off` or had no row, mode is bumped to `filtered` so the new
-    filter takes effect immediately; if it was already `filtered`/`all`, mode is
-    left alone. Tapping 🗑 nulls the prompt without changing mode.
+  - `/start` — for new users, requests admin approval (see Access gate). For
+    approved users, greets and points at the Mini App. For pending/denied, the
+    appropriate notice.
+  - `/help` — text-only listing of available commands. Tells users to open the
+    Mini App for channel/filter/language management. Owner sees an extra admin
+    section listing `/blacklist` and `/update`.
   - `/usage` — show your input/output token totals + estimated USD cost. Owner sees
     a per-user breakdown plus the system total (actual API spend, including filter checks).
-  - `/language` — inline keyboard `[English] [Русский]`, callback `lang:<code>`.
-  - `/help` — list available commands. Owner sees an extra admin section.
+    Available both as a Telegram command and inside the Mini App
+    (`GET /api/usage`, top-bar 📊 button).
+  - `/app` — replies with an inline `🪟 Open Mini App` button
+    (`web_app=WebAppInfo(MINIAPP_URL)`). Replies with `miniapp_unconfigured` if
+    `MINIAPP_URL` is unset. Approved users only.
   - `/blacklist` (owner only) — inline keyboard of all channels incl. blacklisted,
     tap to toggle blacklist, callback `bl:<channel_id>`. `Done` button (callback
-    `bl_done`) closes the keyboard. Same 15-per-page pagination as `/list`
-    (nav callback `blpage:<n>`, page held in `context.user_data['bl_page']`).
-    Non-owners get "not allowed".
+    `bl_done`) closes the keyboard. 15-per-page pagination (nav callback
+    `blpage:<n>`, page held in `context.user_data['bl_page']`, `noop` for the
+    counter button). Non-owners get "not allowed".
   - `/update` (owner only) — refresh the channel list from the admin's Telegram
     subscriptions on demand. Non-owners get "not allowed".
-  - `/app` — replies with an inline `🪟 Open Mini App` button
-    (`web_app=WebAppInfo(MINIAPP_URL)`). Hidden if `MINIAPP_URL` is unset
-    (replies with `miniapp_unconfigured`). Approved users only.
+  - **Channel/filter/language management** lives entirely in the Mini App. The
+    list view shows mode emoji + title; tapping a row opens details with mode
+    radio buttons (off/filtered/debug/all), a filter prompt textarea (save /
+    clear), and an `🔗 Open in Telegram` link. Setting a filter from `off`
+    auto-bumps the row to `filtered` (mirrors the previous Telegram-side rule).
+    Language switcher and 📊 usage live in the top bar.
 - **Channel-list refresh:** triggered manually by the admin via `/update`
   (NOT run at startup — see catch-up note above). Calls Telethon to fetch the
   admin's current subscriptions — for each channel, also issues
@@ -320,11 +302,11 @@ cloudflared sidecar.
   unsubscribed) or becomes blacklisted, the bot DMs each affected subscriber:
   "Channel '<title>' is no longer available." When a brand-new channel id
   (not previously in `channels`) appears, every `approved` user is DM'd a
-  localized `channel_new` notice with a 3-button inline keyboard
-  (`🔀 Filtered / 🐞 Debug / ✅ All`, callback `sub:<channel_id>:<mode>`); a
-  tap subscribes in that mode and clears the keyboard. First-run guard: if
-  `channels` was empty before the refresh, no announcements are sent (avoids
-  spamming the owner with the entire initial fetch).
+  localized `channel_new` notice with a single `🪟 Open in Mini App` web-app
+  button that deep-links to `MINIAPP_URL?channel=<id>` — the Mini App auto-opens
+  that channel's details view so the user picks a mode there. The button is
+  omitted when `MINIAPP_URL` is unset. First-run guard: if `channels` was empty
+  before the refresh, no announcements are sent.
 - **Deduplication:** after summarising, the summary text is embedded once
   and compared against this user's recent `delivered` rows (last
   `DEDUP_WINDOW_HOURS`). Cosine ≥ `DEDUP_THRESHOLD` counts as a duplicate.

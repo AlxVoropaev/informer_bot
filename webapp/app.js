@@ -30,6 +30,14 @@ const I18N = {
     modes: { off: "⬜ Off", filtered: "🔀 Filtered", debug: "🐞 Debug", all: "✅ All" },
     badgeFilter: "filter set",
     badgeMode: { off: "off", filtered: "filtered", debug: "debug", all: "all" },
+    usageTitle: "Usage",
+    usageMine: "Your usage",
+    usagePerUser: "Per user (delivered)",
+    usageSystem: "System total (actual API spend)",
+    usageEmbeddings: "Embeddings",
+    usageNone: "(none yet)",
+    usageInOut: (i, o) => `in ${i.toLocaleString()} · out ${o.toLocaleString()}`,
+    usageTokens: (n) => `${n.toLocaleString()} tokens`,
   },
   ru: {
     search: "Поиск каналов…",
@@ -58,6 +66,14 @@ const I18N = {
     modes: { off: "⬜ Выкл", filtered: "🔀 Фильтр", debug: "🐞 Отладка", all: "✅ Все" },
     badgeFilter: "фильтр",
     badgeMode: { off: "выкл", filtered: "фильтр", debug: "отладка", all: "все" },
+    usageTitle: "Расход",
+    usageMine: "Твой расход",
+    usagePerUser: "По пользователям (доставлено)",
+    usageSystem: "Системный итог (фактический расход API)",
+    usageEmbeddings: "Эмбеддинги",
+    usageNone: "(пока пусто)",
+    usageInOut: (i, o) => `вход ${i.toLocaleString()} · выход ${o.toLocaleString()}`,
+    usageTokens: (n) => `${n.toLocaleString()} токенов`,
   },
 };
 
@@ -73,6 +89,8 @@ const state = {
 function t() { return I18N[state.language] || I18N.en; }
 
 function el(id) { return document.getElementById(id); }
+
+function fmtUsd(n) { return `$${(n || 0).toFixed(4)}`; }
 
 async function api(path, options = {}) {
   const initData = (tg && tg.initData) || "";
@@ -103,6 +121,8 @@ function applyLanguage() {
   el("filter-save").textContent = dict.save;
   el("filter-clear").textContent = dict.clear;
   el("details-back").textContent = dict.back;
+  el("usage-back").textContent = dict.back;
+  el("usage-title").textContent = dict.usageTitle;
   document.querySelectorAll('input[name="mode"]').forEach((input) => {
     const labelSpan = input.nextElementSibling;
     labelSpan.textContent = dict.modes[input.value];
@@ -229,6 +249,92 @@ function closeDetails() {
   }
 }
 
+function renderUsage(data) {
+  const dict = t();
+  const body = el("usage-body");
+  body.replaceChildren();
+
+  const mine = document.createElement("div");
+  mine.className = "usage-section";
+  mine.innerHTML = `<h3>${dict.usageMine}</h3>`;
+  const mineRow = document.createElement("div");
+  mineRow.className = "usage-row";
+  const u = data.user;
+  mineRow.innerHTML = `<span>${dict.usageInOut(u.input_tokens, u.output_tokens)}</span><span class="num">${fmtUsd(u.cost_usd)}</span>`;
+  mine.appendChild(mineRow);
+  body.appendChild(mine);
+
+  if (data.is_owner) {
+    const perUser = document.createElement("div");
+    perUser.className = "usage-section";
+    perUser.innerHTML = `<h3>${dict.usagePerUser}</h3>`;
+    if (!data.per_user || data.per_user.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "usage-row";
+      empty.textContent = dict.usageNone;
+      perUser.appendChild(empty);
+    } else {
+      for (const r of data.per_user) {
+        const row = document.createElement("div");
+        row.className = "usage-row";
+        row.innerHTML = `<span>${r.label} — ${dict.usageInOut(r.input_tokens, r.output_tokens)}</span><span class="num">${fmtUsd(r.cost_usd)}</span>`;
+        perUser.appendChild(row);
+      }
+    }
+    body.appendChild(perUser);
+
+    const sys = document.createElement("div");
+    sys.className = "usage-section";
+    sys.innerHTML = `<h3>${dict.usageSystem}</h3>`;
+    const sysRow = document.createElement("div");
+    sysRow.className = "usage-row";
+    const s = data.system;
+    sysRow.innerHTML = `<span>${dict.usageInOut(s.input_tokens, s.output_tokens)}</span><span class="num">${fmtUsd(s.cost_usd)}</span>`;
+    sys.appendChild(sysRow);
+    body.appendChild(sys);
+
+    const emb = document.createElement("div");
+    emb.className = "usage-section";
+    emb.innerHTML = `<h3>${dict.usageEmbeddings}</h3>`;
+    const embRow = document.createElement("div");
+    embRow.className = "usage-row";
+    const e = data.embeddings;
+    embRow.innerHTML = `<span>${dict.usageTokens(e.tokens)}</span><span class="num">${fmtUsd(e.cost_usd)}</span>`;
+    emb.appendChild(embRow);
+    body.appendChild(emb);
+  }
+}
+
+async function openUsage() {
+  el("usage").classList.remove("hidden");
+  el("usage").setAttribute("aria-hidden", "false");
+  el("list").classList.add("hidden");
+  el("search").parentElement.style.display = "none";
+  window.scrollTo(0, 0);
+  el("usage-body").innerHTML = `<div class="empty">${t().loading}</div>`;
+  if (tg && tg.BackButton) {
+    tg.BackButton.show();
+    tg.BackButton.onClick(closeUsage);
+  }
+  try {
+    const data = await api("/api/usage");
+    renderUsage(data);
+  } catch (e) {
+    el("usage-body").innerHTML = `<div class="empty">${e.message || t().network_error}</div>`;
+  }
+}
+
+function closeUsage() {
+  el("usage").classList.add("hidden");
+  el("usage").setAttribute("aria-hidden", "true");
+  el("list").classList.remove("hidden");
+  el("search").parentElement.style.display = "";
+  if (tg && tg.BackButton) {
+    tg.BackButton.offClick(closeUsage);
+    tg.BackButton.hide();
+  }
+}
+
 async function changeMode(channelId, mode) {
   try {
     const data = await api("/api/subscription", {
@@ -277,6 +383,15 @@ async function changeLanguage(code) {
   }
 }
 
+function deepLinkChannelId() {
+  const sp = (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || "";
+  const m = String(sp).match(/^channel_(-?\d+)$/);
+  if (m) return Number(m[1]);
+  const q = new URLSearchParams(window.location.search);
+  const c = q.get("channel");
+  return c ? Number(c) : null;
+}
+
 async function init() {
   if (tg) {
     tg.ready();
@@ -297,6 +412,10 @@ async function init() {
     rebuildLangSelect();
     applyLanguage();
     renderList();
+    const targetId = deepLinkChannelId();
+    if (targetId != null && state.channels.some((c) => c.id === targetId)) {
+      openDetails(targetId);
+    }
   } catch (e) {
     el("list").innerHTML = `<div class="empty">${
       e.status === 403 ? t().not_approved : (e.message || t().network_error)
@@ -309,6 +428,8 @@ async function init() {
   });
   el("lang").addEventListener("change", (ev) => changeLanguage(ev.target.value));
   el("details-back").addEventListener("click", closeDetails);
+  el("usage-btn").addEventListener("click", openUsage);
+  el("usage-back").addEventListener("click", closeUsage);
 
   document.querySelectorAll('input[name="mode"]').forEach((input) => {
     input.addEventListener("change", () => {

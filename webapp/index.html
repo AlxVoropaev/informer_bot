@@ -10,12 +10,19 @@
 <body>
   <header class="topbar">
     <input id="search" type="search" placeholder="Search channels…" autocomplete="off" />
+    <button id="usage-btn" class="icon-btn" type="button" title="Usage">📊</button>
     <select id="lang"></select>
   </header>
 
   <main id="list" class="list" aria-busy="true">
     <div class="empty" id="loading">Loading…</div>
   </main>
+
+  <section id="usage" class="details hidden" aria-hidden="true">
+    <button class="back" id="usage-back" type="button">← Back</button>
+    <h2 id="usage-title">Usage</h2>
+    <div id="usage-body"></div>
+  </section>
 
   <section id="details" class="details hidden" aria-hidden="true">
     <button class="back" id="details-back" type="button">← Back</button>

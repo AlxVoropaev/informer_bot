@@ -5,6 +5,7 @@ import logging
 import re
 import signal
 import time
+from urllib.parse import quote
 
 from openai import AsyncOpenAI
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, WebAppInfo
@@ -12,8 +13,6 @@ from telegram.ext import (
     ApplicationBuilder,
     CallbackQueryHandler,
     CommandHandler,
-    MessageHandler,
-    filters,
 )
 from telethon import TelegramClient
 
@@ -22,8 +21,6 @@ from informer_bot.bot import (
     cmd_app,
     cmd_blacklist,
     cmd_help,
-    cmd_language,
-    cmd_list,
     cmd_start,
     cmd_update,
     cmd_usage,
@@ -32,17 +29,7 @@ from informer_bot.bot import (
     on_blacklist_done,
     on_blacklist_page,
     on_deny,
-    on_done,
-    on_filter_delete,
-    on_filter_edit,
-    on_filter_text,
-    on_language,
-    on_list_back,
-    on_list_info,
-    on_list_page,
     on_noop,
-    on_subscribe,
-    on_toggle,
 )
 from informer_bot.client import (
     catch_up,
@@ -116,28 +103,16 @@ async def main() -> None:
     app.bot_data["miniapp_url"] = miniapp_url
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
-    app.add_handler(CommandHandler("list", cmd_list))
     app.add_handler(CommandHandler("app", cmd_app))
     app.add_handler(CommandHandler("blacklist", cmd_blacklist))
     app.add_handler(CommandHandler("usage", cmd_usage))
-    app.add_handler(CommandHandler("language", cmd_language))
     app.add_handler(CommandHandler("update", cmd_update))
-    app.add_handler(CallbackQueryHandler(on_toggle, pattern=r"^toggle:"))
-    app.add_handler(CallbackQueryHandler(on_done, pattern=r"^done$"))
-    app.add_handler(CallbackQueryHandler(on_filter_edit, pattern=r"^fedit:"))
-    app.add_handler(CallbackQueryHandler(on_filter_delete, pattern=r"^fdel:"))
     app.add_handler(CallbackQueryHandler(on_blacklist, pattern=r"^bl:"))
     app.add_handler(CallbackQueryHandler(on_blacklist_done, pattern=r"^bl_done$"))
-    app.add_handler(CallbackQueryHandler(on_list_page, pattern=r"^lpage:"))
-    app.add_handler(CallbackQueryHandler(on_list_info, pattern=r"^linfo:"))
-    app.add_handler(CallbackQueryHandler(on_list_back, pattern=r"^lback$"))
     app.add_handler(CallbackQueryHandler(on_blacklist_page, pattern=r"^blpage:"))
     app.add_handler(CallbackQueryHandler(on_noop, pattern=r"^noop$"))
     app.add_handler(CallbackQueryHandler(on_approve, pattern=r"^approve:"))
     app.add_handler(CallbackQueryHandler(on_deny, pattern=r"^deny:"))
-    app.add_handler(CallbackQueryHandler(on_language, pattern=r"^lang:"))
-    app.add_handler(CallbackQueryHandler(on_subscribe, pattern=r"^sub:"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_filter_text))
 
     embed_fn: EmbedFn | None = None
     embedding_id: str | None = None
@@ -229,20 +204,14 @@ async def main() -> None:
         user_id: int, channel_id: int, channel_title: str
     ) -> None:
         lang = db.get_language(user_id)
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                text=t(lang, "subscribe_filtered_button"),
-                callback_data=f"sub:{channel_id}:filtered",
-            ),
-            InlineKeyboardButton(
-                text=t(lang, "subscribe_debug_button"),
-                callback_data=f"sub:{channel_id}:debug",
-            ),
-            InlineKeyboardButton(
-                text=t(lang, "subscribe_all_button"),
-                callback_data=f"sub:{channel_id}:all",
-            ),
-        ]])
+        keyboard = None
+        if miniapp_url:
+            sep = "&" if "?" in miniapp_url else "?"
+            url = f"{miniapp_url}{sep}channel={quote(str(channel_id))}"
+            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(
+                text=t(lang, "channel_new_open_button"),
+                web_app=WebAppInfo(url=url),
+            )]])
         try:
             await app.bot.send_message(
                 chat_id=user_id,
