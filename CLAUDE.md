@@ -138,6 +138,7 @@ EMBEDDING_PROVIDER=auto    # optional: auto|openai|local|none (auto picks openai
 LOCAL_EMBEDDING_MODEL=...  # optional, fastembed model name; default intfloat/multilingual-e5-small
 DEDUP_THRESHOLD=0.85       # optional, cosine threshold for "same story"
 DEDUP_WINDOW_HOURS=48      # optional, lookback window for dedup
+CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
 ```
 
 ## Behaviour rules
@@ -145,6 +146,14 @@ DEDUP_WINDOW_HOURS=48      # optional, lookback window for dedup
 - **Channel list** = admin's currently-subscribed public channels, minus the admin's
   blacklist. Bot users pick from that list.
 - **Trigger:** new top-level posts only. Albums coalesce into one summary. Edits ignored.
+- **Restart catch-up:** at startup, after `refresh_channels`, `client.catch_up`
+  replays posts that arrived during downtime. For each channel with at least
+  one non-`off` subscriber on a non-blacklisted row, it queries Telethon
+  `iter_messages(min_id=MAX(seen.message_id), reverse=True)` and feeds each
+  message through the same `AlbumBuffer` the live handler uses. Messages older
+  than `CATCH_UP_WINDOW_HOURS` (default 48h) are dropped to bound API cost.
+  Channels with no prior `seen` rows are skipped (no full-history backfill on
+  first run for that channel).
 - **Skip rule:** posts with no text and no caption (image/video-only) are skipped — no
   summary, no DM.
 - **Summary:** one or two sentences in the *source-post* language (do not translate).
@@ -167,7 +176,8 @@ DEDUP_WINDOW_HOURS=48      # optional, lookback window for dedup
     a temporary disable. `'debug'` delivers every post but prefixes a localized
     marker (i18n key `debug_filtered_marker`, e.g. `🐞 FILTERED`) on posts the
     filter would have excluded; with no `filter_prompt` it behaves like `'all'`.
-  - `seen(channel_id, message_id)` — restart catch-up dedupe
+  - `seen(channel_id, message_id)` — restart catch-up dedupe + resume point
+    (`MAX(message_id)` per channel = where catch-up starts)
   - `users(user_id, status, username, first_name, language)` —
     `status IN ('pending','approved','denied')`, `language IN ('en','ru')`
   - `usage(user_id, input_tokens, output_tokens)` — per-user delivered-summary tokens

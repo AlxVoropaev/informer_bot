@@ -117,6 +117,44 @@ def test_mark_seen_returns_true_only_first_time(db: Database) -> None:
     assert db.mark_seen(channel_id=1, message_id=556) is True
 
 
+def test_max_seen_message_id_returns_none_when_empty(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    assert db.max_seen_message_id(channel_id=1) is None
+
+
+def test_max_seen_message_id_returns_highest(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.upsert_channel(channel_id=2, title="B")
+    db.mark_seen(channel_id=1, message_id=10)
+    db.mark_seen(channel_id=1, message_id=42)
+    db.mark_seen(channel_id=1, message_id=33)
+    db.mark_seen(channel_id=2, message_id=999)
+
+    assert db.max_seen_message_id(channel_id=1) == 42
+    assert db.max_seen_message_id(channel_id=2) == 999
+
+
+def test_channels_with_active_subscribers_excludes_off_and_blacklisted(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="On")
+    db.upsert_channel(channel_id=2, title="Off")
+    db.upsert_channel(channel_id=3, title="Banned")
+    db.upsert_channel(channel_id=4, title="NoSubs")
+    db.subscribe(user_id=10, channel_id=1, mode="filtered")
+    db.subscribe(user_id=10, channel_id=2, mode="off")
+    db.subscribe(user_id=10, channel_id=3, mode="all")
+    db.set_blacklisted(channel_id=3, blacklisted=True)
+
+    assert db.channels_with_active_subscribers() == [1]
+
+
+def test_channels_with_active_subscribers_dedupes_across_users(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="Shared")
+    db.subscribe(user_id=10, channel_id=1, mode="all")
+    db.subscribe(user_id=20, channel_id=1, mode="filtered")
+
+    assert db.channels_with_active_subscribers() == [1]
+
+
 def test_get_user_status_returns_none_for_unknown_user(db: Database) -> None:
     assert db.get_user_status(user_id=42) is None
 

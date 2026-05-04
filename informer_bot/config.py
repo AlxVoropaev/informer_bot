@@ -18,6 +18,7 @@ class Config:
     log_level: str = "INFO"
     dedup_threshold: float = 0.85
     dedup_window_hours: int = 48
+    catch_up_window_hours: int = 48
     embedding_provider: str = "auto"  # 'auto', 'openai', 'local', 'none'
     local_embedding_model: str = LOCAL_EMBED_MODEL_DEFAULT
     local_embedding_device: str = "cpu"  # 'cpu' or 'cuda' (needs fastembed-gpu)
@@ -48,6 +49,7 @@ def load_config() -> Config:
         log_level=os.environ.get("LOG_LEVEL", "INFO").upper(),
         dedup_threshold=float(os.environ.get("DEDUP_THRESHOLD", "0.85")),
         dedup_window_hours=int(os.environ.get("DEDUP_WINDOW_HOURS", "48")),
+        catch_up_window_hours=int(os.environ.get("CATCH_UP_WINDOW_HOURS", "48")),
         embedding_provider=provider,
         local_embedding_model=os.environ.get(
             "LOCAL_EMBEDDING_MODEL", LOCAL_EMBED_MODEL_DEFAULT
