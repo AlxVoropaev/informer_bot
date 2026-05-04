@@ -146,8 +146,11 @@ CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
 - **Channel list** = admin's currently-subscribed public channels, minus the admin's
   blacklist. Bot users pick from that list.
 - **Trigger:** new top-level posts only. Albums coalesce into one summary. Edits ignored.
-- **Restart catch-up:** at startup, after `refresh_channels`, `client.catch_up`
-  replays posts that arrived during downtime. For each channel with at least
+- **Restart catch-up:** at startup, `client.catch_up` replays posts that
+  arrived during downtime against the channel list already in the DB
+  (`refresh_channels` is NOT called on startup — it would issue one
+  `GetFullChannelRequest` per channel and trigger Telegram flood-wait; admin
+  must run `/update` explicitly when their subscription list changes). For each channel with at least
   one non-`off` subscriber on a non-blacklisted row, it queries Telethon
   `iter_messages(min_id=MAX(seen.message_id), reverse=True)` and feeds each
   message through the same `AlbumBuffer` the live handler uses. Messages older
@@ -254,10 +257,11 @@ CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
     Non-owners get "not allowed".
   - `/update` (owner only) — refresh the channel list from the admin's Telegram
     subscriptions on demand. Non-owners get "not allowed".
-- **Channel-list refresh:** triggered manually by the admin via `/update` (also runs
-  once at startup). Calls Telethon to fetch the admin's current subscriptions —
-  for each channel, also issues `GetFullChannelRequest` to pull the `about`
-  description — and `db.upsert_channel`s them with `(id, title, username, about)`. When a previously-active channel disappears (admin
+- **Channel-list refresh:** triggered manually by the admin via `/update`
+  (NOT run at startup — see catch-up note above). Calls Telethon to fetch the
+  admin's current subscriptions — for each channel, also issues
+  `GetFullChannelRequest` to pull the `about` description — and
+  `db.upsert_channel`s them with `(id, title, username, about)`. When a previously-active channel disappears (admin
   unsubscribed) or becomes blacklisted, the bot DMs each affected subscriber:
   "Channel '<title>' is no longer available." When a brand-new channel id
   (not previously in `channels`) appears, every `approved` user is DM'd a

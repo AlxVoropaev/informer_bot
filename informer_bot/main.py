@@ -50,7 +50,7 @@ from informer_bot.client import (
 from informer_bot.config import load_config
 from informer_bot.db import Database
 from informer_bot.i18n import t
-from informer_bot.pipeline import EditDmFn, EmbedFn, handle_new_post, refresh_channels
+from informer_bot.pipeline import EditDmFn, EmbedFn, handle_new_post
 from informer_bot.summarizer import (
     EMBED_DIMENSIONS,
     EMBED_MODEL,
@@ -239,13 +239,8 @@ async def main() -> None:
     buffer = AlbumBuffer(on_flush=on_post, delay=1.5)
     register_new_post_handler(tg, buffer)
 
-    async def fetch() -> list[tuple[int, str]]:
+    async def fetch() -> list[tuple[int, str, str | None, str | None]]:
         return await fetch_subscribed_channels(tg)
-
-    await refresh_channels(
-        fetch_fn=fetch, db=db, send_dm=send_dm,
-        announce_new_channel=announce_new_channel,
-    )
 
     app.bot_data["fetch_channels"] = fetch
     app.bot_data["send_dm"] = send_dm
