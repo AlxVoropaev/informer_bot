@@ -1,0 +1,3 @@
+{$MINIAPP_DOMAIN} {
+    reverse_proxy bot:8080
+}

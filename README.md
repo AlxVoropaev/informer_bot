@@ -112,22 +112,52 @@ Three common ways:
    ```
    Then `MINIAPP_URL=https://miniapp.example.com`.
 
-##### Auto-discovery via the cloudflared sidecar (default in `compose.yaml`)
+##### Default `compose.yaml` setup — Caddy + Let's Encrypt
 
-The bundled `compose.yaml` already runs `cloudflare/cloudflared:latest` as a
-sidecar — it starts a quick tunnel pointing at `bot:8080` and writes its log
-to a shared volume. The bot reads that log via `MINIAPP_URL_FILE` and grabs
-the latest `https://*.trycloudflare.com` URL automatically on startup. **You
-do not need to set `MINIAPP_URL` or install cloudflared on the host** — just
-`docker compose up -d` and the Mini App is ready.
+The bundled `compose.yaml` runs `caddy:2-alpine` as a reverse-proxy sidecar
+that auto-fetches and renews HTTPS certificates from Let's Encrypt. **You
+need a domain pointing at this host's public IP and ports 80 + 443 open**
+(80 is required for the ACME HTTP-01 challenge).
+
+Setup:
+1. **Get a domain.** Cheapest option: sign up for [DuckDNS](https://www.duckdns.org/)
+   (free, takes 2 minutes) and create a subdomain like
+   `informer-yourname.duckdns.org` pointing at your VPS IP. Or use any
+   domain you already control.
+2. **Add to `data/.env`:**
+   ```
+   MINIAPP_DOMAIN=informer-yourname.duckdns.org
+   MINIAPP_URL=https://informer-yourname.duckdns.org
+   ```
+3. **Open the firewall** for ports 80 and 443:
+   ```sh
+   sudo ufw allow 80/tcp && sudo ufw allow 443/tcp
+   ```
+   (Plus your cloud provider's security group, if applicable.)
+4. **Bring it up:**
+   ```sh
+   HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose up -d --build
+   docker compose logs -f caddy
+   ```
+   First boot, Caddy fetches the cert (5–30 seconds). Once you see
+   `certificate obtained successfully`, the Mini App is live at
+   `https://$MINIAPP_DOMAIN`.
+
+Why Caddy and not Cloudflare's quick tunnel? Russian mobile carriers
+DPI-block `*.trycloudflare.com`, and Telegram's in-app WebView inherits the
+Telegram app's split-tunnel bypass — so the WebView can't reach trycloudflare
+URLs even when the system browser can. A plain VPS IP behind a domain
+bypasses both problems.
 
 Caveats:
-- The URL is **anonymous and changes every time cloudflared restarts.** If
-  cloudflared restarts mid-run, restart the bot too (`docker compose restart bot`)
-  so it picks up the new URL.
-- For a stable URL, set `MINIAPP_URL=https://your-stable-host` in `data/.env`
-  (it takes precedence over the file) and remove the `cloudflared` service
-  from `compose.yaml`.
+- Don't run anything else on ports 80 / 443 on the host.
+- Free dynamic DNS subdomains (DuckDNS, FreeDNS) work fine but propagate
+  slowly the first time — wait a couple of minutes after creating the
+  record before starting Caddy.
+- For ad-hoc tunnels (still useful when you have no domain), set
+  `MINIAPP_URL_FILE=/cloudflared/cloudflared.log` and add a cloudflared
+  service back to `compose.yaml` — see the `feat: add Telegram Mini App`
+  commit in the git history for that variant.
 
 - `openai` — `text-embedding-3-small` @ 512 dims, paid (~$0.02 / 1M tokens).
 - `local` — runs the model via fastembed (ONNX, no PyTorch). Default model is

@@ -171,17 +171,25 @@ Mini App via `InlineKeyboardButton(web_app=WebAppInfo(url=MINIAPP_URL))` and
 `main.py` also calls `set_chat_menu_button(MenuButtonWebApp(...))` so the
 bot's burger menu launches it.
 
-`compose.yaml` ships a `cloudflared` sidecar (`cloudflare/cloudflared:latest`,
-`tunnel --url http://bot:8080`) that writes its log to a named volume mounted
-read-only at `/cloudflared` in the bot container. The bot reads
-`MINIAPP_URL_FILE=/cloudflared/cloudflared.log` and `_discover_miniapp_url`
-in `main.py` polls it (1 Hz, 60 s timeout) extracting the latest
-`https://*.trycloudflare.com` URL via regex — `findall(...)[-1]` so a
-cloudflared restart with a new URL still picks the fresh one. The discovered
-URL replaces `cfg.miniapp_url` for the rest of the run; if cloudflared
-restarts mid-run, the bot does NOT re-poll — restart the bot too. To use a
-stable URL instead, set `MINIAPP_URL` explicitly (takes precedence over the
-file) and remove the `cloudflared` service from compose.
+`compose.yaml` ships a `caddy` (caddy:2-alpine) sidecar that reverse-proxies
+`https://$MINIAPP_DOMAIN` → `bot:8080`, with TLS certs auto-fetched/renewed
+from Let's Encrypt. Caddyfile at the repo root is just `{$MINIAPP_DOMAIN} {
+reverse_proxy bot:8080 }`; the domain comes from `data/.env` via
+`env_file`. Required env vars: `MINIAPP_DOMAIN` (used by Caddy) and
+`MINIAPP_URL=https://<same-domain>` (used by the bot for the WebApp button).
+Caddy needs ports 80 (ACME HTTP-01) and 443 reachable from the public
+internet. The Caddy service mounts named volumes `caddy_data` (cert
+storage) and `caddy_config`. We chose Caddy over Cloudflare's quick tunnel
+because Russian mobile carriers DPI-block `*.trycloudflare.com` while
+Telegram's in-app WebView inherits the app's bypass-tunnel routing — a
+plain VPS IP behind a regular domain bypasses both issues.
+
+The bot still supports `MINIAPP_URL_FILE` (poll-a-logfile-for-the-URL) as
+a second-priority discovery path — `_discover_miniapp_url` in `main.py`
+polls 1 Hz / 60 s timeout, extracting the latest
+`https://*.trycloudflare.com` URL via regex — but it's no longer wired in
+the default compose.yaml; set the env var manually if you bring back a
+cloudflared sidecar.
 
 ## Behaviour rules
 

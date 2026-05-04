@@ -9,12 +9,8 @@ services:
     environment:
       FASTEMBED_CACHE_PATH: /app/data/fastembed_cache
       HF_HOME: /app/data/huggingface
-      MINIAPP_URL_FILE: /cloudflared/cloudflared.log
     volumes:
       - ./data:/app/data
-      - cloudflared_state:/cloudflared:ro
-    depends_on:
-      - cloudflared
     restart: unless-stopped
     stop_grace_period: 30s
     logging:
@@ -24,14 +20,19 @@ services:
         max-file: "10"
         compress: "true"
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    user: "0:0"  # root: needed so cloudflared can create the logfile in the named volume
-    command: >
-      tunnel --no-autoupdate --url http://bot:8080
-      --logfile /shared/cloudflared.log --loglevel info
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"     # required by Let's Encrypt HTTP-01 challenge
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    env_file: ./data/.env
     volumes:
-      - cloudflared_state:/shared
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - bot
     restart: unless-stopped
     logging:
       driver: json-file
@@ -40,4 +41,5 @@ services:
         max-file: "3"
 
 volumes:
-  cloudflared_state:
+  caddy_data:
+  caddy_config:
