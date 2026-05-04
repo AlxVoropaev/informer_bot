@@ -142,7 +142,7 @@ CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
 MINIAPP_URL=               # optional, public HTTPS URL of the Mini App; enables /app, the burger-menu launcher, and the in-process aiohttp server
 MINIAPP_URL_FILE=          # optional, path to a file (typically the cloudflared logfile) the bot polls at startup to extract a https://*.trycloudflare.com URL; ignored if MINIAPP_URL is set
 WEBAPP_HOST=0.0.0.0        # optional, bind host for the Mini App server (default 0.0.0.0)
-WEBAPP_PORT=8080           # optional, bind port for the Mini App server (default 8080)
+WEBAPP_PORT=8085           # optional, bind port for the Mini App server (default 8085)
 ```
 
 ## Mini App (experimental, branch `miniapp-test`)
@@ -172,9 +172,9 @@ Mini App via `InlineKeyboardButton(web_app=WebAppInfo(url=MINIAPP_URL))` and
 bot's burger menu launches it.
 
 `compose.yaml` ships a `caddy` (caddy:2-alpine) sidecar that reverse-proxies
-`https://$MINIAPP_DOMAIN` → `bot:8080`, with TLS certs auto-fetched/renewed
+`https://$MINIAPP_DOMAIN` → `bot:8085`, with TLS certs auto-fetched/renewed
 from Let's Encrypt. Caddyfile at the repo root is just `{$MINIAPP_DOMAIN} {
-reverse_proxy bot:8080 }`; the domain comes from `data/.env` via
+reverse_proxy bot:8085 }`; the domain comes from `data/.env` via
 `env_file`. Required env vars: `MINIAPP_DOMAIN` (used by Caddy) and
 `MINIAPP_URL=https://<same-domain>` (used by the bot for the WebApp button).
 Caddy needs ports 80 (ACME HTTP-01) and 443 reachable from the public
