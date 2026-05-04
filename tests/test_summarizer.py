@@ -50,7 +50,7 @@ async def test_summarize_calls_haiku_with_system_prompt_and_user_text(
     kwargs = fake_client.messages.create.await_args.kwargs
     assert kwargs["model"] == "claude-haiku-4-5"
     assert isinstance(kwargs["max_tokens"], int) and kwargs["max_tokens"] > 0
-    assert "single-sentence" in kwargs["system"].lower()
+    assert "one or two sentences" in kwargs["system"].lower()
     assert "language of the post" in kwargs["system"].lower()
     assert kwargs["messages"] == [{"role": "user", "content": "Post body here"}]
 
