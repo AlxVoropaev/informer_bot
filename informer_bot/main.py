@@ -28,12 +28,15 @@ from informer_bot.bot import (
     on_approve,
     on_blacklist,
     on_blacklist_done,
+    on_blacklist_page,
     on_deny,
     on_done,
     on_filter_delete,
     on_filter_edit,
     on_filter_text,
     on_language,
+    on_list_page,
+    on_noop,
     on_subscribe,
     on_toggle,
 )
@@ -88,6 +91,9 @@ async def main() -> None:
     app.add_handler(CallbackQueryHandler(on_filter_delete, pattern=r"^fdel:"))
     app.add_handler(CallbackQueryHandler(on_blacklist, pattern=r"^bl:"))
     app.add_handler(CallbackQueryHandler(on_blacklist_done, pattern=r"^bl_done$"))
+    app.add_handler(CallbackQueryHandler(on_list_page, pattern=r"^lpage:"))
+    app.add_handler(CallbackQueryHandler(on_blacklist_page, pattern=r"^blpage:"))
+    app.add_handler(CallbackQueryHandler(on_noop, pattern=r"^noop$"))
     app.add_handler(CallbackQueryHandler(on_approve, pattern=r"^approve:"))
     app.add_handler(CallbackQueryHandler(on_deny, pattern=r"^deny:"))
     app.add_handler(CallbackQueryHandler(on_language, pattern=r"^lang:"))
