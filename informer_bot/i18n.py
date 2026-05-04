@@ -13,12 +13,18 @@ _STRINGS: dict[str, dict[str, str]] = {
         "user_help": (
             "Commands:\n"
             "/start — request access / get started\n"
-            "/list — pick channels to follow (tap title to cycle: ⬜ off → 🔀 filtered → 🐞 debug → ✅ all; "
-            "ℹ️ shows the channel description, 🔗 opens the channel in Telegram, "
-            "✏️ edits the per-channel filter, 🗑 deletes it)\n"
+            "/list — pick channels to follow. Tap a channel title to cycle delivery mode: "
+            "⬜ off → 🔀 filtered → 🐞 debug → ✅ all.\n"
             "/language — switch interface language\n"
             "/usage — your token usage and estimated cost\n"
             "/help — show this message\n\n"
+            "Per-channel filters\n"
+            "Each channel can have its own filter prompt (plain-language rules for what you want to see).\n"
+            "  • ✏️ on a /list row — set or edit the filter (the bot asks for your prompt as the next message).\n"
+            "  • 🗑 — delete the filter (kept hidden until you've set one).\n"
+            "  • 🔀 filtered — only posts matching the filter are delivered. No filter set = same as ✅ all.\n"
+            "  • 🐞 debug — every post is delivered, but ones the filter would have rejected are prefixed with 🐞 FILTERED so you can tune the prompt.\n"
+            "Setting a filter from ⬜ off auto-switches the channel to 🔀 filtered.\n\n"
             "Need a channel added to the list? Message @alxvoropaev and I'll add it."
         ),
         "owner_help_extra": (
@@ -93,12 +99,18 @@ _STRINGS: dict[str, dict[str, str]] = {
         "user_help": (
             "Команды:\n"
             "/start — запросить доступ / начать\n"
-            "/list — выбрать каналы (нажми на название, чтобы переключить: ⬜ выкл → 🔀 фильтр → 🐞 отладка → ✅ все; "
-            "ℹ️ показывает описание канала, 🔗 открывает канал в Telegram, "
-            "✏️ редактирует фильтр канала, 🗑 удаляет его)\n"
+            "/list — выбрать каналы. Нажми на название канала, чтобы переключить режим доставки: "
+            "⬜ выкл → 🔀 фильтр → 🐞 отладка → ✅ все.\n"
             "/language — сменить язык интерфейса\n"
             "/usage — расход токенов и примерная стоимость\n"
             "/help — показать это сообщение\n\n"
+            "Фильтры для каналов\n"
+            "У каждого канала может быть свой фильтр — обычным языком опиши, что тебе интересно.\n"
+            "  • ✏️ в строке /list — задать или изменить фильтр (бот попросит прислать промпт следующим сообщением).\n"
+            "  • 🗑 — удалить фильтр (показывается, только если он установлен).\n"
+            "  • 🔀 фильтр — приходят только посты, прошедшие фильтр. Если фильтр не задан — то же, что ✅ все.\n"
+            "  • 🐞 отладка — приходят все посты, но отфильтрованные помечаются префиксом 🐞 FILTERED — удобно, чтобы подкрутить промпт.\n"
+            "Если задать фильтр в режиме ⬜ выкл, канал автоматически переключится в 🔀 фильтр.\n\n"
             "Если вам нужно добавить какой-то канал в список доступных — пишите @alxvoropaev, добавлю."
         ),
         "owner_help_extra": (
