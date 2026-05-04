@@ -10,6 +10,7 @@ dependencies = [
     "openai>=1.50",
     "python-dotenv>=1.0",
     "fastembed>=0.4",
+    "numpy<2",
 ]
 
 [dependency-groups]
