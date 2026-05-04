@@ -13,6 +13,11 @@ services:
       - ./data:/app/data
     restart: unless-stopped
     stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 8085), 2)"]
+      interval: 10s
+      retries: 6
+      start_period: 30s
     logging:
       driver: json-file
       options:
@@ -31,7 +36,8 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - bot
+      bot:
+        condition: service_healthy
     restart: unless-stopped
     logging:
       driver: json-file
