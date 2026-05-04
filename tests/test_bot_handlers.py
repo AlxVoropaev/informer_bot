@@ -14,11 +14,14 @@ from informer_bot.bot import (
     on_approve,
     on_blacklist,
     on_blacklist_done,
+    on_blacklist_page,
     on_deny,
     on_filter_delete,
     on_filter_edit,
     on_filter_text,
     on_language,
+    on_list_page,
+    on_noop,
     on_toggle,
 )
 from informer_bot.db import Database
@@ -65,6 +68,7 @@ def _cb_update(user_id: int, data: str) -> SimpleNamespace:
             data=data,
             answer=AsyncMock(),
             edit_message_text=AsyncMock(),
+            edit_message_reply_markup=AsyncMock(),
         ),
     )
 
@@ -629,3 +633,120 @@ async def test_language_affects_subsequent_replies(db: Database) -> None:
     assert text == "Выбери каналы:"
 
 
+# ---------- pagination ----------
+
+def _seed_many_channels(db: Database, count: int, prefix: str = "Ch") -> None:
+    for i in range(count):
+        db.upsert_channel(channel_id=1000 + i, title=f"{prefix}{i:02d}")
+
+
+async def test_list_first_page_caps_at_15_and_shows_next_only(db: Database) -> None:
+    _seed_many_channels(db, 18)  # plus the 2 non-blacklisted from fixture = 20 visible
+    update = _msg_update(USER_ID)
+    await cmd_list(update, _ctx(db))
+
+    rows = _kb_rows(update.message.reply_text.await_args.kwargs)
+    toggles = [d for row in rows for _, d in row if d.startswith("toggle:")]
+    assert len(toggles) == 15
+    flat = [btn for row in rows for btn in row]
+    nav_pairs = [(t, d) for t, d in flat if d == "noop" or d.startswith("lpage:")]
+    assert nav_pairs == [("1/2", "noop"), ("▶", "lpage:1")]
+
+
+async def test_list_second_page_shows_remainder_and_prev_only(db: Database) -> None:
+    _seed_many_channels(db, 18)
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, "lpage:1")
+
+    await on_list_page(upd, ctx)
+
+    assert ctx.user_data["list_page"] == 1
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_reply_markup.assert_awaited_once()
+    markup = upd.callback_query.edit_message_reply_markup.await_args.kwargs["reply_markup"]
+    rows = [[(b.text, b.callback_data) for b in row] for row in markup.inline_keyboard]
+    toggles = [d for row in rows for _, d in row if d.startswith("toggle:")]
+    assert len(toggles) == 5  # 20 - 15
+    flat = [btn for row in rows for btn in row]
+    nav_pairs = [(t, d) for t, d in flat if d == "noop" or d.startswith("lpage:")]
+    assert nav_pairs == [("◀", "lpage:0"), ("2/2", "noop")]
+
+
+async def test_list_no_pagination_when_under_threshold(db: Database) -> None:
+    update = _msg_update(USER_ID)
+    await cmd_list(update, _ctx(db))
+
+    rows = _kb_rows(update.message.reply_text.await_args.kwargs)
+    flat = [btn for row in rows for btn in row]
+    assert not any(d.startswith("lpage:") or d == "noop" for _, d in flat)
+
+
+async def test_list_page_blocks_non_approved_user(db: Database) -> None:
+    _seed_many_channels(db, 18)
+    new_user = 555
+    ctx = _ctx(db)
+    upd = _cb_update(new_user, "lpage:1")
+
+    await on_list_page(upd, ctx)
+
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_reply_markup.assert_not_called()
+
+
+async def test_toggle_preserves_page_position(db: Database) -> None:
+    _seed_many_channels(db, 18)
+    ctx = _ctx(db)
+    ctx.user_data["list_page"] = 1
+    target_id = 1015  # 16th channel; in fixture order, will be on page 2
+
+    upd = _cb_update(USER_ID, f"toggle:{target_id}")
+    await on_toggle(upd, ctx)
+
+    markup = upd.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
+    rows = [[(b.text, b.callback_data) for b in row] for row in markup.inline_keyboard]
+    flat = [btn for row in rows for btn in row]
+    nav_pairs = [(t, d) for t, d in flat if d == "noop" or d.startswith("lpage:")]
+    assert ("2/2", "noop") in nav_pairs
+
+
+async def test_blacklist_paginates_for_owner(db: Database) -> None:
+    _seed_many_channels(db, 18)
+    update = _msg_update(OWNER_ID)
+    await cmd_blacklist(update, _ctx(db))
+
+    rows = _kb_rows(update.message.reply_text.await_args.kwargs)
+    bl_toggles = [d for row in rows for _, d in row if d.startswith("bl:")]
+    assert len(bl_toggles) == 15
+    flat = [btn for row in rows for btn in row]
+    nav_pairs = [(t, d) for t, d in flat if d == "noop" or d.startswith("blpage:")]
+    assert nav_pairs == [("1/2", "noop"), ("▶", "blpage:1")]
+
+
+async def test_blacklist_page_callback_advances_for_owner(db: Database) -> None:
+    _seed_many_channels(db, 18)
+    ctx = _ctx(db)
+    upd = _cb_update(OWNER_ID, "blpage:1")
+
+    await on_blacklist_page(upd, ctx)
+
+    assert ctx.user_data["bl_page"] == 1
+    upd.callback_query.edit_message_reply_markup.assert_awaited_once()
+
+
+async def test_blacklist_page_callback_denies_non_owner(db: Database) -> None:
+    _seed_many_channels(db, 18)
+    upd = _cb_update(USER_ID, "blpage:1")
+
+    await on_blacklist_page(upd, _ctx(db))
+
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_reply_markup.assert_not_called()
+
+
+async def test_noop_callback_just_answers(db: Database) -> None:
+    upd = _cb_update(USER_ID, "noop")
+    await on_noop(upd, _ctx(db))
+
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_text.assert_not_called()
+    upd.callback_query.edit_message_reply_markup.assert_not_called()

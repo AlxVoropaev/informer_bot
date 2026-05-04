@@ -25,12 +25,36 @@ def _lang(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
 
 _MODE_EMOJI = {None: "⬜", "off": "⬜", "filtered": "🔀", "debug": "🐞", "all": "✅"}
 
+_PAGE_SIZE = 15
 
-def _user_keyboard(db: Database, user_id: int, lang: str) -> InlineKeyboardMarkup:
+
+def _paginate(items: list, page: int) -> tuple[list, int, int]:
+    total_pages = max(1, (len(items) + _PAGE_SIZE - 1) // _PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))
+    start = page * _PAGE_SIZE
+    return items[start:start + _PAGE_SIZE], page, total_pages
+
+
+def _nav_row(page: int, total_pages: int, prefix: str) -> list[InlineKeyboardButton] | None:
+    if total_pages <= 1:
+        return None
+    row: list[InlineKeyboardButton] = []
+    if page > 0:
+        row.append(InlineKeyboardButton(text="◀", callback_data=f"{prefix}:{page - 1}"))
+    row.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
+    if page < total_pages - 1:
+        row.append(InlineKeyboardButton(text="▶", callback_data=f"{prefix}:{page + 1}"))
+    return row
+
+
+def _user_keyboard(
+    db: Database, user_id: int, lang: str, page: int = 0
+) -> InlineKeyboardMarkup:
     modes = db.list_user_subscription_modes(user_id)
     filters = db.list_user_subscription_filters(user_id)
+    page_items, _page, total_pages = _paginate(db.list_channels(), page)
     rows: list[list[InlineKeyboardButton]] = []
-    for c in db.list_channels():
+    for c in page_items:
         row = [InlineKeyboardButton(
             text=f"{_MODE_EMOJI[modes.get(c.id)]} {c.title}",
             callback_data=f"toggle:{c.id}",
@@ -38,18 +62,29 @@ def _user_keyboard(db: Database, user_id: int, lang: str) -> InlineKeyboardMarku
         if filters.get(c.id):
             row.append(InlineKeyboardButton(text="🗑", callback_data=f"fdel:{c.id}"))
         rows.append(row)
+    nav = _nav_row(_page, total_pages, "lpage")
+    if nav:
+        rows.append(nav)
     rows.append([InlineKeyboardButton(text=t(lang, "done_button"), callback_data="done")])
     return InlineKeyboardMarkup(rows)
 
 
-def _admin_keyboard(db: Database, lang: str) -> InlineKeyboardMarkup:
-    rows = [
+def _admin_keyboard(
+    db: Database, lang: str, page: int = 0
+) -> InlineKeyboardMarkup:
+    page_items, _page, total_pages = _paginate(
+        db.list_channels(include_blacklisted=True), page
+    )
+    rows: list[list[InlineKeyboardButton]] = [
         [InlineKeyboardButton(
             text=f"{'⛔' if c.blacklisted else '✅'} {c.title}",
             callback_data=f"bl:{c.id}",
         )]
-        for c in db.list_channels(include_blacklisted=True)
+        for c in page_items
     ]
+    nav = _nav_row(_page, total_pages, "blpage")
+    if nav:
+        rows.append(nav)
     rows.append([InlineKeyboardButton(text=t(lang, "done_button"), callback_data="bl_done")])
     return InlineKeyboardMarkup(rows)
 
@@ -121,9 +156,10 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if db.get_user_status(user_id) != "approved":
         await update.message.reply_text(t(lang, "denied"))
         return
+    context.user_data["list_page"] = 0
     await update.message.reply_text(
         t(lang, "pick_channels"),
-        reply_markup=_user_keyboard(db, user_id, lang),
+        reply_markup=_user_keyboard(db, user_id, lang, page=0),
     )
 
 
@@ -210,9 +246,10 @@ async def cmd_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text(t(lang, "denied"))
         return
     log.debug("/blacklist from owner=%s", user_id)
+    context.user_data["bl_page"] = 0
     await update.message.reply_text(
         t(lang, "admin_pick_blacklist"),
-        reply_markup=_admin_keyboard(_db(context), lang),
+        reply_markup=_admin_keyboard(_db(context), lang, page=0),
     )
 
 
@@ -255,7 +292,9 @@ async def on_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.callback_query.answer()
     await update.callback_query.edit_message_text(
         t(lang, "pick_channels"),
-        reply_markup=_user_keyboard(db, user_id, lang),
+        reply_markup=_user_keyboard(
+            db, user_id, lang, page=context.user_data.get("list_page", 0)
+        ),
     )
 
 
@@ -277,6 +316,40 @@ async def on_blacklist_done(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     log.debug("/blacklist done by owner=%s", user_id)
     await update.callback_query.answer()
     await update.callback_query.edit_message_text(t(lang, "blacklist_closed"))
+
+
+async def on_list_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db = _db(context)
+    user_id = update.effective_user.id
+    lang = db.get_language(user_id)
+    if db.get_user_status(user_id) != "approved":
+        await update.callback_query.answer(t(lang, "denied"))
+        return
+    page = int(update.callback_query.data.split(":", 1)[1])
+    context.user_data["list_page"] = page
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_reply_markup(
+        reply_markup=_user_keyboard(db, user_id, lang, page=page),
+    )
+
+
+async def on_blacklist_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db = _db(context)
+    user_id = update.effective_user.id
+    lang = db.get_language(user_id)
+    if user_id != _owner_id(context):
+        await update.callback_query.answer(t(lang, "denied"))
+        return
+    page = int(update.callback_query.data.split(":", 1)[1])
+    context.user_data["bl_page"] = page
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_reply_markup(
+        reply_markup=_admin_keyboard(db, lang, page=page),
+    )
+
+
+async def on_noop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.callback_query.answer()
 
 
 async def on_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -358,7 +431,9 @@ async def on_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.callback_query.answer()
     await update.callback_query.edit_message_text(
         t(actor_lang, "admin_pick_blacklist"),
-        reply_markup=_admin_keyboard(db, actor_lang),
+        reply_markup=_admin_keyboard(
+            db, actor_lang, page=context.user_data.get("bl_page", 0)
+        ),
     )
 
 
@@ -422,7 +497,9 @@ async def on_filter_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.callback_query.answer(t(lang, "filter_deleted_for", title=title))
     await update.callback_query.edit_message_text(
         t(lang, "pick_channels"),
-        reply_markup=_user_keyboard(db, user_id, lang),
+        reply_markup=_user_keyboard(
+            db, user_id, lang, page=context.user_data.get("list_page", 0)
+        ),
     )
 
 
