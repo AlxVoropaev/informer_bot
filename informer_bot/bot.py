@@ -56,17 +56,17 @@ def _user_keyboard(
     page_items, _page, total_pages = _paginate(db.list_channels(), page)
     rows: list[list[InlineKeyboardButton]] = []
     for c in page_items:
-        row = [
-            InlineKeyboardButton(
-                text=f"{_MODE_EMOJI[modes.get(c.id)]} {c.title}",
-                callback_data=f"toggle:{c.id}",
-            ),
+        rows.append([InlineKeyboardButton(
+            text=f"{_MODE_EMOJI[modes.get(c.id)]} {c.title}",
+            callback_data=f"toggle:{c.id}",
+        )])
+        icon_row = [
             InlineKeyboardButton(text="ℹ️", callback_data=f"linfo:{c.id}"),
             InlineKeyboardButton(text="✏️", callback_data=f"fedit:{c.id}"),
         ]
         if filters.get(c.id):
-            row.append(InlineKeyboardButton(text="🗑", callback_data=f"fdel:{c.id}"))
-        rows.append(row)
+            icon_row.append(InlineKeyboardButton(text="🗑", callback_data=f"fdel:{c.id}"))
+        rows.append(icon_row)
     nav = _nav_row(_page, total_pages, "lpage")
     if nav:
         rows.append(nav)
