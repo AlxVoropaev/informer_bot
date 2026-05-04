@@ -11,8 +11,8 @@ log = logging.getLogger(__name__)
 MODEL = "claude-haiku-4-5"
 EMBED_MODEL = "text-embedding-3-small"
 EMBED_DIMENSIONS = 512
-LOCAL_EMBED_MODEL_DEFAULT = "intfloat/multilingual-e5-small"
-LOCAL_EMBED_DIMENSIONS = 384
+LOCAL_EMBED_MODEL_DEFAULT = "intfloat/multilingual-e5-large"
+LOCAL_EMBED_DIMENSIONS = 1024
 MAX_TOKENS = 256
 SYSTEM_PROMPT = (
     "You summarize Telegram channel posts. "
@@ -133,44 +133,28 @@ async def embed_summary(
 
 
 class LocalEmbedder:
-    """fastembed-based embedder; runs ONNX on CPU, no token cost."""
+    """fastembed-based embedder; runs ONNX on CPU or GPU, no token cost."""
 
-    def __init__(self, model_name: str = LOCAL_EMBED_MODEL_DEFAULT) -> None:
+    def __init__(
+        self,
+        model_name: str = LOCAL_EMBED_MODEL_DEFAULT,
+        device: str = "cpu",
+    ) -> None:
         from fastembed import TextEmbedding
 
         self.model_name = model_name
         self._needs_e5_prefix = "e5" in model_name.lower()
-        self._maybe_register_default(model_name)
-        log.info("local embedder: loading %s", model_name)
+        kwargs: dict = {"model_name": model_name}
+        if device == "cuda":
+            # Requires the fastembed-gpu package (onnxruntime-gpu).
+            kwargs["providers"] = ["CUDAExecutionProvider"]
+        else:
+            kwargs["threads"] = 1
+        log.info("local embedder: loading %s on %s", model_name, device)
         t0 = time.perf_counter()
-        self._model = TextEmbedding(model_name=model_name, threads=1)
+        self._model = TextEmbedding(**kwargs)
         log.info(
             "local embedder: loaded %s in %.2fs", model_name, time.perf_counter() - t0
-        )
-
-    @staticmethod
-    def _maybe_register_default(model_name: str) -> None:
-        # fastembed's built-in mirror for the multilingual MiniLM is currently
-        # broken; the maintainers recommend add_custom_model with a direct HF
-        # source. We pre-register our default e5-small model the same way so
-        # users get a reliable download out of the box.
-        if model_name != LOCAL_EMBED_MODEL_DEFAULT:
-            return
-        from fastembed import TextEmbedding
-        from fastembed.common.model_description import ModelSource, PoolingType
-
-        if any(
-            m["model"] == model_name for m in TextEmbedding.list_supported_models()
-        ):
-            return
-        TextEmbedding.add_custom_model(
-            model=model_name,
-            pooling=PoolingType.MEAN,
-            normalization=True,
-            sources=ModelSource(hf=model_name),
-            dim=LOCAL_EMBED_DIMENSIONS,
-            # INT8-quantized variant: ~118MB instead of 470MB, faster on CPU.
-            model_file="onnx/model_qint8_avx512_vnni.onnx",
         )
 
     def _embed_sync(self, text: str) -> list[float]:

@@ -20,6 +20,7 @@ class Config:
     dedup_window_hours: int = 48
     embedding_provider: str = "auto"  # 'auto', 'openai', 'local', 'none'
     local_embedding_model: str = LOCAL_EMBED_MODEL_DEFAULT
+    local_embedding_device: str = "cpu"  # 'cpu' or 'cuda' (needs fastembed-gpu)
 
 
 def load_config() -> Config:
@@ -30,6 +31,11 @@ def load_config() -> Config:
     if provider not in {"auto", "openai", "local", "none"}:
         raise SystemExit(
             f"EMBEDDING_PROVIDER must be one of auto/openai/local/none, got {provider!r}"
+        )
+    device = os.environ.get("LOCAL_EMBEDDING_DEVICE", "cpu").lower()
+    if device not in {"cpu", "cuda"}:
+        raise SystemExit(
+            f"LOCAL_EMBEDDING_DEVICE must be cpu or cuda, got {device!r}"
         )
     return Config(
         telegram_api_id=int(os.environ["TELEGRAM_API_ID"]),
@@ -46,4 +52,5 @@ def load_config() -> Config:
         local_embedding_model=os.environ.get(
             "LOCAL_EMBEDDING_MODEL", LOCAL_EMBED_MODEL_DEFAULT
         ),
+        local_embedding_device=device,
     )

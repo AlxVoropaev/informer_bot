@@ -60,6 +60,38 @@ Requirements: Python 3.12, [uv](https://docs.astral.sh/uv/), and a Telegram acco
    - `OPENAI_API_KEY` — *optional*, from [platform.openai.com](https://platform.openai.com). Used for summary embeddings (dedup); cost is negligible (~$0.02 per million tokens with `text-embedding-3-small`). If you leave it blank, the bot starts fine — deduplication is just disabled, and the owner gets a one-time DM at startup saying so.
    - `OWNER_ID` — your numeric Telegram user ID (ask [@userinfobot](https://t.me/userinfobot)).
 
+#### Embedding provider (deduplication)
+
+Optional, controls how summary embeddings for dedup are computed:
+
+| Var | Values | Default | Notes |
+| --- | --- | --- | --- |
+| `EMBEDDING_PROVIDER` | `auto` \| `openai` \| `local` \| `none` | `auto` | `auto` picks `openai` if `OPENAI_API_KEY` is set, otherwise `none`. |
+| `LOCAL_EMBEDDING_MODEL` | any [fastembed](https://github.com/qdrant/fastembed) model name | `intfloat/multilingual-e5-large` | Only used when provider is `local`. |
+| `LOCAL_EMBEDDING_DEVICE` | `cpu` \| `cuda` | `cpu` | `cuda` requires installing `fastembed-gpu` instead of `fastembed`. |
+| `DEDUP_THRESHOLD` | float 0..1 | `0.85` | Cosine similarity at or above which two posts count as the same story. |
+| `DEDUP_WINDOW_HOURS` | int | `48` | How far back to look for duplicates per user. |
+
+- `openai` — `text-embedding-3-small` @ 512 dims, paid (~$0.02 / 1M tokens).
+- `local` — runs the model via fastembed (ONNX, no PyTorch). Default model is
+  `intfloat/multilingual-e5-large` (~2.2 GB on disk, 1024 dims, top-tier
+  multilingual quality including Russian).
+  - **CPU:** budget ~3 GB RAM at steady state. Tiny VPS hosts (≤1 GB RAM, no
+    swap) will OOM-kill the process silently mid-load — if you see the bot
+    looping after `local embedder: loading ...` with no error, fall back to
+    `openai` or `none`. For a smaller-footprint CPU run, override
+    `LOCAL_EMBEDDING_MODEL=intfloat/multilingual-e5-small` (~120 MB, 384 dims).
+  - **GPU:** set `LOCAL_EMBEDDING_DEVICE=cuda` and swap the dependency from
+    `fastembed` to `fastembed-gpu` (`uv add fastembed-gpu`). The container
+    image needs CUDA available and the `nvidia` runtime configured.
+  - The model cache is persisted under `data/fastembed_cache/` so it survives
+    container restarts.
+- `none` — disable dedup entirely; owner gets a one-time DM at startup.
+
+Switching between providers (or between local model names) is safe — on the
+next startup the bot detects the change and wipes the dedup index, since
+embedding spaces aren't comparable across models.
+
 3. **Configure `.env`** (lives in `data/` so it's bind-mounted into the container, not baked into the image)
    ```sh
    cp data/.env.example data/.env
