@@ -14,6 +14,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Commands:\n"
             "/start — request access / get started\n"
             "/list — pick channels to follow (tap title to cycle: ⬜ off → 🔀 filtered → 🐞 debug → ✅ all; "
+            "ℹ️ shows the channel description and link, "
             "✏️ edits the per-channel filter, 🗑 deletes it)\n"
             "/language — switch interface language\n"
             "/usage — your token usage and estimated cost\n"
@@ -71,6 +72,15 @@ _STRINGS: dict[str, dict[str, str]] = {
         "debug_filtered_marker": "🐞 FILTERED",
         "debug_duplicate_marker": "🔁 DUPLICATE",
         "dedup_disabled_notice": "⚠️ Deduplication disabled: OPENAI_API_KEY is not set.",
+        "channel_details_no_description": "<i>No description.</i>",
+        "channel_details_open_button": "🔗 Open in Telegram",
+        "channel_details_back_button": "⬅ Back to list",
+        "channel_details_toggle_off": "⬜ Off — tap to subscribe",
+        "channel_details_toggle_filtered": "🔀 Filtered — tap to cycle",
+        "channel_details_toggle_debug": "🐞 Debug — tap to cycle",
+        "channel_details_toggle_all": "✅ All — tap to cycle",
+        "channel_details_edit_filter_button": "✏️ Edit filter",
+        "channel_details_delete_filter_button": "🗑 Delete filter",
     },
     "ru": {
         "greeting": "Привет, я informer. Используй /list, чтобы выбрать каналы. /help — все команды.",
@@ -83,6 +93,7 @@ _STRINGS: dict[str, dict[str, str]] = {
             "Команды:\n"
             "/start — запросить доступ / начать\n"
             "/list — выбрать каналы (нажми на название, чтобы переключить: ⬜ выкл → 🔀 фильтр → 🐞 отладка → ✅ все; "
+            "ℹ️ показывает описание канала и ссылку, "
             "✏️ редактирует фильтр канала, 🗑 удаляет его)\n"
             "/language — сменить язык интерфейса\n"
             "/usage — расход токенов и примерная стоимость\n"
@@ -140,6 +151,15 @@ _STRINGS: dict[str, dict[str, str]] = {
         "debug_filtered_marker": "🐞 ОТФИЛЬТРОВАНО",
         "debug_duplicate_marker": "🔁 ДУБЛЬ",
         "dedup_disabled_notice": "⚠️ Дедупликация отключена: OPENAI_API_KEY не задан.",
+        "channel_details_no_description": "<i>Описание отсутствует.</i>",
+        "channel_details_open_button": "🔗 Открыть в Telegram",
+        "channel_details_back_button": "⬅ К списку",
+        "channel_details_toggle_off": "⬜ Выкл — нажми, чтобы подписаться",
+        "channel_details_toggle_filtered": "🔀 Фильтр — нажми, чтобы переключить",
+        "channel_details_toggle_debug": "🐞 Отладка — нажми, чтобы переключить",
+        "channel_details_toggle_all": "✅ Все — нажми, чтобы переключить",
+        "channel_details_edit_filter_button": "✏️ Редактировать фильтр",
+        "channel_details_delete_filter_button": "🗑 Удалить фильтр",
     },
 }
 

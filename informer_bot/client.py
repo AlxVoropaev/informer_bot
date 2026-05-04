@@ -2,6 +2,7 @@ import logging
 import time
 
 from telethon import TelegramClient, events
+from telethon.tl.functions.channels import GetFullChannelRequest
 from telethon.tl.types import Channel
 
 from informer_bot.album import AlbumBuffer
@@ -10,13 +11,24 @@ from informer_bot.db import Database
 log = logging.getLogger(__name__)
 
 
-async def fetch_subscribed_channels(tg: TelegramClient) -> list[tuple[int, str]]:
-    out: list[tuple[int, str]] = []
+async def fetch_subscribed_channels(
+    tg: TelegramClient,
+) -> list[tuple[int, str, str, str | None]]:
+    out: list[tuple[int, str, str, str | None]] = []
     async for dialog in tg.iter_dialogs():
         entity = dialog.entity
         if isinstance(entity, Channel) and entity.broadcast and entity.username:
-            out.append((entity.id, entity.title))
-            log.debug("subscribed channel: id=%s @%s '%s'", entity.id, entity.username, entity.title)
+            try:
+                full = await tg(GetFullChannelRequest(entity))
+                about = full.full_chat.about or None
+            except Exception:
+                log.exception("fetch about failed for channel=%s", entity.id)
+                about = None
+            out.append((entity.id, entity.title, entity.username, about))
+            log.debug(
+                "subscribed channel: id=%s @%s '%s' about_chars=%s",
+                entity.id, entity.username, entity.title, len(about) if about else 0,
+            )
     log.info("fetched %d subscribed channel(s) from telethon", len(out))
     return out
 

@@ -35,6 +35,8 @@ from informer_bot.bot import (
     on_filter_edit,
     on_filter_text,
     on_language,
+    on_list_back,
+    on_list_info,
     on_list_page,
     on_noop,
     on_subscribe,
@@ -92,6 +94,8 @@ async def main() -> None:
     app.add_handler(CallbackQueryHandler(on_blacklist, pattern=r"^bl:"))
     app.add_handler(CallbackQueryHandler(on_blacklist_done, pattern=r"^bl_done$"))
     app.add_handler(CallbackQueryHandler(on_list_page, pattern=r"^lpage:"))
+    app.add_handler(CallbackQueryHandler(on_list_info, pattern=r"^linfo:"))
+    app.add_handler(CallbackQueryHandler(on_list_back, pattern=r"^lback$"))
     app.add_handler(CallbackQueryHandler(on_blacklist_page, pattern=r"^blpage:"))
     app.add_handler(CallbackQueryHandler(on_noop, pattern=r"^noop$"))
     app.add_handler(CallbackQueryHandler(on_approve, pattern=r"^approve:"))

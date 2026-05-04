@@ -11,11 +11,12 @@ A Telegram bot that summarises posts from public channels and DMs you a short br
 ## Commands
 
 - `/start` — request access. New users wait for the admin to approve; once approved you're pointed at `/list`.
-- `/list` — show the available channels. Each row has the channel button and an ✏️ edit button (plus 🗑 when a filter is set). Tap the channel name to cycle delivery modes:
+- `/list` — show the available channels. Each row has the channel button, an ℹ️ info button, and an ✏️ edit button (plus 🗑 when a filter is set). Tap the channel name to cycle delivery modes:
   - ⬜ — off (you don't get posts from this channel; saved filter is preserved)
   - 🔀 — filtered (only posts matching this channel's filter are delivered)
   - 🐞 — debug (every post is delivered, but ones the filter would have rejected are prefixed with `🐞 FILTERED`)
   - ✅ — all (every post is delivered)
+  Tap ℹ️ to see the channel's description (from the channel author) and a 🔗 link that opens the channel in Telegram, so you can evaluate it before subscribing — toggle / edit-filter / delete-filter all work from the details view too, and `⬅ Back to list` returns to the same page.
   Tap ✏️ to set or update the filter prompt for that one channel — the bot asks you to send the prompt as your next message. Tap 🗑 to delete it. Filters are stored per channel; setting a filter from "off" automatically activates 🔀 for that channel.
 - `/usage` — show your token usage and estimated cost.
 - `/language` — switch interface language (English / Русский).

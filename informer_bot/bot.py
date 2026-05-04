@@ -1,3 +1,4 @@
+import html
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -55,10 +56,14 @@ def _user_keyboard(
     page_items, _page, total_pages = _paginate(db.list_channels(), page)
     rows: list[list[InlineKeyboardButton]] = []
     for c in page_items:
-        row = [InlineKeyboardButton(
-            text=f"{_MODE_EMOJI[modes.get(c.id)]} {c.title}",
-            callback_data=f"toggle:{c.id}",
-        ), InlineKeyboardButton(text="✏️", callback_data=f"fedit:{c.id}")]
+        row = [
+            InlineKeyboardButton(
+                text=f"{_MODE_EMOJI[modes.get(c.id)]} {c.title}",
+                callback_data=f"toggle:{c.id}",
+            ),
+            InlineKeyboardButton(text="ℹ️", callback_data=f"linfo:{c.id}"),
+            InlineKeyboardButton(text="✏️", callback_data=f"fedit:{c.id}"),
+        ]
         if filters.get(c.id):
             row.append(InlineKeyboardButton(text="🗑", callback_data=f"fdel:{c.id}"))
         rows.append(row)
@@ -67,6 +72,79 @@ def _user_keyboard(
         rows.append(nav)
     rows.append([InlineKeyboardButton(text=t(lang, "done_button"), callback_data="done")])
     return InlineKeyboardMarkup(rows)
+
+
+_DETAILS_TOGGLE_KEY = {
+    None: "channel_details_toggle_off",
+    "off": "channel_details_toggle_off",
+    "filtered": "channel_details_toggle_filtered",
+    "debug": "channel_details_toggle_debug",
+    "all": "channel_details_toggle_all",
+}
+
+
+def _details_view(
+    db: Database, user_id: int, lang: str, channel_id: int
+) -> tuple[str, InlineKeyboardMarkup]:
+    channel = db.get_channel(channel_id)
+    title = channel.title if channel else ""
+    username = channel.username if channel else None
+    about = channel.about if channel else None
+    mode = db.get_subscription_mode(user_id, channel_id)
+    has_filter = bool(db.get_channel_filter(user_id, channel_id))
+
+    title_html = f"<b>{html.escape(title)}</b>"
+    description = html.escape(about) if about else t(lang, "channel_details_no_description")
+    text = f"{title_html}\n\n{description}"
+
+    rows: list[list[InlineKeyboardButton]] = []
+    if username:
+        rows.append([InlineKeyboardButton(
+            text=t(lang, "channel_details_open_button"),
+            url=f"https://t.me/{username}",
+        )])
+    rows.append([InlineKeyboardButton(
+        text=t(lang, _DETAILS_TOGGLE_KEY[mode]),
+        callback_data=f"toggle:{channel_id}",
+    )])
+    edit_row = [InlineKeyboardButton(
+        text=t(lang, "channel_details_edit_filter_button"),
+        callback_data=f"fedit:{channel_id}",
+    )]
+    if has_filter:
+        edit_row.append(InlineKeyboardButton(
+            text=t(lang, "channel_details_delete_filter_button"),
+            callback_data=f"fdel:{channel_id}",
+        ))
+    rows.append(edit_row)
+    rows.append([InlineKeyboardButton(
+        text=t(lang, "channel_details_back_button"),
+        callback_data="lback",
+    )])
+    return text, InlineKeyboardMarkup(rows)
+
+
+async def _rerender_list_or_details(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    db: Database,
+    user_id: int,
+    lang: str,
+) -> None:
+    view = context.user_data.get("list_view", "list")
+    if isinstance(view, tuple) and view[0] == "details":
+        text, kb = _details_view(db, user_id, lang, view[1])
+        await update.callback_query.edit_message_text(
+            text, reply_markup=kb,
+            parse_mode="HTML", disable_web_page_preview=True,
+        )
+        return
+    await update.callback_query.edit_message_text(
+        t(lang, "pick_channels"),
+        reply_markup=_user_keyboard(
+            db, user_id, lang, page=context.user_data.get("list_page", 0)
+        ),
+    )
 
 
 def _admin_keyboard(
@@ -157,6 +235,7 @@ async def cmd_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(t(lang, "denied"))
         return
     context.user_data["list_page"] = 0
+    context.user_data["list_view"] = "list"
     await update.message.reply_text(
         t(lang, "pick_channels"),
         reply_markup=_user_keyboard(db, user_id, lang, page=0),
@@ -290,12 +369,7 @@ async def on_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     log.info("user=%s channel=%s mode %s -> %s", user_id, channel_id, current, next_mode)
 
     await update.callback_query.answer()
-    await update.callback_query.edit_message_text(
-        t(lang, "pick_channels"),
-        reply_markup=_user_keyboard(
-            db, user_id, lang, page=context.user_data.get("list_page", 0)
-        ),
-    )
+    await _rerender_list_or_details(update, context, db, user_id, lang)
 
 
 async def on_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -327,9 +401,47 @@ async def on_list_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     page = int(update.callback_query.data.split(":", 1)[1])
     context.user_data["list_page"] = page
+    context.user_data["list_view"] = "list"
     await update.callback_query.answer()
     await update.callback_query.edit_message_reply_markup(
         reply_markup=_user_keyboard(db, user_id, lang, page=page),
+    )
+
+
+async def on_list_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db = _db(context)
+    user_id = update.effective_user.id
+    lang = db.get_language(user_id)
+    if db.get_user_status(user_id) != "approved":
+        await update.callback_query.answer(t(lang, "denied"))
+        return
+    channel_id = int(update.callback_query.data.split(":", 1)[1])
+    if db.get_channel(channel_id) is None:
+        await update.callback_query.answer(t(lang, "channel_unavailable"))
+        return
+    context.user_data["list_view"] = ("details", channel_id)
+    text, kb = _details_view(db, user_id, lang, channel_id)
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text(
+        text, reply_markup=kb,
+        parse_mode="HTML", disable_web_page_preview=True,
+    )
+
+
+async def on_list_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db = _db(context)
+    user_id = update.effective_user.id
+    lang = db.get_language(user_id)
+    if db.get_user_status(user_id) != "approved":
+        await update.callback_query.answer(t(lang, "denied"))
+        return
+    context.user_data["list_view"] = "list"
+    await update.callback_query.answer()
+    await update.callback_query.edit_message_text(
+        t(lang, "pick_channels"),
+        reply_markup=_user_keyboard(
+            db, user_id, lang, page=context.user_data.get("list_page", 0)
+        ),
     )
 
 
@@ -495,12 +607,7 @@ async def on_filter_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     db.set_channel_filter(user_id=user_id, channel_id=channel_id, filter_prompt=None)
     log.info("user=%s deleted filter for channel=%s", user_id, channel_id)
     await update.callback_query.answer(t(lang, "filter_deleted_for", title=title))
-    await update.callback_query.edit_message_text(
-        t(lang, "pick_channels"),
-        reply_markup=_user_keyboard(
-            db, user_id, lang, page=context.user_data.get("list_page", 0)
-        ),
-    )
+    await _rerender_list_or_details(update, context, db, user_id, lang)
 
 
 async def on_filter_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

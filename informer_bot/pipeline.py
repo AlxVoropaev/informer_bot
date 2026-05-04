@@ -15,7 +15,7 @@ IsRelevantFn = Callable[[str, str], Awaitable[RelevanceCheck]]
 SendDmFn = Callable[..., Awaitable[int | None]]
 EditDmFn = Callable[[int, int, list[tuple[str, str]]], Awaitable[None]]
 EmbedFn = Callable[[str], Awaitable[Embedding]]
-FetchChannelsFn = Callable[[], Awaitable[list[tuple[int, str]]]]
+FetchChannelsFn = Callable[[], Awaitable[list[tuple[int, str, str | None, str | None]]]]
 AnnounceNewChannelFn = Callable[[int, int, str], Awaitable[None]]
 
 
@@ -188,18 +188,20 @@ async def refresh_channels(
     announce_new_channel: AnnounceNewChannelFn | None = None,
 ) -> None:
     fresh = await fetch_fn()
-    fresh_ids = {channel_id for channel_id, _ in fresh}
+    fresh_ids = {tup[0] for tup in fresh}
     log.debug("refresh: %d fresh channel(s) from telethon", len(fresh))
 
     known_before_ids = {c.id for c in db.list_channels(include_blacklisted=True)}
     new_channels: list[tuple[int, str]] = (
-        [(cid, title) for cid, title in fresh if cid not in known_before_ids]
+        [(tup[0], tup[1]) for tup in fresh if tup[0] not in known_before_ids]
         if known_before_ids
         else []
     )
 
-    for channel_id, title in fresh:
-        db.upsert_channel(channel_id=channel_id, title=title)
+    for channel_id, title, username, about in fresh:
+        db.upsert_channel(
+            channel_id=channel_id, title=title, username=username, about=about,
+        )
 
     removed = 0
     notified = 0
