@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from informer_bot.bot import (
+    BotState,
     cmd_app,
     cmd_blacklist,
     cmd_help,
@@ -36,8 +37,16 @@ def db(tmp_path: Path) -> Database:
 
 
 def _ctx(db: Database, miniapp_url: str | None = None) -> SimpleNamespace:
+    state = BotState(
+        db=db,
+        owner_id=OWNER_ID,
+        miniapp_url=miniapp_url,
+        fetch_channels=AsyncMock(),
+        send_dm=AsyncMock(),
+        announce_new_channel=None,
+    )
     return SimpleNamespace(
-        bot_data={"db": db, "owner_id": OWNER_ID, "miniapp_url": miniapp_url},
+        bot_data={"state": state},
         bot=SimpleNamespace(send_message=AsyncMock()),
         user_data={},
     )
