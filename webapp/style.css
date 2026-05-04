@@ -142,7 +142,7 @@ body {
 .details {
   padding: 16px;
 }
-.details.hidden { display: none; }
+.hidden { display: none !important; }
 
 .details .back {
   background: none;
