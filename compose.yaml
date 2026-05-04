@@ -26,6 +26,7 @@ services:
 
   cloudflared:
     image: cloudflare/cloudflared:latest
+    user: "0:0"  # root: needed so cloudflared can create the logfile in the named volume
     command: >
       tunnel --no-autoupdate --url http://bot:8080
       --logfile /shared/cloudflared.log --loglevel info
