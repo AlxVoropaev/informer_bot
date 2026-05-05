@@ -4,6 +4,8 @@ import sqlite3
 import struct
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -138,15 +140,55 @@ def unpack_vector(blob: bytes) -> list[float]:
     return list(struct.unpack(f"{n}f", blob))
 
 
+def format_user_label(
+    user_id: int, username: str | None, first_name: str | None
+) -> str:
+    if username:
+        return f"@{username} ({user_id})"
+    if first_name:
+        return f"{first_name} ({user_id})"
+    return f"({user_id})"
+
+
 class Database:
     def __init__(self, path: Path | str) -> None:
-        self._lock = threading.Lock()
+        # RLock so transaction() can hold the lock while mutating methods
+        # re-acquire it on the same thread.
+        self._lock = threading.RLock()
         self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._in_transaction = False
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
         self._migrate()
         self._conn.commit()
         log.debug("opened sqlite at %s", path)
+
+    def _commit(self) -> None:
+        # Defer to transaction() when one is active so multi-step
+        # business operations stay atomic.
+        if not self._in_transaction:
+            self._conn.commit()
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """Run multiple mutating methods atomically.
+
+        Nested calls are flat (the inner `with` reuses the outer transaction).
+        On exception the whole block is rolled back.
+        """
+        with self._lock:
+            if self._in_transaction:
+                yield
+                return
+            self._in_transaction = True
+            try:
+                yield
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
+            finally:
+                self._in_transaction = False
 
     def _bootstrap_schema_version(self) -> int:
         """Detect how far the schema has already been migrated for legacy DBs
@@ -213,7 +255,7 @@ class Database:
                 "about = COALESCE(excluded.about, channels.about)",
                 (channel_id, title, username, about),
             )
-            self._conn.commit()
+            self._commit()
         log.debug(
             "upsert_channel id=%s title=%r username=%r about_chars=%s",
             channel_id, title, username, len(about) if about else 0,
@@ -225,7 +267,7 @@ class Database:
                 "UPDATE channels SET blacklisted = ? WHERE id = ?",
                 (1 if blacklisted else 0, channel_id),
             )
-            self._conn.commit()
+            self._commit()
         log.debug("set_blacklisted id=%s blacklisted=%s", channel_id, blacklisted)
 
     def get_channel_title(self, channel_id: int) -> str | None:
@@ -269,7 +311,7 @@ class Database:
                 "ON CONFLICT(user_id, channel_id) DO UPDATE SET mode = excluded.mode",
                 (user_id, channel_id, mode),
             )
-            self._conn.commit()
+            self._commit()
 
     def unsubscribe(self, user_id: int, channel_id: int) -> None:
         with self._lock:
@@ -277,7 +319,7 @@ class Database:
                 "DELETE FROM subscriptions WHERE user_id = ? AND channel_id = ?",
                 (user_id, channel_id),
             )
-            self._conn.commit()
+            self._commit()
 
     def is_subscribed(self, user_id: int, channel_id: int) -> bool:
         with self._lock:
@@ -321,7 +363,7 @@ class Database:
         with self._lock:
             self._conn.execute("DELETE FROM subscriptions WHERE channel_id = ?", (channel_id,))
             self._conn.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
-            self._conn.commit()
+            self._commit()
         log.debug("delete_channel id=%s", channel_id)
 
     def get_user_status(self, user_id: int) -> str | None:
@@ -343,7 +385,7 @@ class Database:
                 "first_name = COALESCE(excluded.first_name, users.first_name)",
                 (user_id, username, first_name),
             )
-            self._conn.commit()
+            self._commit()
         log.debug(
             "add_pending_user user=%s username=%r first_name=%r",
             user_id, username, first_name,
@@ -356,7 +398,7 @@ class Database:
                 "ON CONFLICT(user_id) DO UPDATE SET status = excluded.status",
                 (user_id, status),
             )
-            self._conn.commit()
+            self._commit()
         log.debug("set_user_status user=%s status=%s", user_id, status)
 
     def list_user_ids(self) -> list[int]:
@@ -380,7 +422,7 @@ class Database:
                 "UPDATE users SET username = ?, first_name = ? WHERE user_id = ?",
                 (username, first_name, user_id),
             )
-            self._conn.commit()
+            self._commit()
         log.debug(
             "update_user_name user=%s username=%r first_name=%r",
             user_id, username, first_name,
@@ -393,11 +435,7 @@ class Database:
             ).fetchone()
         username = row[0] if row else None
         first_name = row[1] if row else None
-        if username:
-            return f"@{username} ({user_id})"
-        if first_name:
-            return f"{first_name} ({user_id})"
-        return f"({user_id})"
+        return format_user_label(user_id, username, first_name)
 
     def get_channel_filter(self, user_id: int, channel_id: int) -> str | None:
         with self._lock:
@@ -417,7 +455,7 @@ class Database:
                 "ON CONFLICT(user_id, channel_id) DO UPDATE SET filter_prompt = excluded.filter_prompt",
                 (user_id, channel_id, filter_prompt),
             )
-            self._conn.commit()
+            self._commit()
         log.debug(
             "set_channel_filter user=%s channel=%s len=%s",
             user_id, channel_id, len(filter_prompt) if filter_prompt else 0,
@@ -447,7 +485,7 @@ class Database:
                 "ON CONFLICT(user_id) DO UPDATE SET language = excluded.language",
                 (user_id, language),
             )
-            self._conn.commit()
+            self._commit()
         log.debug("set_language user=%s language=%s", user_id, language)
 
     def add_usage(self, user_id: int, input_tokens: int, output_tokens: int) -> None:
@@ -459,7 +497,7 @@ class Database:
                 "output_tokens = usage.output_tokens + excluded.output_tokens",
                 (user_id, input_tokens, output_tokens),
             )
-            self._conn.commit()
+            self._commit()
 
     def get_usage(self, user_id: int) -> tuple[int, int]:
         with self._lock:
@@ -469,23 +507,21 @@ class Database:
             ).fetchone()
         return (row[0], row[1]) if row else (0, 0)
 
-    def list_all_usage(self) -> list[tuple[int, str, int, int]]:
+    def list_all_usage(
+        self,
+    ) -> list[tuple[int, str | None, str | None, int, int]]:
+        """Return raw `(user_id, username, first_name, input_tokens, output_tokens)`
+        rows. Use `format_user_label` to render a display label."""
         with self._lock:
             rows = self._conn.execute(
                 "SELECT u.user_id, usr.username, usr.first_name, u.input_tokens, u.output_tokens "
                 "FROM usage u LEFT JOIN users usr ON usr.user_id = u.user_id "
                 "ORDER BY u.user_id"
             ).fetchall()
-        out: list[tuple[int, str, int, int]] = []
-        for user_id, username, first_name, inp, output in rows:
-            if username:
-                label = f"@{username} ({user_id})"
-            elif first_name:
-                label = f"{first_name} ({user_id})"
-            else:
-                label = f"({user_id})"
-            out.append((user_id, label, inp, output))
-        return out
+        return [
+            (user_id, username, first_name, inp, output)
+            for user_id, username, first_name, inp, output in rows
+        ]
 
     def add_system_usage(self, input_tokens: int, output_tokens: int) -> None:
         with self._lock:
@@ -496,7 +532,7 @@ class Database:
                 "WHERE id = 1",
                 (input_tokens, output_tokens),
             )
-            self._conn.commit()
+            self._commit()
 
     def get_system_usage(self) -> tuple[int, int]:
         with self._lock:
@@ -511,7 +547,7 @@ class Database:
                 "INSERT OR IGNORE INTO seen (channel_id, message_id) VALUES (?, ?)",
                 (channel_id, message_id),
             )
-            self._conn.commit()
+            self._commit()
             return cursor.rowcount == 1
 
     def max_seen_message_id(self, channel_id: int) -> int | None:
@@ -553,7 +589,7 @@ class Database:
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (channel_id, message_id, ts, pack_vector(embedding), summary, link),
             )
-            self._conn.commit()
+            self._commit()
 
     def record_delivered(
         self,
@@ -574,7 +610,7 @@ class Database:
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (user_id, channel_id, message_id, bot_message_id, 1 if is_photo else 0, body, ts),
             )
-            self._conn.commit()
+            self._commit()
 
     def get_delivered_dup_links(
         self, *, user_id: int, channel_id: int, message_id: int
@@ -603,7 +639,7 @@ class Database:
                 "WHERE user_id = ? AND channel_id = ? AND message_id = ?",
                 (json.dumps(dup_links), user_id, channel_id, message_id),
             )
-            self._conn.commit()
+            self._commit()
 
     def list_dedup_candidates(
         self, *, user_id: int, since: int
@@ -633,13 +669,13 @@ class Database:
         with self._lock:
             self._conn.execute("DELETE FROM delivered WHERE created_at < ?", (cutoff,))
             self._conn.execute("DELETE FROM post_embeddings WHERE created_at < ?", (cutoff,))
-            self._conn.commit()
+            self._commit()
 
     def purge_dedup_all(self) -> None:
         with self._lock:
             self._conn.execute("DELETE FROM delivered")
             self._conn.execute("DELETE FROM post_embeddings")
-            self._conn.commit()
+            self._commit()
         log.info("purged all delivered + post_embeddings rows")
 
     def get_meta(self, key: str) -> str | None:
@@ -656,7 +692,7 @@ class Database:
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (key, value),
             )
-            self._conn.commit()
+            self._commit()
 
     def add_embedding_usage(self, tokens: int) -> None:
         with self._lock:
@@ -664,7 +700,7 @@ class Database:
                 "UPDATE embedding_usage SET tokens = tokens + ? WHERE id = 1",
                 (tokens,),
             )
-            self._conn.commit()
+            self._commit()
 
     def get_embedding_usage(self) -> int:
         with self._lock:

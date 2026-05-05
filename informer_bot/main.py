@@ -266,6 +266,7 @@ async def main() -> None:
 
     await app.initialize()
     await app.start()
+    assert app.updater is not None
     await app.updater.start_polling()
 
     webapp_runner = None
@@ -348,6 +349,7 @@ async def graceful_shutdown(
     for task in tasks:
         with contextlib.suppress(asyncio.CancelledError):
             await task
+    assert app.updater is not None
     await app.updater.stop()
     await app.stop()
     await app.shutdown()

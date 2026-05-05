@@ -28,5 +28,9 @@ dev = [
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
+[[tool.mypy.overrides]]
+module = ["telethon.*"]
+ignore_missing_imports = true
+
 [tool.uv]
 package = false

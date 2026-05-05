@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from informer_bot.db import Database
+from informer_bot.db import Database, format_user_label
 
 
 @pytest.fixture
@@ -226,7 +226,7 @@ def test_add_system_usage_accumulates(db: Database) -> None:
     assert db.get_system_usage() == (150, 30)
 
 
-def test_list_all_usage_returns_label_and_tokens(db: Database) -> None:
+def test_list_all_usage_returns_raw_fields(db: Database) -> None:
     db.add_pending_user(user_id=10, username="alice", first_name="Alice")
     db.add_pending_user(user_id=20, username=None, first_name="Bob")
     db.add_pending_user(user_id=30, username=None, first_name=None)
@@ -234,18 +234,30 @@ def test_list_all_usage_returns_label_and_tokens(db: Database) -> None:
     db.add_usage(user_id=20, input_tokens=50, output_tokens=10)
     db.add_usage(user_id=30, input_tokens=25, output_tokens=5)
 
-    rows = {uid: (label, inp, out) for uid, label, inp, out in db.list_all_usage()}
+    rows = {
+        uid: (username, first_name, inp, out)
+        for uid, username, first_name, inp, out in db.list_all_usage()
+    }
 
-    assert rows[10] == ("@alice (10)", 100, 20)
-    assert rows[20] == ("Bob (20)", 50, 10)
-    assert rows[30] == ("(30)", 25, 5)
+    assert rows[10] == ("alice", "Alice", 100, 20)
+    assert rows[20] == (None, "Bob", 50, 10)
+    assert rows[30] == (None, None, 25, 5)
 
 
 def test_list_all_usage_includes_users_without_user_row(db: Database) -> None:
     db.add_usage(user_id=99, input_tokens=10, output_tokens=2)
 
-    rows = {uid: (label, inp, out) for uid, label, inp, out in db.list_all_usage()}
-    assert rows[99] == ("(99)", 10, 2)
+    rows = {
+        uid: (username, first_name, inp, out)
+        for uid, username, first_name, inp, out in db.list_all_usage()
+    }
+    assert rows[99] == (None, None, 10, 2)
+
+
+def test_format_user_label_renders_username_first_name_and_fallback() -> None:
+    assert format_user_label(10, "alice", "Alice") == "@alice (10)"
+    assert format_user_label(20, None, "Bob") == "Bob (20)"
+    assert format_user_label(30, None, None) == "(30)"
 
 
 def test_add_pending_user_stores_first_name(db: Database) -> None:
@@ -545,3 +557,39 @@ def test_meta_set_overwrites(db: Database) -> None:
     db.set_meta("embedding_id", "v1")
     db.set_meta("embedding_id", "v2")
     assert db.get_meta("embedding_id") == "v2"
+
+
+def test_transaction_commits_on_success(db: Database) -> None:
+    db.add_pending_user(user_id=1, username="a")
+    with db.transaction():
+        db.add_usage(user_id=1, input_tokens=10, output_tokens=2)
+        db.add_system_usage(input_tokens=10, output_tokens=2)
+
+    assert db.get_usage(user_id=1) == (10, 2)
+    assert db.get_system_usage() == (10, 2)
+
+
+def test_transaction_rolls_back_on_exception(db: Database) -> None:
+    db.add_pending_user(user_id=1, username="a")
+    db.add_usage(user_id=1, input_tokens=5, output_tokens=1)
+    db.add_system_usage(input_tokens=5, output_tokens=1)
+
+    with pytest.raises(RuntimeError):
+        with db.transaction():
+            db.add_usage(user_id=1, input_tokens=100, output_tokens=20)
+            db.add_system_usage(input_tokens=100, output_tokens=20)
+            raise RuntimeError("boom")
+
+    assert db.get_usage(user_id=1) == (5, 1)
+    assert db.get_system_usage() == (5, 1)
+
+
+def test_transaction_nested_flat(db: Database) -> None:
+    db.add_pending_user(user_id=1, username="a")
+    with db.transaction():
+        db.add_usage(user_id=1, input_tokens=3, output_tokens=1)
+        with db.transaction():
+            db.add_system_usage(input_tokens=3, output_tokens=1)
+
+    assert db.get_usage(user_id=1) == (3, 1)
+    assert db.get_system_usage() == (3, 1)
