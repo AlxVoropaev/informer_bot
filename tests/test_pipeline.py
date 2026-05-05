@@ -1116,6 +1116,27 @@ async def test_handle_new_post_attaches_save_button_and_delete_at(
     assert state == (False, 1000 + 6 * 3600)
 
 
+async def test_handle_new_post_records_delivered_when_dedup_disabled(
+    db: Database,
+) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.subscribe(user_id=10, channel_id=1, mode="all")
+    db.set_user_auto_delete_hours(10, 6)
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock()
+    send_dm = _send_dm()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="body",
+        link="L", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+        embed_fn=None, edit_dm=None, now=1000,
+    )
+
+    state = db.get_delivered_save_state(user_id=10, channel_id=1, message_id=100)
+    assert state == (False, 1000 + 6 * 3600)
+
+
 async def test_handle_new_post_dup_chain_extends_delete_at(
     db: Database,
 ) -> None:

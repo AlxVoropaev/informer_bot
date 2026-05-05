@@ -219,7 +219,7 @@ async def handle_new_post(
         else:
             bot_msg_id = await send_dm(user_id, body, photo, **send_kwargs)
             with db.transaction():
-                if bot_msg_id is not None and emb is not None:
+                if bot_msg_id is not None:
                     db.record_delivered(
                         user_id=user_id,
                         channel_id=channel_id,
