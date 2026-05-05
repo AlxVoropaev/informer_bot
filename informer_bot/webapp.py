@@ -16,7 +16,7 @@ from urllib.parse import parse_qsl
 
 from aiohttp import web
 
-from informer_bot.db import Database
+from informer_bot.db import Database, format_user_label
 from informer_bot.i18n import LANGUAGES
 from informer_bot.summarizer import estimate_cost_usd, estimate_embedding_cost_usd
 
@@ -29,6 +29,10 @@ _STATIC_DIR = Path(__file__).resolve().parent.parent / "webapp"
 _RATE_LIMIT_REQUESTS = 30
 _RATE_LIMIT_WINDOW = 60.0
 _rate_state: dict[int, deque[float]] = defaultdict(deque)
+
+DB_KEY: web.AppKey[Database] = web.AppKey("db", Database)
+BOT_TOKEN_KEY: web.AppKey[str] = web.AppKey("bot_token", str)
+OWNER_ID_KEY: web.AppKey[int] = web.AppKey("owner_id", int)
 
 
 def verify_init_data(init_data: str, bot_token: str) -> dict | None:
@@ -88,7 +92,7 @@ async def _auth_middleware(request: web.Request, handler):
     if not request.path.startswith("/api/"):
         return await handler(request)
     init_data = request.headers.get("X-Telegram-Init-Data", "")
-    bot_token: str = request.app["bot_token"]
+    bot_token = request.app[BOT_TOKEN_KEY]
     parsed = verify_init_data(init_data, bot_token)
     if parsed is None:
         return web.json_response({"error": "invalid_init_data"}, status=401)
@@ -98,7 +102,7 @@ async def _auth_middleware(request: web.Request, handler):
     user_id = int(user["id"])
     if not _allow_request(user_id):
         return web.json_response({"error": "rate_limited"}, status=429)
-    db: Database = request.app["db"]
+    db = request.app[DB_KEY]
     if db.get_user_status(user_id) != "approved":
         return web.json_response({"error": "not_approved"}, status=403)
     request["user_id"] = user_id
@@ -124,8 +128,8 @@ def _channel_payload(db: Database, user_id: int) -> list[dict]:
 
 
 async def _state(request: web.Request) -> web.Response:
-    db: Database = request.app["db"]
-    owner_id: int = request.app["owner_id"]
+    db = request.app[DB_KEY]
+    owner_id = request.app[OWNER_ID_KEY]
     user_id: int = request["user_id"]
     return web.json_response({
         "user_id": user_id,
@@ -136,7 +140,7 @@ async def _state(request: web.Request) -> web.Response:
 
 
 async def _subscription(request: web.Request) -> web.Response:
-    db: Database = request.app["db"]
+    db = request.app[DB_KEY]
     user_id: int = request["user_id"]
     body = await request.json()
     channel_id = int(body["channel_id"])
@@ -154,7 +158,7 @@ async def _subscription(request: web.Request) -> web.Response:
 
 
 async def _filter(request: web.Request) -> web.Response:
-    db: Database = request.app["db"]
+    db = request.app[DB_KEY]
     user_id: int = request["user_id"]
     body = await request.json()
     channel_id = int(body["channel_id"])
@@ -175,8 +179,8 @@ async def _filter(request: web.Request) -> web.Response:
 
 
 async def _usage(request: web.Request) -> web.Response:
-    db: Database = request.app["db"]
-    owner_id: int = request.app["owner_id"]
+    db = request.app[DB_KEY]
+    owner_id = request.app[OWNER_ID_KEY]
     user_id: int = request["user_id"]
     inp, out = db.get_usage(user_id)
     payload: dict = {
@@ -193,12 +197,12 @@ async def _usage(request: web.Request) -> web.Response:
         payload["per_user"] = [
             {
                 "user_id": uid,
-                "label": label,
+                "label": format_user_label(uid, username, first_name),
                 "input_tokens": ui,
                 "output_tokens": uo,
                 "cost_usd": estimate_cost_usd(ui, uo),
             }
-            for uid, label, ui, uo in db.list_all_usage()
+            for uid, username, first_name, ui, uo in db.list_all_usage()
         ]
         payload["system"] = {
             "input_tokens": sys_in,
@@ -213,7 +217,7 @@ async def _usage(request: web.Request) -> web.Response:
 
 
 async def _language(request: web.Request) -> web.Response:
-    db: Database = request.app["db"]
+    db = request.app[DB_KEY]
     user_id: int = request["user_id"]
     body = await request.json()
     code = body.get("language")
@@ -226,9 +230,9 @@ async def _language(request: web.Request) -> web.Response:
 
 def build_app(*, db: Database, bot_token: str, owner_id: int) -> web.Application:
     app = web.Application(middlewares=[_auth_middleware])
-    app["db"] = db
-    app["bot_token"] = bot_token
-    app["owner_id"] = owner_id
+    app[DB_KEY] = db
+    app[BOT_TOKEN_KEY] = bot_token
+    app[OWNER_ID_KEY] = owner_id
     app.router.add_get("/api/state", _state)
     app.router.add_post("/api/subscription", _subscription)
     app.router.add_post("/api/filter", _filter)

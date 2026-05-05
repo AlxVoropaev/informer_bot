@@ -1,10 +1,18 @@
 import logging
 from dataclasses import dataclass
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
+from telegram import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    Update,
+    User,
+    WebAppInfo,
+)
 from telegram.ext import ContextTypes
 
-from informer_bot.db import Database
+from informer_bot.db import Database, format_user_label
 from informer_bot.i18n import t
 from informer_bot.pipeline import (
     AnnounceNewChannelFn,
@@ -15,6 +23,24 @@ from informer_bot.pipeline import (
 from informer_bot.summarizer import estimate_cost_usd, estimate_embedding_cost_usd
 
 log = logging.getLogger(__name__)
+
+
+# PTB types `effective_user`/`message`/`callback_query` as Optional, but every
+# handler here is registered behind a filter that guarantees they're set —
+# these helpers narrow the type for mypy without scattering asserts.
+def _user(update: Update) -> User:
+    assert update.effective_user is not None
+    return update.effective_user
+
+
+def _message(update: Update) -> Message:
+    assert update.message is not None
+    return update.message
+
+
+def _query(update: Update) -> CallbackQuery:
+    assert update.callback_query is not None
+    return update.callback_query
 
 
 @dataclass
@@ -90,7 +116,7 @@ def _admin_keyboard(
     return InlineKeyboardMarkup(rows)
 
 
-def _user_label(user) -> str:
+def _user_label(user: User) -> str:
     if user.username:
         return f"@{user.username}"
     if user.first_name:
@@ -99,37 +125,38 @@ def _user_label(user) -> str:
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
+    user_id = _user(update).id
     log.debug("/help from user=%s", user_id)
     lang = _lang(context, user_id)
     text = t(lang, "user_help")
     if user_id == _owner_id(context):
         text += t(lang, "owner_help_extra")
-    await update.message.reply_text(text)
+    await _message(update).reply_text(text)
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db = _db(context)
-    user = update.effective_user
+    user = _user(update)
+    message = _message(update)
     log.debug("/start from user=%s", user.id)
     status = db.get_user_status(user.id)
     lang = db.get_language(user.id)
 
     if status == "approved":
-        await update.message.reply_text(t(lang, "greeting"))
+        await message.reply_text(t(lang, "greeting"))
         return
     if status == "pending":
-        await update.message.reply_text(t(lang, "still_pending"))
+        await message.reply_text(t(lang, "still_pending"))
         return
     if status == "denied":
-        await update.message.reply_text(t(lang, "access_denied"))
+        await message.reply_text(t(lang, "access_denied"))
         return
 
     db.add_pending_user(
         user_id=user.id, username=user.username, first_name=user.first_name
     )
     log.info("new access request from user=%s (%s)", user.id, _user_label(user))
-    await update.message.reply_text(t(lang, "pending"))
+    await message.reply_text(t(lang, "pending"))
     owner_lang = db.get_language(_owner_id(context))
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton(text=t(owner_lang, "approve_button"), callback_data=f"approve:{user.id}"),
@@ -143,19 +170,20 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_app(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
+    user_id = _user(update).id
+    message = _message(update)
     lang = _lang(context, user_id)
     if _db(context).get_user_status(user_id) != "approved":
-        await update.message.reply_text(t(lang, "denied"))
+        await message.reply_text(t(lang, "denied"))
         return
     url = _state(context).miniapp_url
     if not url:
-        await update.message.reply_text(t(lang, "miniapp_unconfigured"))
+        await message.reply_text(t(lang, "miniapp_unconfigured"))
         return
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(
         text=t(lang, "open_miniapp_button"), web_app=WebAppInfo(url=url),
     )]])
-    await update.message.reply_text(t(lang, "miniapp_intro"), reply_markup=keyboard)
+    await message.reply_text(t(lang, "miniapp_intro"), reply_markup=keyboard)
 
 
 def _format_usage_line(label: str, input_tokens: int, output_tokens: int) -> str:
@@ -165,11 +193,12 @@ def _format_usage_line(label: str, input_tokens: int, output_tokens: int) -> str
 
 async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db = _db(context)
-    user_id = update.effective_user.id
+    user_id = _user(update).id
+    message = _message(update)
     log.debug("/usage from user=%s", user_id)
     lang = db.get_language(user_id)
     if db.get_user_status(user_id) != "approved":
-        await update.message.reply_text(t(lang, "denied"))
+        await message.reply_text(t(lang, "denied"))
         return
 
     if user_id == _owner_id(context):
@@ -178,7 +207,8 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         emb_tokens = db.get_embedding_usage()
         lines = [t(lang, "usage_admin_header")]
         if rows:
-            for _uid, label, inp, out in rows:
+            for uid, username, first_name, inp, out in rows:
+                label = format_user_label(uid, username, first_name)
                 lines.append(_format_usage_line(label, inp, out))
         else:
             lines.append(t(lang, "usage_admin_none"))
@@ -190,25 +220,26 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             tokens=emb_tokens,
             cost=estimate_embedding_cost_usd(emb_tokens),
         ))
-        await update.message.reply_text("\n".join(lines))
+        await message.reply_text("\n".join(lines))
         return
 
     inp, out = db.get_usage(user_id)
     cost = estimate_cost_usd(inp, out)
-    await update.message.reply_text(
+    await message.reply_text(
         t(lang, "usage_user_block", inp=inp, out=out, cost=cost)
     )
 
 
 async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
+    user_id = _user(update).id
+    message = _message(update)
     lang = _lang(context, user_id)
     if user_id != _owner_id(context):
         log.info("/update denied for user=%s", user_id)
-        await update.message.reply_text(t(lang, "denied"))
+        await message.reply_text(t(lang, "denied"))
         return
     log.info("/update from owner=%s", user_id)
-    await update.message.reply_text(t(lang, "refreshing"))
+    await message.reply_text(t(lang, "refreshing"))
     state = _state(context)
     try:
         await refresh_channels(
@@ -219,68 +250,76 @@ async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
     except Exception:
         log.exception("/update refresh failed")
-        await update.message.reply_text(t(lang, "refresh_failed"))
+        await message.reply_text(t(lang, "refresh_failed"))
         return
-    await update.message.reply_text(t(lang, "refresh_done"))
+    await message.reply_text(t(lang, "refresh_done"))
 
 
 async def cmd_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
+    user_id = _user(update).id
+    message = _message(update)
     lang = _lang(context, user_id)
     if user_id != _owner_id(context):
         log.info("/blacklist denied for user=%s", user_id)
-        await update.message.reply_text(t(lang, "denied"))
+        await message.reply_text(t(lang, "denied"))
         return
     log.debug("/blacklist from owner=%s", user_id)
+    assert context.user_data is not None
     context.user_data["bl_page"] = 0
-    await update.message.reply_text(
+    await message.reply_text(
         t(lang, "admin_pick_blacklist"),
         reply_markup=_admin_keyboard(_db(context), lang, page=0),
     )
 
 
 async def on_blacklist_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
+    user_id = _user(update).id
+    query = _query(update)
     lang = _lang(context, user_id)
     if user_id != _owner_id(context):
         log.info("blacklist done denied for user=%s", user_id)
-        await update.callback_query.answer(t(lang, "denied"))
+        await query.answer(t(lang, "denied"))
         return
     log.debug("/blacklist done by owner=%s", user_id)
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(t(lang, "blacklist_closed"))
+    await query.answer()
+    await query.edit_message_text(t(lang, "blacklist_closed"))
 
 
 async def on_blacklist_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db = _db(context)
-    user_id = update.effective_user.id
+    user_id = _user(update).id
+    query = _query(update)
     lang = db.get_language(user_id)
     if user_id != _owner_id(context):
-        await update.callback_query.answer(t(lang, "denied"))
+        await query.answer(t(lang, "denied"))
         return
-    page = int(update.callback_query.data.split(":", 1)[1])
+    assert isinstance(query.data, str)
+    page = int(query.data.split(":", 1)[1])
+    assert context.user_data is not None
     context.user_data["bl_page"] = page
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_reply_markup(
+    await query.answer()
+    await query.edit_message_reply_markup(
         reply_markup=_admin_keyboard(db, lang, page=page),
     )
 
 
 async def on_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db = _db(context)
-    actor_id = update.effective_user.id
+    actor_id = _user(update).id
+    query = _query(update)
     actor_lang = db.get_language(actor_id)
     if actor_id != _owner_id(context):
         log.info("approve denied for user=%s", actor_id)
-        await update.callback_query.answer(t(actor_lang, "denied"))
+        await query.answer(t(actor_lang, "denied"))
         return
 
-    target_id = int(update.callback_query.data.split(":", 1)[1])
+    assert isinstance(query.data, str)
+    target_id = int(query.data.split(":", 1)[1])
     db.set_user_status(user_id=target_id, status="approved")
     log.info("user=%s approved by owner", target_id)
 
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(
+    await query.answer()
+    await query.edit_message_text(
         t(actor_lang, "user_allowed", target=target_id)
     )
     target_lang = db.get_language(target_id)
@@ -291,19 +330,21 @@ async def on_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def on_deny(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db = _db(context)
-    actor_id = update.effective_user.id
+    actor_id = _user(update).id
+    query = _query(update)
     actor_lang = db.get_language(actor_id)
     if actor_id != _owner_id(context):
         log.info("deny denied for user=%s", actor_id)
-        await update.callback_query.answer(t(actor_lang, "denied"))
+        await query.answer(t(actor_lang, "denied"))
         return
 
-    target_id = int(update.callback_query.data.split(":", 1)[1])
+    assert isinstance(query.data, str)
+    target_id = int(query.data.split(":", 1)[1])
     db.set_user_status(user_id=target_id, status="denied")
     log.info("user=%s denied by owner", target_id)
 
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(
+    await query.answer()
+    await query.edit_message_text(
         t(actor_lang, "user_denied_msg", target=target_id)
     )
     target_lang = db.get_language(target_id)
@@ -314,17 +355,19 @@ async def on_deny(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def on_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db = _db(context)
-    actor_id = update.effective_user.id
+    actor_id = _user(update).id
+    query = _query(update)
     actor_lang = db.get_language(actor_id)
     if actor_id != _owner_id(context):
         log.info("blacklist toggle denied for user=%s", actor_id)
-        await update.callback_query.answer(t(actor_lang, "denied"))
+        await query.answer(t(actor_lang, "denied"))
         return
 
-    channel_id = int(update.callback_query.data.split(":", 1)[1])
+    assert isinstance(query.data, str)
+    channel_id = int(query.data.split(":", 1)[1])
     channel = db.get_channel(channel_id)
     if channel is None:
-        await update.callback_query.answer(t(actor_lang, "channel_unavailable"))
+        await query.answer(t(actor_lang, "channel_unavailable"))
         return
     will_blacklist = not channel.blacklisted
 
@@ -345,14 +388,13 @@ async def on_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     db.set_blacklisted(channel_id=channel_id, blacklisted=will_blacklist)
 
-    await update.callback_query.answer()
-    await update.callback_query.edit_message_text(
+    await query.answer()
+    page = (context.user_data or {}).get("bl_page", 0)
+    await query.edit_message_text(
         t(actor_lang, "admin_pick_blacklist"),
-        reply_markup=_admin_keyboard(
-            db, actor_lang, page=context.user_data.get("bl_page", 0)
-        ),
+        reply_markup=_admin_keyboard(db, actor_lang, page=page),
     )
 
 
 async def on_noop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.callback_query.answer()
+    await _query(update).answer()

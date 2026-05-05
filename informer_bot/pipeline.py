@@ -130,43 +130,55 @@ async def handle_new_post(
             dup_marker = t(lang, "debug_duplicate_marker")
             body = _format_post(channel_title, summary.text, link, dup_marker)
             bot_msg_id = await send_dm(user_id, body, photo)
-            if bot_msg_id is not None:
-                db.record_delivered(
+            with db.transaction():
+                if bot_msg_id is not None:
+                    db.record_delivered(
+                        user_id=user_id,
+                        channel_id=channel_id,
+                        message_id=message_id,
+                        bot_message_id=bot_msg_id,
+                        is_photo=photo is not None,
+                        body=body,
+                        now=now_ts,
+                    )
+                db.add_usage(
                     user_id=user_id,
-                    channel_id=channel_id,
-                    message_id=message_id,
-                    bot_message_id=bot_msg_id,
-                    is_photo=photo is not None,
-                    body=body,
-                    now=now_ts,
+                    input_tokens=summary.input_tokens,
+                    output_tokens=summary.output_tokens,
                 )
         elif duplicate is not None and edit_dm is not None:
             new_dup_links = duplicate.dup_links + [(channel_title, link)]
             await edit_dm(user_id, duplicate.bot_message_id, new_dup_links)
-            db.set_delivered_dup_links(
-                user_id=user_id,
-                channel_id=duplicate.channel_id,
-                message_id=duplicate.message_id,
-                dup_links=new_dup_links,
-            )
+            with db.transaction():
+                db.set_delivered_dup_links(
+                    user_id=user_id,
+                    channel_id=duplicate.channel_id,
+                    message_id=duplicate.message_id,
+                    dup_links=new_dup_links,
+                )
+                db.add_usage(
+                    user_id=user_id,
+                    input_tokens=summary.input_tokens,
+                    output_tokens=summary.output_tokens,
+                )
         else:
             bot_msg_id = await send_dm(user_id, body, photo)
-            if bot_msg_id is not None and emb is not None:
-                db.record_delivered(
+            with db.transaction():
+                if bot_msg_id is not None and emb is not None:
+                    db.record_delivered(
+                        user_id=user_id,
+                        channel_id=channel_id,
+                        message_id=message_id,
+                        bot_message_id=bot_msg_id,
+                        is_photo=photo is not None,
+                        body=body,
+                        now=now_ts,
+                    )
+                db.add_usage(
                     user_id=user_id,
-                    channel_id=channel_id,
-                    message_id=message_id,
-                    bot_message_id=bot_msg_id,
-                    is_photo=photo is not None,
-                    body=body,
-                    now=now_ts,
+                    input_tokens=summary.input_tokens,
+                    output_tokens=summary.output_tokens,
                 )
-
-        db.add_usage(
-            user_id=user_id,
-            input_tokens=summary.input_tokens,
-            output_tokens=summary.output_tokens,
-        )
 
     if emb is not None:
         db.store_post_embedding(
