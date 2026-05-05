@@ -10,6 +10,7 @@
 <body>
   <header class="topbar">
     <input id="search" type="search" placeholder="Search channels…" autocomplete="off" />
+    <button id="settings-btn" class="icon-btn" type="button" title="Settings">⚙️</button>
     <button id="usage-btn" class="icon-btn" type="button" title="Usage">📊</button>
     <select id="lang"></select>
   </header>
@@ -22,6 +23,24 @@
     <button class="back" id="usage-back" type="button">← Back</button>
     <h2 id="usage-title">Usage</h2>
     <div id="usage-body"></div>
+  </section>
+
+  <section id="settings" class="details hidden" aria-hidden="true">
+    <button class="back" id="settings-back" type="button">← Back</button>
+    <h2 id="settings-title">Settings</h2>
+
+    <div class="usage-section">
+      <h3 id="autodel-heading">Auto-delete</h3>
+      <p id="autodel-hint" class="tips"></p>
+      <label class="filter">
+        <span id="autodel-label">Hours (1–720, blank to disable)</span>
+        <input id="autodel-input" type="number" min="1" max="720" step="1" inputmode="numeric" />
+      </label>
+      <div class="filter-actions">
+        <button id="autodel-save" type="button" class="primary">Save</button>
+        <button id="autodel-clear" type="button" class="ghost">Disable</button>
+      </div>
+    </div>
   </section>
 
   <section id="details" class="details hidden" aria-hidden="true">

@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 SummarizeFn = Callable[[str], Awaitable[Summary]]
 IsRelevantFn = Callable[[str, str], Awaitable[RelevanceCheck]]
 SendDmFn = Callable[..., Awaitable[int | None]]
-EditDmFn = Callable[[int, int, list[tuple[str, str]]], Awaitable[None]]
+EditDmFn = Callable[..., Awaitable[None]]
 EmbedFn = Callable[[str], Awaitable[Embedding]]
 FetchChannelsFn = Callable[[], Awaitable[list[tuple[int, str, str, str | None]]]]
 AnnounceNewChannelFn = Callable[[int, int, str], Awaitable[None]]
@@ -112,6 +112,11 @@ async def handle_new_post(
         lang = db.get_language(user_id)
         marker = t(lang, "debug_filtered_marker") if marked_filter else None
         body = _format_post(channel_title, summary.text, link, marker)
+        auto_hours = db.get_user_auto_delete_hours(user_id)
+        save_label = t(lang, "save_button") if auto_hours is not None else None
+        send_delete_at = (
+            now_ts + auto_hours * 3600 if auto_hours is not None else None
+        )
 
         duplicate = (
             find_duplicate(
@@ -126,10 +131,12 @@ async def handle_new_post(
             else None
         )
 
+        send_kwargs = {"save_button": save_label} if save_label is not None else {}
+
         if duplicate is not None and mode == "debug":
             dup_marker = t(lang, "debug_duplicate_marker")
             body = _format_post(channel_title, summary.text, link, dup_marker)
-            bot_msg_id = await send_dm(user_id, body, photo)
+            bot_msg_id = await send_dm(user_id, body, photo, **send_kwargs)
             with db.transaction():
                 if bot_msg_id is not None:
                     db.record_delivered(
@@ -140,6 +147,7 @@ async def handle_new_post(
                         is_photo=photo is not None,
                         body=body,
                         now=now_ts,
+                        delete_at=send_delete_at,
                     )
                 db.add_usage(
                     user_id=user_id,
@@ -148,7 +156,26 @@ async def handle_new_post(
                 )
         elif duplicate is not None and edit_dm is not None:
             new_dup_links = duplicate.dup_links + [(channel_title, link)]
-            await edit_dm(user_id, duplicate.bot_message_id, new_dup_links)
+            prev_state = db.get_delivered_save_state(
+                user_id=user_id,
+                channel_id=duplicate.channel_id,
+                message_id=duplicate.message_id,
+            )
+            prev_saved = prev_state[0] if prev_state else False
+            had_button = prev_state is not None and (
+                prev_saved or prev_state[1] is not None
+            )
+            chain_label = (
+                t(lang, "saved_button") if prev_saved
+                else t(lang, "save_button") if had_button
+                else None
+            )
+            edit_kwargs = (
+                {"save_button": chain_label} if chain_label is not None else {}
+            )
+            await edit_dm(
+                user_id, duplicate.bot_message_id, new_dup_links, **edit_kwargs,
+            )
             with db.transaction():
                 db.set_delivered_dup_links(
                     user_id=user_id,
@@ -156,13 +183,20 @@ async def handle_new_post(
                     message_id=duplicate.message_id,
                     dup_links=new_dup_links,
                 )
+                if auto_hours is not None:
+                    db.extend_delivered_delete_at(
+                        user_id=user_id,
+                        channel_id=duplicate.channel_id,
+                        message_id=duplicate.message_id,
+                        delete_at=now_ts + auto_hours * 3600,
+                    )
                 db.add_usage(
                     user_id=user_id,
                     input_tokens=summary.input_tokens,
                     output_tokens=summary.output_tokens,
                 )
         else:
-            bot_msg_id = await send_dm(user_id, body, photo)
+            bot_msg_id = await send_dm(user_id, body, photo, **send_kwargs)
             with db.transaction():
                 if bot_msg_id is not None and emb is not None:
                     db.record_delivered(
@@ -173,6 +207,7 @@ async def handle_new_post(
                         is_photo=photo is not None,
                         body=body,
                         now=now_ts,
+                        delete_at=send_delete_at,
                     )
                 db.add_usage(
                     user_id=user_id,

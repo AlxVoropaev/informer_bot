@@ -306,3 +306,59 @@ async def test_rate_limit_returns_429_after_burst(
     assert statuses[:3] == [200, 200, 200]
     assert 429 in statuses[3:]
     assert any(s == 429 for s in statuses)
+
+
+# ---------- auto-delete ----------
+
+async def test_state_returns_auto_delete_hours(
+    client: TestClient, db: Database
+) -> None:
+    db.set_user_auto_delete_hours(USER_ID, 6)
+    init_data = _make_init_data(user_id=USER_ID)
+    resp = await client.get(
+        "/api/state", headers={"X-Telegram-Init-Data": init_data}
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["auto_delete_hours"] == 6
+
+
+async def test_state_returns_null_when_auto_delete_unset(
+    client: TestClient,
+) -> None:
+    init_data = _make_init_data(user_id=USER_ID)
+    resp = await client.get(
+        "/api/state", headers={"X-Telegram-Init-Data": init_data}
+    )
+    body = await resp.json()
+    assert body["auto_delete_hours"] is None
+
+
+async def test_auto_delete_set_then_clear(
+    client: TestClient, db: Database
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)}
+    resp = await client.post("/api/auto_delete", headers=headers, json={"hours": 6})
+    assert resp.status == 200
+    assert (await resp.json()) == {"ok": True, "auto_delete_hours": 6}
+    assert db.get_user_auto_delete_hours(USER_ID) == 6
+
+    resp = await client.post("/api/auto_delete", headers=headers, json={"hours": None})
+    assert resp.status == 200
+    assert (await resp.json()) == {"ok": True, "auto_delete_hours": None}
+    assert db.get_user_auto_delete_hours(USER_ID) is None
+
+
+@pytest.mark.parametrize("bad", [0, -1, 721, "abc"])
+async def test_auto_delete_rejects_bad_values(
+    client: TestClient, db: Database, bad
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)}
+    if bad == 0:
+        # 0 is treated as "clear", returns ok with null
+        resp = await client.post("/api/auto_delete", headers=headers, json={"hours": 0})
+        assert resp.status == 200
+        return
+    resp = await client.post("/api/auto_delete", headers=headers, json={"hours": bad})
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "bad_hours"

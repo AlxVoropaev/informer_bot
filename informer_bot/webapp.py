@@ -135,8 +135,31 @@ async def _state(request: web.Request) -> web.Response:
         "user_id": user_id,
         "language": db.get_language(user_id),
         "is_owner": user_id == owner_id,
+        "auto_delete_hours": db.get_user_auto_delete_hours(user_id),
         "channels": _channel_payload(db, user_id),
     })
+
+
+_AUTO_DELETE_MAX_HOURS = 720  # 30 days
+
+
+async def _auto_delete(request: web.Request) -> web.Response:
+    db = request.app[DB_KEY]
+    user_id: int = request["user_id"]
+    body = await request.json()
+    raw = body.get("hours")
+    if raw is None or raw == 0 or raw == "":
+        hours: int | None = None
+    else:
+        try:
+            hours = int(raw)
+        except (TypeError, ValueError):
+            return web.json_response({"error": "bad_hours"}, status=400)
+        if hours < 1 or hours > _AUTO_DELETE_MAX_HOURS:
+            return web.json_response({"error": "bad_hours"}, status=400)
+    db.set_user_auto_delete_hours(user_id, hours)
+    log.info("miniapp: user=%s auto_delete -> %s", user_id, hours)
+    return web.json_response({"ok": True, "auto_delete_hours": hours})
 
 
 async def _subscription(request: web.Request) -> web.Response:
@@ -237,6 +260,7 @@ def build_app(*, db: Database, bot_token: str, owner_id: int) -> web.Application
     app.router.add_post("/api/subscription", _subscription)
     app.router.add_post("/api/filter", _filter)
     app.router.add_post("/api/language", _language)
+    app.router.add_post("/api/auto_delete", _auto_delete)
     app.router.add_get("/api/usage", _usage)
 
     async def index(_req: web.Request) -> web.FileResponse:

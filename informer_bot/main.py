@@ -19,6 +19,7 @@ from telethon import TelegramClient
 from informer_bot.album import AlbumBuffer
 from informer_bot.bot import (
     BotState,
+    build_dm_keyboard,
     cmd_app,
     cmd_blacklist,
     cmd_help,
@@ -31,6 +32,7 @@ from informer_bot.bot import (
     on_blacklist_page,
     on_deny,
     on_noop,
+    on_save,
 )
 from informer_bot.client import (
     catch_up,
@@ -115,12 +117,17 @@ def setup_embedder(
 
 def _make_send_dm(app: Application) -> SendDmFn:
     async def send_dm(
-        user_id: int, text: str, photo: bytes | None = None
+        user_id: int,
+        text: str,
+        photo: bytes | None = None,
+        save_button: str | None = None,
     ) -> int | None:
+        keyboard = build_dm_keyboard([], save_button)
         try:
             if photo is not None:
                 msg = await app.bot.send_photo(
-                    chat_id=user_id, photo=photo, caption=text, parse_mode="HTML"
+                    chat_id=user_id, photo=photo, caption=text,
+                    parse_mode="HTML", reply_markup=keyboard,
                 )
                 log.info(
                     "outgoing: DM (photo) user=%s msg=%s cap_chars=%d",
@@ -128,7 +135,8 @@ def _make_send_dm(app: Application) -> SendDmFn:
                 )
             else:
                 msg = await app.bot.send_message(
-                    chat_id=user_id, text=text, parse_mode="HTML"
+                    chat_id=user_id, text=text, parse_mode="HTML",
+                    reply_markup=keyboard,
                 )
                 log.info(
                     "outgoing: DM user=%s msg=%s chars=%d",
@@ -144,18 +152,19 @@ def _make_send_dm(app: Application) -> SendDmFn:
 
 def _make_edit_dm(app: Application) -> EditDmFn:
     async def edit_dm(
-        user_id: int, bot_message_id: int, dup_links: list[tuple[str, str]]
+        user_id: int,
+        bot_message_id: int,
+        dup_links: list[tuple[str, str]],
+        save_button: str | None = None,
     ) -> None:
-        keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton(text=title, url=link)] for title, link in dup_links]
-        )
+        keyboard = build_dm_keyboard(dup_links, save_button)
         try:
             await app.bot.edit_message_reply_markup(
                 chat_id=user_id, message_id=bot_message_id, reply_markup=keyboard,
             )
             log.info(
-                "outgoing: DM buttons updated user=%s msg=%s links=%d",
-                user_id, bot_message_id, len(dup_links),
+                "outgoing: DM buttons updated user=%s msg=%s links=%d save=%s",
+                user_id, bot_message_id, len(dup_links), save_button is not None,
             )
         except Exception:
             log.exception(
@@ -163,6 +172,35 @@ def _make_edit_dm(app: Application) -> EditDmFn:
             )
 
     return edit_dm
+
+
+async def sweep_due_deletions(app: Application, db: Database) -> None:
+    """Background task: every 60s, delete DM messages whose timer has expired."""
+    while True:
+        try:
+            now = int(time.time())
+            due = db.list_due_deletions(now=now)
+            for user_id, channel_id, message_id, bot_msg_id, _is_photo in due:
+                try:
+                    await app.bot.delete_message(
+                        chat_id=user_id, message_id=bot_msg_id,
+                    )
+                    log.info(
+                        "auto-delete: removed user=%s msg=%s", user_id, bot_msg_id,
+                    )
+                except Exception as exc:
+                    log.warning(
+                        "auto-delete: telegram delete failed user=%s msg=%s: %s",
+                        user_id, bot_msg_id, exc,
+                    )
+                db.delete_delivered_row(
+                    user_id=user_id, channel_id=channel_id, message_id=message_id,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("auto-delete sweeper iteration failed")
+        await asyncio.sleep(60)
 
 
 def _make_announce_new_channel(
@@ -228,6 +266,7 @@ async def main() -> None:
         CallbackQueryHandler(on_noop, pattern=r"^noop$"),
         CallbackQueryHandler(on_approve, pattern=r"^approve:"),
         CallbackQueryHandler(on_deny, pattern=r"^deny:"),
+        CallbackQueryHandler(on_save, pattern=r"^save$"),
     ):
         app.add_handler(handler)
 
@@ -317,6 +356,7 @@ async def main() -> None:
     log.info("informer_bot is running. Ctrl+C to stop.")
     disconnect_task = asyncio.create_task(tg.run_until_disconnected())
     stop_task = asyncio.create_task(stop_event.wait())
+    sweeper_task = asyncio.create_task(sweep_due_deletions(app, db))
     try:
         await asyncio.wait(
             {disconnect_task, stop_task},
@@ -325,7 +365,8 @@ async def main() -> None:
     finally:
         await graceful_shutdown(
             app=app, tg=tg, db=db, cfg=cfg, send_dm=send_dm,
-            tasks=(disconnect_task, stop_task), webapp_runner=webapp_runner,
+            tasks=(disconnect_task, stop_task, sweeper_task),
+            webapp_runner=webapp_runner,
         )
 
 

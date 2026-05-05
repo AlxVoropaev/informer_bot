@@ -162,10 +162,11 @@ data older than 24h. The caller's user_id is parsed from the `user` field and
 checked against `users.status='approved'`.
 
 Endpoints:
-- `GET /api/state` → `{user_id, language, is_owner, channels: [...]}`
+- `GET /api/state` → `{user_id, language, is_owner, auto_delete_hours, channels: [...]}`
 - `POST /api/subscription` `{channel_id, mode}` (`mode` ∈ `off|filtered|debug|all|unsubscribe`)
 - `POST /api/filter` `{channel_id, filter_prompt}` (null/empty clears)
 - `POST /api/language` `{language}`
+- `POST /api/auto_delete` `{hours}` — integer 1..720 enables, `null`/`0`/`""` disables
 - `GET /api/usage` → `{is_owner, user: {input_tokens, output_tokens, cost_usd}}` — owner payload also includes `per_user[]`, `system`, `embeddings`.
 
 Deep-linking: the new-channel announcement DM (sent on `/update`) attaches a
@@ -240,8 +241,9 @@ behind a regular domain bypasses both issues.
     filter would have excluded; with no `filter_prompt` it behaves like `'all'`.
   - `seen(channel_id, message_id)` — restart catch-up dedupe + resume point
     (`MAX(message_id)` per channel = where catch-up starts)
-  - `users(user_id, status, username, first_name, language)` —
-    `status IN ('pending','approved','denied')`, `language IN ('en','ru')`
+  - `users(user_id, status, username, first_name, language, auto_delete_hours)` —
+    `status IN ('pending','approved','denied')`, `language IN ('en','ru')`,
+    `auto_delete_hours` is the per-user auto-delete window (NULL = feature off)
   - `usage(user_id, input_tokens, output_tokens)` — per-user delivered-summary tokens
   - `system_usage(id=1, input_tokens, output_tokens)` — total API spend (incl. filter checks)
   - `post_embeddings(channel_id, message_id, created_at, embedding, summary, link)` —
@@ -249,11 +251,13 @@ behind a regular domain bypasses both issues.
     little-endian packed `float32` array (`db.pack_vector`/`unpack_vector`).
     Indexed on `created_at`; pruned via `purge_dedup_older_than` at startup.
   - `delivered(user_id, channel_id, message_id, bot_message_id, is_photo, body,
-    created_at, dup_links_json)` — per-user record of every DM that was actually
-    sent (including debug-mode duplicate DMs). `body` is the original rendered
-    HTML at send time (never mutated). `dup_links_json` is a JSON array of
-    `[title, link]` tuples for duplicates that have been chained onto this DM
-    via inline URL buttons.
+    created_at, dup_links_json, saved, delete_at)` — per-user record of every
+    DM that was actually sent (including debug-mode duplicate DMs). `body` is
+    the original rendered HTML at send time (never mutated). `dup_links_json`
+    is a JSON array of `[title, link]` tuples for duplicates that have been
+    chained onto this DM via inline URL buttons. `saved` (0/1) and `delete_at`
+    (UNIX seconds, NULL when not scheduled) drive the Auto-delete feature; the
+    sweeper deletes rows where `saved=0 AND delete_at <= now`.
   - `embedding_usage(id=1, tokens)` — running total of OpenAI embedding tokens.
 - **Localization:** bot UI is per-user English / Russian. Default `en`. Strings live in
   `informer_bot/i18n.py` (`_STRINGS[lang][key]`, `t(lang, key, **fmt)` helper); the
@@ -329,6 +333,29 @@ behind a regular domain bypasses both issues.
     normally. The "Also:" edit path is not taken.
   - Embedding tokens are tracked in `embedding_usage` and surfaced in `/usage`
     for the owner only.
+- **Auto-delete:** opt-in per user via the Mini App settings (⚙️ icon in the
+  top bar). Range 1..720 hours; absent / NULL disables the feature.
+  - **On send:** when `users.auto_delete_hours` is set, every delivered DM gets
+    a `💾 Save` inline button (`callback_data="save"`) and the `delivered` row
+    stores `delete_at = now + hours * 3600`. When unset, no button is added and
+    `delete_at` stays NULL.
+  - **Save tap:** toggles `delivered.saved`. Save→Saved sets `saved=1,
+    delete_at=NULL` and relabels the button to `✅ Saved`. Saved→Save sets
+    `saved=0` and re-arms `delete_at = now + current_hours * 3600` (NULL when
+    the feature was meanwhile turned off). The keyboard rebuild preserves the
+    existing dup-link URL-button rows so chained duplicates aren't lost.
+  - **Dedup chain interaction (rule c, both):** when a duplicate is chained
+    onto an existing DM via `edit_dm`, the original row's `delete_at` is
+    extended to `now + current_hours * 3600` *only if* the row is still
+    unsaved (`extend_delivered_delete_at` is a no-op when `saved=1`). On
+    auto-deletion the whole `delivered` row is removed, so future similar
+    posts land as fresh DMs (no stale chain).
+  - **Sweeper:** `informer_bot.main.sweep_due_deletions` runs as an asyncio
+    task on the same loop, ticking every 60s. Each tick calls
+    `db.list_due_deletions(now)`, issues `bot.delete_message` for each row
+    (failures are logged at WARNING — usually means the user already deleted
+    it), and then drops the row from `delivered`. The task is started in
+    `main.main()` and cancelled in `graceful_shutdown`.
 - **Session security:** `.session` is `chmod 600` + git-ignored. Encrypted-at-rest is a
   later TODO.
 

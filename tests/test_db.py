@@ -559,6 +559,149 @@ def test_meta_set_overwrites(db: Database) -> None:
     assert db.get_meta("embedding_id") == "v2"
 
 
+# ---------- auto-delete ----------
+
+def test_auto_delete_hours_default_none(db: Database) -> None:
+    db.add_pending_user(user_id=10, username="a")
+    assert db.get_user_auto_delete_hours(10) is None
+
+
+def test_auto_delete_hours_round_trip(db: Database) -> None:
+    db.add_pending_user(user_id=10, username="a")
+    db.set_user_auto_delete_hours(10, 6)
+    assert db.get_user_auto_delete_hours(10) == 6
+    db.set_user_auto_delete_hours(10, None)
+    assert db.get_user_auto_delete_hours(10) is None
+
+
+def test_record_delivered_stores_delete_at_when_provided(db: Database) -> None:
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=999,
+        is_photo=False, body="b", now=1000, delete_at=4600,
+    )
+    state = db.get_delivered_save_state(user_id=10, channel_id=1, message_id=100)
+    assert state == (False, 4600)
+
+
+def test_record_delivered_no_delete_at_when_omitted(db: Database) -> None:
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=999,
+        is_photo=False, body="b", now=1000,
+    )
+    state = db.get_delivered_save_state(user_id=10, channel_id=1, message_id=100)
+    assert state == (False, None)
+
+
+def test_set_delivered_saved_toggles(db: Database) -> None:
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=999,
+        is_photo=False, body="b", now=1000, delete_at=4600,
+    )
+    db.set_delivered_saved(
+        user_id=10, channel_id=1, message_id=100, saved=True, delete_at=None,
+    )
+    assert db.get_delivered_save_state(
+        user_id=10, channel_id=1, message_id=100,
+    ) == (True, None)
+    db.set_delivered_saved(
+        user_id=10, channel_id=1, message_id=100, saved=False, delete_at=9999,
+    )
+    assert db.get_delivered_save_state(
+        user_id=10, channel_id=1, message_id=100,
+    ) == (False, 9999)
+
+
+def test_extend_delete_at_skips_saved_rows(db: Database) -> None:
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=999,
+        is_photo=False, body="b", now=1000, delete_at=2000,
+    )
+    db.set_delivered_saved(
+        user_id=10, channel_id=1, message_id=100, saved=True, delete_at=None,
+    )
+    db.extend_delivered_delete_at(
+        user_id=10, channel_id=1, message_id=100, delete_at=8000,
+    )
+    assert db.get_delivered_save_state(
+        user_id=10, channel_id=1, message_id=100,
+    ) == (True, None)
+
+
+def test_extend_delete_at_updates_unsaved(db: Database) -> None:
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=999,
+        is_photo=False, body="b", now=1000, delete_at=2000,
+    )
+    db.extend_delivered_delete_at(
+        user_id=10, channel_id=1, message_id=100, delete_at=8000,
+    )
+    assert db.get_delivered_save_state(
+        user_id=10, channel_id=1, message_id=100,
+    ) == (False, 8000)
+
+
+def test_get_delivered_by_bot_msg_returns_none_when_missing(db: Database) -> None:
+    assert db.get_delivered_by_bot_msg(user_id=10, bot_message_id=999) is None
+
+
+def test_get_delivered_by_bot_msg_returns_row(db: Database) -> None:
+    db.record_delivered(
+        user_id=10, channel_id=42, message_id=123, bot_message_id=777,
+        is_photo=True, body="b", now=1000, delete_at=5000,
+    )
+    row = db.get_delivered_by_bot_msg(user_id=10, bot_message_id=777)
+    assert row is not None
+    assert row == (42, 123, True, False, 5000)  # channel_id, msg_id, is_photo, saved, delete_at
+
+
+def test_list_due_deletions_returns_unsaved_rows_at_or_before_now(
+    db: Database,
+) -> None:
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=1,
+        is_photo=False, body="b", now=1000, delete_at=2000,
+    )
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=101, bot_message_id=2,
+        is_photo=False, body="b", now=1000, delete_at=3000,
+    )
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=102, bot_message_id=3,
+        is_photo=False, body="b", now=1000, delete_at=2500,
+    )
+    db.set_delivered_saved(
+        user_id=10, channel_id=1, message_id=102, saved=True, delete_at=None,
+    )
+    due = db.list_due_deletions(now=2500)
+    assert sorted(due) == [(10, 1, 100, 1, False), (10, 1, 101, 2, False)] or \
+        sorted(due) == [(10, 1, 100, 1, False)]
+    # 101 has delete_at=3000 > 2500, so it shouldn't be due yet
+    due = db.list_due_deletions(now=2500)
+    assert (10, 1, 100, 1, False) in due
+    assert (10, 1, 101, 2, False) not in due
+    assert (10, 1, 102, 3, False) not in due
+
+
+def test_delete_delivered_row_removes_only_that_row(db: Database) -> None:
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=1,
+        is_photo=False, body="b", now=1000, delete_at=2000,
+    )
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=101, bot_message_id=2,
+        is_photo=False, body="b", now=1000, delete_at=2000,
+    )
+    db.delete_delivered_row(user_id=10, channel_id=1, message_id=100)
+    assert db.get_delivered_save_state(
+        user_id=10, channel_id=1, message_id=100,
+    ) is None
+    assert db.get_delivered_save_state(
+        user_id=10, channel_id=1, message_id=101,
+    ) == (False, 2000)
+
+
+# ---------- transactions ----------
+
 def test_transaction_commits_on_success(db: Database) -> None:
     db.add_pending_user(user_id=1, username="a")
     with db.transaction():

@@ -38,6 +38,15 @@ const I18N = {
     usageNone: "(none yet)",
     usageInOut: (i, o) => `in ${i.toLocaleString()} · out ${o.toLocaleString()}`,
     usageTokens: (n) => `${n.toLocaleString()} tokens`,
+    settingsTitle: "Settings",
+    autoDeleteHeading: "Auto-delete",
+    autoDeleteLabel: "Hours (1–720, blank to disable)",
+    autoDeleteHint: "When enabled, every summary DM gets a 💾 Save button. If you don't tap Save, the message is deleted after this many hours.",
+    autoDeleteSave: "Save",
+    autoDeleteClear: "Disable",
+    autoDeleteEnabled: (h) => `Auto-delete after ${h}h.`,
+    autoDeleteDisabled: "Auto-delete disabled.",
+    autoDeleteBad: "Enter 1–720 hours.",
   },
   ru: {
     search: "Поиск каналов…",
@@ -74,6 +83,15 @@ const I18N = {
     usageNone: "(пока пусто)",
     usageInOut: (i, o) => `вход ${i.toLocaleString()} · выход ${o.toLocaleString()}`,
     usageTokens: (n) => `${n.toLocaleString()} токенов`,
+    settingsTitle: "Настройки",
+    autoDeleteHeading: "Авто-удаление",
+    autoDeleteLabel: "Часы (1–720, пусто — выкл)",
+    autoDeleteHint: "Когда включено, у каждой сводки появляется кнопка 💾 Сохранить. Если не нажать — сообщение удалится через указанное число часов.",
+    autoDeleteSave: "Сохранить",
+    autoDeleteClear: "Отключить",
+    autoDeleteEnabled: (h) => `Авто-удаление через ${h} ч.`,
+    autoDeleteDisabled: "Авто-удаление отключено.",
+    autoDeleteBad: "Введи 1–720 часов.",
   },
 };
 
@@ -84,6 +102,7 @@ const state = {
   searchQuery: "",
   selectedId: null,
   isOwner: false,
+  autoDeleteHours: null,
 };
 
 function t() { return I18N[state.language] || I18N.en; }
@@ -123,6 +142,13 @@ function applyLanguage() {
   el("details-back").textContent = dict.back;
   el("usage-back").textContent = dict.back;
   el("usage-title").textContent = dict.usageTitle;
+  el("settings-back").textContent = dict.back;
+  el("settings-title").textContent = dict.settingsTitle;
+  el("autodel-heading").textContent = dict.autoDeleteHeading;
+  el("autodel-label").textContent = dict.autoDeleteLabel;
+  el("autodel-hint").textContent = dict.autoDeleteHint;
+  el("autodel-save").textContent = dict.autoDeleteSave;
+  el("autodel-clear").textContent = dict.autoDeleteClear;
   document.querySelectorAll('input[name="mode"]').forEach((input) => {
     const labelSpan = input.nextElementSibling;
     labelSpan.textContent = dict.modes[input.value];
@@ -335,6 +361,49 @@ function closeUsage() {
   }
 }
 
+function openSettings() {
+  el("autodel-input").value = state.autoDeleteHours == null ? "" : String(state.autoDeleteHours);
+  el("settings").classList.remove("hidden");
+  el("settings").setAttribute("aria-hidden", "false");
+  el("list").classList.add("hidden");
+  el("search").parentElement.style.display = "none";
+  window.scrollTo(0, 0);
+  if (tg && tg.BackButton) {
+    tg.BackButton.show();
+    tg.BackButton.onClick(closeSettings);
+  }
+}
+
+function closeSettings() {
+  el("settings").classList.add("hidden");
+  el("settings").setAttribute("aria-hidden", "true");
+  el("list").classList.remove("hidden");
+  el("search").parentElement.style.display = "";
+  if (tg && tg.BackButton) {
+    tg.BackButton.offClick(closeSettings);
+    tg.BackButton.hide();
+  }
+}
+
+async function saveAutoDelete(hours) {
+  try {
+    const data = await api("/api/auto_delete", {
+      method: "POST",
+      body: JSON.stringify({ hours }),
+    });
+    state.autoDeleteHours = data.auto_delete_hours;
+    const dict = t();
+    showToast(
+      data.auto_delete_hours == null
+        ? dict.autoDeleteDisabled
+        : dict.autoDeleteEnabled(data.auto_delete_hours),
+    );
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+  } catch (e) {
+    showToast(e.message === "bad_hours" ? t().autoDeleteBad : (e.message || t().network_error));
+  }
+}
+
 async function changeMode(channelId, mode) {
   try {
     const data = await api("/api/subscription", {
@@ -409,6 +478,7 @@ async function init() {
     state.language = data.language || "en";
     state.channels = data.channels || [];
     state.isOwner = !!data.is_owner;
+    state.autoDeleteHours = data.auto_delete_hours == null ? null : Number(data.auto_delete_hours);
     rebuildLangSelect();
     applyLanguage();
     renderList();
@@ -430,6 +500,19 @@ async function init() {
   el("details-back").addEventListener("click", closeDetails);
   el("usage-btn").addEventListener("click", openUsage);
   el("usage-back").addEventListener("click", closeUsage);
+  el("settings-btn").addEventListener("click", openSettings);
+  el("settings-back").addEventListener("click", closeSettings);
+  el("autodel-save").addEventListener("click", () => {
+    const raw = el("autodel-input").value.trim();
+    if (raw === "") return saveAutoDelete(null);
+    const n = parseInt(raw, 10);
+    if (Number.isNaN(n) || n < 1 || n > 720) return showToast(t().autoDeleteBad);
+    saveAutoDelete(n);
+  });
+  el("autodel-clear").addEventListener("click", () => {
+    el("autodel-input").value = "";
+    saveAutoDelete(null);
+  });
 
   document.querySelectorAll('input[name="mode"]').forEach((input) => {
     input.addEventListener("change", () => {

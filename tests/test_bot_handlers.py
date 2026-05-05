@@ -516,3 +516,149 @@ async def test_update_swallows_refresh_exception_and_replies_failure(
     assert update.message.reply_text.await_count == 2
     final_text = update.message.reply_text.await_args.args[0].lower()
     assert "fail" in final_text or "log" in final_text
+
+
+# ---------- save toggle (auto-delete) ----------
+
+def _save_cb_update(user_id: int, bot_msg_id: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        effective_user=SimpleNamespace(id=user_id),
+        effective_chat=SimpleNamespace(id=user_id),
+        callback_query=SimpleNamespace(
+            data="save",
+            message=SimpleNamespace(message_id=bot_msg_id, chat=SimpleNamespace(id=user_id)),
+            answer=AsyncMock(),
+            edit_message_text=AsyncMock(),
+            edit_message_reply_markup=AsyncMock(),
+        ),
+    )
+
+
+async def test_on_save_marks_saved_and_relabels_button(db: Database) -> None:
+    from informer_bot.bot import on_save
+    db.set_user_auto_delete_hours(USER_ID, 6)
+    db.record_delivered(
+        user_id=USER_ID, channel_id=1, message_id=100, bot_message_id=777,
+        is_photo=False, body="b", now=1000, delete_at=1000 + 6 * 3600,
+    )
+
+    update = _save_cb_update(USER_ID, 777)
+    await on_save(update, _ctx(db))
+
+    state = db.get_delivered_save_state(
+        user_id=USER_ID, channel_id=1, message_id=100,
+    )
+    assert state == (True, None)
+    update.callback_query.edit_message_reply_markup.assert_awaited_once()
+    kw = update.callback_query.edit_message_reply_markup.await_args.kwargs
+    [[btn]] = [
+        [(b.text, b.callback_data) for b in row]
+        for row in kw["reply_markup"].inline_keyboard
+    ]
+    assert btn[1] == "save"
+    assert "Saved" in btn[0]
+
+
+async def test_on_save_toggles_back_resets_delete_at(db: Database) -> None:
+    from informer_bot.bot import on_save
+    db.set_user_auto_delete_hours(USER_ID, 6)
+    db.record_delivered(
+        user_id=USER_ID, channel_id=1, message_id=100, bot_message_id=777,
+        is_photo=False, body="b", now=1000, delete_at=1000 + 6 * 3600,
+    )
+    db.set_delivered_saved(
+        user_id=USER_ID, channel_id=1, message_id=100,
+        saved=True, delete_at=None,
+    )
+
+    update = _save_cb_update(USER_ID, 777)
+    await on_save(update, _ctx(db))
+
+    saved, delete_at = db.get_delivered_save_state(
+        user_id=USER_ID, channel_id=1, message_id=100,
+    )
+    assert saved is False
+    assert delete_at is not None and delete_at > int(__import__("time").time())
+
+
+async def test_on_save_preserves_dup_link_buttons(db: Database) -> None:
+    from informer_bot.bot import on_save
+    db.set_user_auto_delete_hours(USER_ID, 6)
+    db.record_delivered(
+        user_id=USER_ID, channel_id=1, message_id=100, bot_message_id=777,
+        is_photo=False, body="b", now=1000, delete_at=1000 + 6 * 3600,
+    )
+    db.set_delivered_dup_links(
+        user_id=USER_ID, channel_id=1, message_id=100,
+        dup_links=[("Channel B", "https://t.me/b/1")],
+    )
+
+    update = _save_cb_update(USER_ID, 777)
+    await on_save(update, _ctx(db))
+
+    kw = update.callback_query.edit_message_reply_markup.await_args.kwargs
+    rows = [
+        [(b.text, b.callback_data, getattr(b, "url", None)) for b in row]
+        for row in kw["reply_markup"].inline_keyboard
+    ]
+    assert len(rows) == 2
+    assert rows[0][0][2] == "https://t.me/b/1"
+    assert rows[1][0][1] == "save"
+
+
+async def test_on_save_silently_ignores_unknown_message(db: Database) -> None:
+    from informer_bot.bot import on_save
+    update = _save_cb_update(USER_ID, 12345)
+    await on_save(update, _ctx(db))
+    update.callback_query.answer.assert_awaited_once()
+    update.callback_query.edit_message_reply_markup.assert_not_called()
+
+
+# ---------- sweeper ----------
+
+async def test_sweep_due_deletions_deletes_due_rows_and_skips_saved(
+    db: Database, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    from informer_bot.main import sweep_due_deletions
+
+    db.record_delivered(
+        user_id=USER_ID, channel_id=1, message_id=100, bot_message_id=1,
+        is_photo=False, body="b", now=1, delete_at=1,
+    )
+    db.record_delivered(
+        user_id=USER_ID, channel_id=1, message_id=101, bot_message_id=2,
+        is_photo=False, body="b", now=1, delete_at=10**12,  # far future
+    )
+    db.record_delivered(
+        user_id=USER_ID, channel_id=1, message_id=102, bot_message_id=3,
+        is_photo=False, body="b", now=1, delete_at=1,
+    )
+    db.set_delivered_saved(
+        user_id=USER_ID, channel_id=1, message_id=102,
+        saved=True, delete_at=None,
+    )
+
+    bot = SimpleNamespace(delete_message=AsyncMock())
+    app = SimpleNamespace(bot=bot)
+
+    # Pause after first iteration so we can inspect the DB.
+    async def fake_sleep(_: float) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("informer_bot.main.asyncio.sleep", fake_sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await sweep_due_deletions(app, db)
+
+    deleted = sorted(c.kwargs["message_id"] for c in bot.delete_message.await_args_list)
+    assert deleted == [1]
+    # Row 100 gone, 101 untouched, 102 still saved.
+    assert db.get_delivered_save_state(
+        user_id=USER_ID, channel_id=1, message_id=100,
+    ) is None
+    assert db.get_delivered_save_state(
+        user_id=USER_ID, channel_id=1, message_id=101,
+    ) is not None
+    assert db.get_delivered_save_state(
+        user_id=USER_ID, channel_id=1, message_id=102,
+    ) == (True, None)

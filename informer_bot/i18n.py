@@ -60,6 +60,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "miniapp_intro": "Open the channel manager:",
         "miniapp_unconfigured": "Mini App is not configured (MINIAPP_URL is unset).",
         "miniapp_menu_label": "Channels",
+        "save_button": "💾 Save",
+        "saved_button": "✅ Saved",
     },
     "ru": {
         "greeting": "Привет, я informer. Открой Mini App, чтобы выбрать каналы — через бургер-меню или команду /app. /help — все команды.",
@@ -118,6 +120,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "miniapp_intro": "Открой менеджер каналов:",
         "miniapp_unconfigured": "Mini App не настроен (MINIAPP_URL не задан).",
         "miniapp_menu_label": "Каналы",
+        "save_button": "💾 Сохранить",
+        "saved_button": "✅ Сохранено",
     },
 }
 

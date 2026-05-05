@@ -43,11 +43,12 @@ CREATE TABLE IF NOT EXISTS seen (
     PRIMARY KEY (channel_id, message_id)
 );
 CREATE TABLE IF NOT EXISTS users (
-    user_id       INTEGER PRIMARY KEY,
-    status        TEXT NOT NULL CHECK(status IN ('pending','approved','denied')),
-    username      TEXT,
-    first_name    TEXT,
-    language      TEXT NOT NULL DEFAULT 'en' CHECK(language IN ('en','ru'))
+    user_id           INTEGER PRIMARY KEY,
+    status            TEXT NOT NULL CHECK(status IN ('pending','approved','denied')),
+    username          TEXT,
+    first_name        TEXT,
+    language          TEXT NOT NULL DEFAULT 'en' CHECK(language IN ('en','ru')),
+    auto_delete_hours INTEGER
 );
 CREATE TABLE IF NOT EXISTS usage (
     user_id       INTEGER PRIMARY KEY,
@@ -79,9 +80,12 @@ CREATE TABLE IF NOT EXISTS delivered (
     body           TEXT NOT NULL,
     created_at     INTEGER NOT NULL,
     dup_links_json TEXT NOT NULL DEFAULT '[]',
+    saved          INTEGER NOT NULL DEFAULT 0,
+    delete_at      INTEGER,
     PRIMARY KEY (user_id, channel_id, message_id)
 );
 CREATE INDEX IF NOT EXISTS idx_delivered_user_created ON delivered(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_delivered_user_botmsg ON delivered(user_id, bot_message_id);
 CREATE TABLE IF NOT EXISTS embedding_usage (
     id     INTEGER PRIMARY KEY CHECK (id = 1),
     tokens INTEGER NOT NULL DEFAULT 0
@@ -128,6 +132,16 @@ _MIGRATIONS: list[str] = [
     "ALTER TABLE channels ADD COLUMN username TEXT",
     # 5 -> 6: channels.about
     "ALTER TABLE channels ADD COLUMN about TEXT",
+    # 6 -> 7: users.auto_delete_hours
+    "ALTER TABLE users ADD COLUMN auto_delete_hours INTEGER",
+    # 7 -> 8: delivered.saved
+    "ALTER TABLE delivered ADD COLUMN saved INTEGER NOT NULL DEFAULT 0",
+    # 8 -> 9: delivered.delete_at + bot_message_id lookup index
+    """
+    ALTER TABLE delivered ADD COLUMN delete_at INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_delivered_user_botmsg
+        ON delivered(user_id, bot_message_id);
+    """,
 ]
 
 
@@ -222,6 +236,12 @@ class Database:
             return 4
         if "about" not in channels:
             return 5
+        if "auto_delete_hours" not in users:
+            return 6
+        if delivered and "saved" not in delivered:
+            return 7
+        if delivered and "delete_at" not in delivered:
+            return 8
         return len(_MIGRATIONS)
 
     def _migrate(self) -> None:
@@ -478,6 +498,27 @@ class Database:
             ).fetchone()
         return row[0] if row and row[0] else "en"
 
+    def get_user_auto_delete_hours(self, user_id: int) -> int | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT auto_delete_hours FROM users WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        return row[0] if row else None
+
+    def set_user_auto_delete_hours(
+        self, user_id: int, hours: int | None
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO users (user_id, status, auto_delete_hours) "
+                "VALUES (?, 'pending', ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET auto_delete_hours = excluded.auto_delete_hours",
+                (user_id, hours),
+            )
+            self._commit()
+        log.debug("set_user_auto_delete_hours user=%s hours=%s", user_id, hours)
+
     def set_language(self, user_id: int, language: str) -> None:
         with self._lock:
             self._conn.execute(
@@ -601,14 +642,108 @@ class Database:
         is_photo: bool,
         body: str,
         now: int | None = None,
+        delete_at: int | None = None,
     ) -> None:
         ts = int(time.time()) if now is None else now
         with self._lock:
             self._conn.execute(
                 "INSERT OR REPLACE INTO delivered "
-                "(user_id, channel_id, message_id, bot_message_id, is_photo, body, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (user_id, channel_id, message_id, bot_message_id, 1 if is_photo else 0, body, ts),
+                "(user_id, channel_id, message_id, bot_message_id, is_photo, body, "
+                " created_at, delete_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (user_id, channel_id, message_id, bot_message_id,
+                 1 if is_photo else 0, body, ts, delete_at),
+            )
+            self._commit()
+
+    def get_delivered_save_state(
+        self, *, user_id: int, channel_id: int, message_id: int
+    ) -> tuple[bool, int | None] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT saved, delete_at FROM delivered "
+                "WHERE user_id = ? AND channel_id = ? AND message_id = ?",
+                (user_id, channel_id, message_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return (bool(row[0]), row[1])
+
+    def set_delivered_saved(
+        self,
+        *,
+        user_id: int,
+        channel_id: int,
+        message_id: int,
+        saved: bool,
+        delete_at: int | None,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "UPDATE delivered SET saved = ?, delete_at = ? "
+                "WHERE user_id = ? AND channel_id = ? AND message_id = ?",
+                (1 if saved else 0, delete_at, user_id, channel_id, message_id),
+            )
+            self._commit()
+
+    def extend_delivered_delete_at(
+        self,
+        *,
+        user_id: int,
+        channel_id: int,
+        message_id: int,
+        delete_at: int,
+    ) -> None:
+        """Bump delete_at — only when the row is unsaved.
+
+        Saved rows must keep their NULL delete_at so the user's "save" survives
+        a follow-up duplicate.
+        """
+        with self._lock:
+            self._conn.execute(
+                "UPDATE delivered SET delete_at = ? "
+                "WHERE user_id = ? AND channel_id = ? AND message_id = ? "
+                "  AND saved = 0",
+                (delete_at, user_id, channel_id, message_id),
+            )
+            self._commit()
+
+    def get_delivered_by_bot_msg(
+        self, *, user_id: int, bot_message_id: int
+    ) -> tuple[int, int, bool, bool, int | None] | None:
+        """Return (channel_id, message_id, is_photo, saved, delete_at) or None."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT channel_id, message_id, is_photo, saved, delete_at "
+                "FROM delivered WHERE user_id = ? AND bot_message_id = ?",
+                (user_id, bot_message_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return (row[0], row[1], bool(row[2]), bool(row[3]), row[4])
+
+    def list_due_deletions(
+        self, *, now: int
+    ) -> list[tuple[int, int, int, int, bool]]:
+        """Return (user_id, channel_id, message_id, bot_message_id, is_photo)
+        for unsaved rows whose delete_at has passed."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT user_id, channel_id, message_id, bot_message_id, is_photo "
+                "FROM delivered "
+                "WHERE saved = 0 AND delete_at IS NOT NULL AND delete_at <= ?",
+                (now,),
+            ).fetchall()
+        return [(uid, cid, mid, bmid, bool(is_p)) for uid, cid, mid, bmid, is_p in rows]
+
+    def delete_delivered_row(
+        self, *, user_id: int, channel_id: int, message_id: int
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM delivered "
+                "WHERE user_id = ? AND channel_id = ? AND message_id = ?",
+                (user_id, channel_id, message_id),
             )
             self._commit()
 

@@ -1028,3 +1028,125 @@ async def test_handle_new_post_no_embed_fn_does_not_dedup_against_history(
     assert db.get_delivered_dup_links(
         user_id=10, channel_id=1, message_id=100
     ) == []
+
+
+# ---------- auto-delete ----------
+
+async def test_handle_new_post_no_save_button_when_auto_delete_off(
+    db: Database,
+) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.subscribe(user_id=10, channel_id=1, mode="all")
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock()
+    send_dm = _send_dm()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="body",
+        link="L", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+        embed_fn=_embed_fn(), edit_dm=_edit_dm(), now=1000,
+    )
+
+    assert "save_button" not in send_dm.await_args.kwargs
+    state = db.get_delivered_save_state(user_id=10, channel_id=1, message_id=100)
+    assert state == (False, None)
+
+
+async def test_handle_new_post_attaches_save_button_and_delete_at(
+    db: Database,
+) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.subscribe(user_id=10, channel_id=1, mode="all")
+    db.set_user_auto_delete_hours(10, 6)
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock()
+    send_dm = _send_dm()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="body",
+        link="L", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+        embed_fn=_embed_fn(), edit_dm=_edit_dm(), now=1000,
+    )
+
+    label = send_dm.await_args.kwargs["save_button"]
+    assert label  # localized non-empty string
+    state = db.get_delivered_save_state(user_id=10, channel_id=1, message_id=100)
+    assert state == (False, 1000 + 6 * 3600)
+
+
+async def test_handle_new_post_dup_chain_extends_delete_at(
+    db: Database,
+) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.upsert_channel(channel_id=2, title="B")
+    db.subscribe(user_id=10, channel_id=2, mode="all")
+    db.set_user_auto_delete_hours(10, 6)
+    db.store_post_embedding(
+        channel_id=1, message_id=100, embedding=[1.0, 0.0],
+        summary="prev", link="L1", now=900,
+    )
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=555,
+        is_photo=False, body="prev_body", now=900, delete_at=900 + 6 * 3600,
+    )
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock()
+    send_dm = _send_dm()
+    embed_fn = _embed_fn(vector=[1.0, 0.0])
+    edit_dm = _edit_dm()
+
+    await handle_new_post(
+        channel_id=2, message_id=200, text="dup",
+        link="L2", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+        embed_fn=embed_fn, edit_dm=edit_dm, now=2000,
+    )
+
+    edit_dm.assert_awaited_once()
+    assert edit_dm.await_args.kwargs.get("save_button")
+    state = db.get_delivered_save_state(
+        user_id=10, channel_id=1, message_id=100,
+    )
+    assert state == (False, 2000 + 6 * 3600)
+
+
+async def test_handle_new_post_dup_chain_skips_extension_when_saved(
+    db: Database,
+) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.upsert_channel(channel_id=2, title="B")
+    db.subscribe(user_id=10, channel_id=2, mode="all")
+    db.set_user_auto_delete_hours(10, 6)
+    db.store_post_embedding(
+        channel_id=1, message_id=100, embedding=[1.0, 0.0],
+        summary="prev", link="L1", now=900,
+    )
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=555,
+        is_photo=False, body="prev_body", now=900, delete_at=900 + 6 * 3600,
+    )
+    db.set_delivered_saved(
+        user_id=10, channel_id=1, message_id=100, saved=True, delete_at=None,
+    )
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock()
+    send_dm = _send_dm()
+    embed_fn = _embed_fn(vector=[1.0, 0.0])
+    edit_dm = _edit_dm()
+
+    await handle_new_post(
+        channel_id=2, message_id=200, text="dup",
+        link="L2", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+        embed_fn=embed_fn, edit_dm=edit_dm, now=2000,
+    )
+
+    edit_dm.assert_awaited_once()
+    # saved button label, not save
+    assert edit_dm.await_args.kwargs.get("save_button")
+    state = db.get_delivered_save_state(
+        user_id=10, channel_id=1, message_id=100,
+    )
+    assert state == (True, None)

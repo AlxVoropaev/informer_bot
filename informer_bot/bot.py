@@ -1,4 +1,5 @@
 import logging
+import time
 from dataclasses import dataclass
 
 from telegram import (
@@ -398,3 +399,67 @@ async def on_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def on_noop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _query(update).answer()
+
+
+def build_dm_keyboard(
+    dup_links: list[tuple[str, str]],
+    save_button_label: str | None,
+) -> InlineKeyboardMarkup | None:
+    """Compose the inline keyboard for a delivered DM.
+
+    Order: one URL-button row per dup link, then the Save/Saved row when
+    auto-delete is wired up for this message. Returns None when nothing
+    should be attached so callers can pass it straight to PTB.
+    """
+    rows: list[list[InlineKeyboardButton]] = [
+        [InlineKeyboardButton(text=title, url=link)] for title, link in dup_links
+    ]
+    if save_button_label is not None:
+        rows.append([InlineKeyboardButton(
+            text=save_button_label, callback_data="save",
+        )])
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
+async def on_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db = _db(context)
+    user_id = _user(update).id
+    query = _query(update)
+    lang = db.get_language(user_id)
+    msg = query.message
+    if msg is None:
+        await query.answer()
+        return
+    bot_message_id = msg.message_id
+    row = db.get_delivered_by_bot_msg(
+        user_id=user_id, bot_message_id=bot_message_id,
+    )
+    if row is None:
+        # Message expired or never tracked — silently ack.
+        await query.answer()
+        return
+    channel_id, message_id, _is_photo, saved, _delete_at = row
+    new_saved = not saved
+    if new_saved:
+        new_delete_at: int | None = None
+    else:
+        hours = db.get_user_auto_delete_hours(user_id)
+        new_delete_at = (
+            int(time.time()) + hours * 3600 if hours is not None else None
+        )
+    db.set_delivered_saved(
+        user_id=user_id, channel_id=channel_id, message_id=message_id,
+        saved=new_saved, delete_at=new_delete_at,
+    )
+    label = t(lang, "saved_button" if new_saved else "save_button")
+    dup_links = db.get_delivered_dup_links(
+        user_id=user_id, channel_id=channel_id, message_id=message_id,
+    )
+    keyboard = build_dm_keyboard(dup_links, label)
+    try:
+        await query.edit_message_reply_markup(reply_markup=keyboard)
+    except Exception:
+        log.exception(
+            "save toggle: edit failed user=%s msg=%s", user_id, bot_message_id,
+        )
+    await query.answer()
