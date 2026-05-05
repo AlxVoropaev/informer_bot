@@ -1,9 +1,4 @@
-# Informer Bot
-
-A Telegram bot that summarises posts from public channels and DMs you a short
-brief plus a link to the original.
-
-🇷🇺 [Русская версия](README_RU.md)
+# Usage & commands
 
 ## How it works
 
@@ -59,18 +54,3 @@ If you're the bot's `OWNER_ID`, you also get:
 - If a channel disappears from the Mini App, the admin either unsubscribed from it or blacklisted it. You'll get a one-time DM saying it's no longer available.
 - When the admin adds a new channel, you'll get a DM with a button that opens the Mini App straight to that channel's details — pick a mode there.
 - Only the admin can add or remove channels from the list — there's no way to request new ones through the bot.
-
-## Documentation
-
-**For self-hosters**
-
-- [Self-hosting setup](docs/setup.md) — install, configure `.env`, log in, run.
-- [Run with Docker Compose](docs/docker.md) — production deployment.
-- [Mini App URL & hosting](docs/miniapp-hosting.md) — `MINIAPP_URL`, Caddy + Let's Encrypt, alternatives.
-- [Embedding provider (deduplication)](docs/embeddings.md) — OpenAI vs local fastembed vs disabled.
-- [Auto-update from GitHub](docs/auto-update.md) — pull-based cron deploy.
-- [Tests](docs/tests.md) — running the test suite.
-
-**For contributors**
-
-- [Internal architecture & dev notes](docs/internals/architecture.md) — start here, then follow the links inside.

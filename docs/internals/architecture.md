@@ -1,0 +1,38 @@
+# Architecture
+
+## What this is
+
+Telegram news aggregator. A Telethon **user-account client** (the admin's account) reads
+posts from public channels the admin is subscribed to. A python-telegram-bot **bot**
+exposes those channels to bot users; when a bot user has a channel enabled and a new
+post lands, Claude summarises it and the bot DMs the user a 1–2-sentence brief plus a
+link to the original.
+
+One Python process runs both the client and the bot inside a single asyncio loop.
+
+## Roles
+
+- **Admin** (single, hard-coded `OWNER_ID`): owns the user-account session, owns the
+  source-of-truth channel list, can blacklist channels.
+- **Bot users** (many): subscribe via the bot, toggle channels on/off from the admin's
+  (post-blacklist) list, receive DMs.
+
+## Stack
+
+- Python 3.12, managed with `uv` (`pyproject.toml`, `uv sync`, `uv run`).
+- Telegram client: **Telethon** (MTProto user account, real-time `events.NewMessage`).
+- Telegram bot: **python-telegram-bot** (v21+, asyncio).
+- LLM: **anthropic** SDK, model `claude-haiku-4-5` (cheap & fast for summaries).
+- Embeddings (dedup): pluggable. **OpenAI** `text-embedding-3-small` @ 512 dims
+  (paid) or **fastembed** local CPU model (default
+  `intfloat/multilingual-e5-large`, 1024 dims, ONNX, no PyTorch). Provider
+  chosen via `EMBEDDING_PROVIDER`.
+- Storage: **SQLite** (single file, `data/informer.db`) + Telethon
+  `data/informer.session` file. The `data/` directory holds all mutable state
+  and is bind-mounted into the Docker container.
+- Config: **`.env`** (lives in `data/.env`) loaded via `python-dotenv`. Never
+  commit `.env` or `*.session`.
+- Container: **Dockerfile** + **compose.yaml** (`compose.yaml` not the legacy
+  `docker-compose.yml`). Image is built as a non-root user matching host
+  `HOST_UID`/`HOST_GID` so files written to `./data/` stay owned by you.
+- Tests: **pytest** + **pytest-asyncio**. TDD — failing test before code.
