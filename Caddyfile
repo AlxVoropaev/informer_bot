@@ -1,3 +1,3 @@
-{$MINIAPP_DOMAIN}:8443 {
+{$MINIAPP_DOMAIN}:9443 {
     reverse_proxy bot:8085
 }

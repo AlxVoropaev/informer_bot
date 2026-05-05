@@ -29,7 +29,7 @@ services:
     image: caddy:2-alpine
     ports:
       - "80:80"         # required by Let's Encrypt HTTP-01 challenge
-      - "8443:8443"     # HTTPS — non-standard because 443 is taken by MTProto on this host
+      - "9443:9443"     # HTTPS — non-standard because 443 is taken by MTProto on this host
     env_file: ./data/.env
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
