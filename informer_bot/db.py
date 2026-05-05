@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS users (
     username          TEXT,
     first_name        TEXT,
     language          TEXT NOT NULL DEFAULT 'en' CHECK(language IN ('en','ru')),
-    auto_delete_hours INTEGER
+    auto_delete_hours INTEGER,
+    dedup_debug       INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS usage (
     user_id       INTEGER PRIMARY KEY,
@@ -142,6 +143,8 @@ _MIGRATIONS: list[str] = [
     CREATE INDEX IF NOT EXISTS idx_delivered_user_botmsg
         ON delivered(user_id, bot_message_id);
     """,
+    # 9 -> 10: users.dedup_debug
+    "ALTER TABLE users ADD COLUMN dedup_debug INTEGER NOT NULL DEFAULT 0",
 ]
 
 
@@ -242,6 +245,8 @@ class Database:
             return 7
         if delivered and "delete_at" not in delivered:
             return 8
+        if "dedup_debug" not in users:
+            return 9
         return len(_MIGRATIONS)
 
     def _migrate(self) -> None:
@@ -518,6 +523,24 @@ class Database:
             )
             self._commit()
         log.debug("set_user_auto_delete_hours user=%s hours=%s", user_id, hours)
+
+    def get_dedup_debug(self, user_id: int) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT dedup_debug FROM users WHERE user_id = ?", (user_id,)
+            ).fetchone()
+        return bool(row[0]) if row else False
+
+    def set_dedup_debug(self, user_id: int, enabled: bool) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO users (user_id, status, dedup_debug) "
+                "VALUES (?, 'pending', ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET dedup_debug = excluded.dedup_debug",
+                (user_id, 1 if enabled else 0),
+            )
+            self._commit()
+        log.debug("set_dedup_debug user=%s enabled=%s", user_id, enabled)
 
     def set_language(self, user_id: int, language: str) -> None:
         with self._lock:

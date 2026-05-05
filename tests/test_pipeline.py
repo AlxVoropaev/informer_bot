@@ -768,15 +768,16 @@ async def test_handle_new_post_dedup_per_user(db: Database) -> None:
     assert sent_user == 20
 
 
-async def test_handle_new_post_debug_mode_marks_duplicate_with_marker(
+async def test_handle_new_post_dedup_debug_marks_duplicate_with_marker(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    db.upsert_channel(channel_id=1, title="Channel A")
     db.upsert_channel(channel_id=2, title="Channel B")
-    db.subscribe(user_id=10, channel_id=2, mode="debug")
+    db.subscribe(user_id=10, channel_id=2, mode="all")
+    db.set_dedup_debug(user_id=10, enabled=True)
     db.store_post_embedding(
         channel_id=1, message_id=100, embedding=[1.0, 0.0],
-        summary="prev", link="L1", now=900,
+        summary="prev", link="https://t.me/a/100", now=900,
     )
     db.record_delivered(
         user_id=10, channel_id=1, message_id=100, bot_message_id=555,
@@ -799,18 +800,57 @@ async def test_handle_new_post_debug_mode_marks_duplicate_with_marker(
     send_dm.assert_awaited_once()
     body = send_dm.await_args.args[1]
     assert body.startswith("🔁 DUPLICATE\n")
+    assert (
+        '↳ Original: <a href="https://t.me/a/100">Channel A</a>'
+    ) in body
     rows = {r[1]: r for r in db.list_dedup_candidates(user_id=10, since=0)}
     assert 200 in rows
 
 
-async def test_handle_new_post_debug_mode_duplicate_marker_localized(
+async def test_handle_new_post_dedup_debug_marker_and_original_link_localized(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    db.upsert_channel(channel_id=1, title="Канал А")
     db.upsert_channel(channel_id=2, title="B")
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
     db.set_language(user_id=10, language="ru")
+    db.subscribe(user_id=10, channel_id=2, mode="all")
+    db.set_dedup_debug(user_id=10, enabled=True)
+    db.store_post_embedding(
+        channel_id=1, message_id=100, embedding=[1.0, 0.0],
+        summary="prev", link="https://t.me/a/100", now=900,
+    )
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=555,
+        is_photo=False, body="prev", now=900,
+    )
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock()
+    send_dm = _send_dm()
+    embed_fn = _embed_fn(vector=[1.0, 0.0])
+    edit_dm = _edit_dm()
+
+    await handle_new_post(
+        channel_id=2, message_id=200, text="dup",
+        link="https://t.me/b/200", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+        embed_fn=embed_fn, edit_dm=edit_dm, now=1000,
+    )
+
+    body = send_dm.await_args.args[1]
+    assert body.startswith("🔁 ДУБЛЬ\n")
+    assert '↳ Оригинал: <a href="https://t.me/a/100">Канал А</a>' in body
+
+
+async def test_handle_new_post_filter_debug_without_dedup_debug_chains(
+    db: Database,
+) -> None:
+    """`mode='debug'` alone (filter-debug) keeps the silent edit-chain path
+    on duplicates — only the user-level dedup_debug toggle promotes them
+    to a fresh DM."""
+    db.upsert_channel(channel_id=1, title="A")
+    db.upsert_channel(channel_id=2, title="B")
     db.subscribe(user_id=10, channel_id=2, mode="debug")
     db.store_post_embedding(
         channel_id=1, message_id=100, embedding=[1.0, 0.0],
@@ -833,8 +873,8 @@ async def test_handle_new_post_debug_mode_duplicate_marker_localized(
         embed_fn=embed_fn, edit_dm=edit_dm, now=1000,
     )
 
-    body = send_dm.await_args.args[1]
-    assert body.startswith("🔁 ДУБЛЬ\n")
+    send_dm.assert_not_called()
+    edit_dm.assert_awaited_once()
 
 
 async def test_handle_new_post_dedup_outside_window_treated_as_new(db: Database) -> None:

@@ -162,11 +162,12 @@ data older than 24h. The caller's user_id is parsed from the `user` field and
 checked against `users.status='approved'`.
 
 Endpoints:
-- `GET /api/state` → `{user_id, language, is_owner, auto_delete_hours, channels: [...]}`
+- `GET /api/state` → `{user_id, language, is_owner, auto_delete_hours, dedup_debug, channels: [...]}`
 - `POST /api/subscription` `{channel_id, mode}` (`mode` ∈ `off|filtered|debug|all|unsubscribe`)
 - `POST /api/filter` `{channel_id, filter_prompt}` (null/empty clears)
 - `POST /api/language` `{language}`
 - `POST /api/auto_delete` `{hours}` — integer 1..720 enables, `null`/`0`/`""` disables
+- `POST /api/dedup_debug` `{enabled}` — user-level toggle for the dedup-debug delivery path (see Behaviour rules)
 - `GET /api/usage` → `{is_owner, user: {input_tokens, output_tokens, cost_usd}}` — owner payload also includes `per_user[]`, `system`, `embeddings`.
 
 Deep-linking: the new-channel announcement DM (sent on `/update`) attaches a
@@ -236,14 +237,19 @@ behind a regular domain bypasses both issues.
   - `subscriptions(user_id, channel_id, mode, filter_prompt)` —
     `mode IN ('off','filtered','debug','all')`. `'off'` rows are kept (instead
     of being deleted on toggle-off) so the per-channel `filter_prompt` survives
-    a temporary disable. `'debug'` delivers every post but prefixes a localized
-    marker (i18n key `debug_filtered_marker`, e.g. `🐞 FILTERED`) on posts the
-    filter would have excluded; with no `filter_prompt` it behaves like `'all'`.
+    a temporary disable. `'debug'` is the **filter-debug** mode: it delivers
+    every post but prefixes a localized marker (i18n key
+    `debug_filtered_marker`, e.g. `🐞 FILTERED`) on posts the filter would
+    have excluded; with no `filter_prompt` it behaves like `'all'`. (Dedup
+    debugging is a separate, user-level toggle — see `users.dedup_debug`.)
   - `seen(channel_id, message_id)` — restart catch-up dedupe + resume point
     (`MAX(message_id)` per channel = where catch-up starts)
-  - `users(user_id, status, username, first_name, language, auto_delete_hours)` —
+  - `users(user_id, status, username, first_name, language, auto_delete_hours, dedup_debug)` —
     `status IN ('pending','approved','denied')`, `language IN ('en','ru')`,
-    `auto_delete_hours` is the per-user auto-delete window (NULL = feature off)
+    `auto_delete_hours` is the per-user auto-delete window (NULL = feature off),
+    `dedup_debug` is a 0/1 user-level flag — when 1, duplicate-of-recent posts
+    are delivered as a fresh DM tagged `🔁 DUPLICATE` with a `↳ Original: …`
+    link instead of being silently chained as a button on the original DM.
   - `usage(user_id, input_tokens, output_tokens)` — per-user delivered-summary tokens
   - `system_usage(id=1, input_tokens, output_tokens)` — total API spend (incl. filter checks)
   - `post_embeddings(channel_id, message_id, created_at, embedding, summary, link)` —
@@ -328,9 +334,14 @@ behind a regular domain bypasses both issues.
     keep chaining onto the original DM via `delivered.dup_links_json`. The post
     IS inserted into `post_embeddings` so other users can still match against
     it.
-  - **Debug mode:** a fresh DM is sent with a localized `🔁 DUPLICATE` marker
-    prefix (i18n key `debug_duplicate_marker`), and `delivered` is recorded
-    normally. The "Also:" edit path is not taken.
+  - **Dedup-debug toggle (user-level, `users.dedup_debug`):** when on, the
+    edit-chain path is bypassed. A fresh DM is sent with a localized
+    `🔁 DUPLICATE` marker prefix (i18n key `debug_duplicate_marker`) plus a
+    trailing `↳ Original: <a href="…">Source channel title</a>` line (i18n
+    key `original_label`) pointing at the previously-delivered duplicate, and
+    `delivered` is recorded normally. Independent of the per-channel `'debug'`
+    mode — they're orthogonal: filter-debug tags filter-excluded posts;
+    dedup-debug surfaces dedup matches.
   - Embedding tokens are tracked in `embedding_usage` and surfaced in `/usage`
     for the owner only.
 - **Auto-delete:** opt-in per user via the Mini App settings (⚙️ icon in the

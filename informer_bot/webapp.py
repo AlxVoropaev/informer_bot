@@ -136,6 +136,7 @@ async def _state(request: web.Request) -> web.Response:
         "language": db.get_language(user_id),
         "is_owner": user_id == owner_id,
         "auto_delete_hours": db.get_user_auto_delete_hours(user_id),
+        "dedup_debug": db.get_dedup_debug(user_id),
         "channels": _channel_payload(db, user_id),
     })
 
@@ -239,6 +240,16 @@ async def _usage(request: web.Request) -> web.Response:
     return web.json_response(payload)
 
 
+async def _dedup_debug(request: web.Request) -> web.Response:
+    db = request.app[DB_KEY]
+    user_id: int = request["user_id"]
+    body = await request.json()
+    enabled = bool(body.get("enabled"))
+    db.set_dedup_debug(user_id, enabled)
+    log.info("miniapp: user=%s dedup_debug -> %s", user_id, enabled)
+    return web.json_response({"ok": True, "dedup_debug": enabled})
+
+
 async def _language(request: web.Request) -> web.Response:
     db = request.app[DB_KEY]
     user_id: int = request["user_id"]
@@ -261,6 +272,7 @@ def build_app(*, db: Database, bot_token: str, owner_id: int) -> web.Application
     app.router.add_post("/api/filter", _filter)
     app.router.add_post("/api/language", _language)
     app.router.add_post("/api/auto_delete", _auto_delete)
+    app.router.add_post("/api/dedup_debug", _dedup_debug)
     app.router.add_get("/api/usage", _usage)
 
     async def index(_req: web.Request) -> web.FileResponse:

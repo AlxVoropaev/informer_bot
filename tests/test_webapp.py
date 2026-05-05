@@ -349,6 +349,41 @@ async def test_auto_delete_set_then_clear(
     assert db.get_user_auto_delete_hours(USER_ID) is None
 
 
+async def test_state_returns_dedup_debug_default_false(
+    client: TestClient, db: Database
+) -> None:
+    init_data = _make_init_data(user_id=USER_ID)
+    resp = await client.get(
+        "/api/state", headers={"X-Telegram-Init-Data": init_data}
+    )
+    body = await resp.json()
+    assert body["dedup_debug"] is False
+
+
+async def test_dedup_debug_set_then_clear(
+    client: TestClient, db: Database
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)}
+    resp = await client.post(
+        "/api/dedup_debug", headers=headers, json={"enabled": True}
+    )
+    assert resp.status == 200
+    assert (await resp.json()) == {"ok": True, "dedup_debug": True}
+    assert db.get_dedup_debug(USER_ID) is True
+
+    resp = await client.post(
+        "/api/dedup_debug", headers=headers, json={"enabled": False}
+    )
+    assert resp.status == 200
+    assert (await resp.json()) == {"ok": True, "dedup_debug": False}
+    assert db.get_dedup_debug(USER_ID) is False
+
+    state = await (await client.get(
+        "/api/state", headers=headers
+    )).json()
+    assert state["dedup_debug"] is False
+
+
 @pytest.mark.parametrize("bad", [0, -1, 721, "abc"])
 async def test_auto_delete_rejects_bad_values(
     client: TestClient, db: Database, bad

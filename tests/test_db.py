@@ -74,6 +74,25 @@ def test_subscribe_with_mode_debug(db: Database) -> None:
     assert db.get_subscription_mode(user_id=42, channel_id=1) == "debug"
 
 
+def test_dedup_debug_default_false(db: Database) -> None:
+    assert db.get_dedup_debug(user_id=42) is False
+
+
+def test_set_dedup_debug_creates_user_row(db: Database) -> None:
+    db.set_dedup_debug(user_id=42, enabled=True)
+
+    assert db.get_dedup_debug(user_id=42) is True
+    assert db.get_user_status(user_id=42) == "pending"
+
+
+def test_set_dedup_debug_toggles(db: Database) -> None:
+    db.add_pending_user(user_id=42, username="alice")
+    db.set_dedup_debug(user_id=42, enabled=True)
+    db.set_dedup_debug(user_id=42, enabled=False)
+
+    assert db.get_dedup_debug(user_id=42) is False
+
+
 def test_subscribe_updates_existing_mode(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="A")
     db.subscribe(user_id=42, channel_id=1, mode="filtered")

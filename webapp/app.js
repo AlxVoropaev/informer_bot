@@ -47,6 +47,11 @@ const I18N = {
     autoDeleteEnabled: (h) => `Auto-delete after ${h}h.`,
     autoDeleteDisabled: "Auto-delete disabled.",
     autoDeleteBad: "Enter 1–720 hours.",
+    dedupDebugHeading: "Dedup debug",
+    dedupDebugLabel: "Enable",
+    dedupDebugHint: "When on, near-duplicate posts are still delivered as fresh DMs marked 🔁 DUPLICATE with a link to the original. Off: duplicates are silently chained as buttons under the first DM.",
+    dedupDebugOn: "Dedup debug on.",
+    dedupDebugOff: "Dedup debug off.",
   },
   ru: {
     search: "Поиск каналов…",
@@ -92,6 +97,11 @@ const I18N = {
     autoDeleteEnabled: (h) => `Авто-удаление через ${h} ч.`,
     autoDeleteDisabled: "Авто-удаление отключено.",
     autoDeleteBad: "Введи 1–720 часов.",
+    dedupDebugHeading: "Отладка дедупликации",
+    dedupDebugLabel: "Включить",
+    dedupDebugHint: "Когда включено, похожие посты приходят отдельными сообщениями с пометкой 🔁 ДУБЛЬ и ссылкой на оригинал. Выключено: дубли молча добавляются кнопкой к первому сообщению.",
+    dedupDebugOn: "Отладка дедупликации включена.",
+    dedupDebugOff: "Отладка дедупликации выключена.",
   },
 };
 
@@ -103,6 +113,7 @@ const state = {
   selectedId: null,
   isOwner: false,
   autoDeleteHours: null,
+  dedupDebug: false,
 };
 
 function t() { return I18N[state.language] || I18N.en; }
@@ -149,6 +160,9 @@ function applyLanguage() {
   el("autodel-hint").textContent = dict.autoDeleteHint;
   el("autodel-save").textContent = dict.autoDeleteSave;
   el("autodel-clear").textContent = dict.autoDeleteClear;
+  el("dedup-debug-heading").textContent = dict.dedupDebugHeading;
+  el("dedup-debug-label").textContent = dict.dedupDebugLabel;
+  el("dedup-debug-hint").textContent = dict.dedupDebugHint;
   document.querySelectorAll('input[name="mode"]').forEach((input) => {
     const labelSpan = input.nextElementSibling;
     labelSpan.textContent = dict.modes[input.value];
@@ -363,6 +377,7 @@ function closeUsage() {
 
 function openSettings() {
   el("autodel-input").value = state.autoDeleteHours == null ? "" : String(state.autoDeleteHours);
+  el("dedup-debug-input").checked = !!state.dedupDebug;
   el("settings").classList.remove("hidden");
   el("settings").setAttribute("aria-hidden", "false");
   el("list").classList.add("hidden");
@@ -382,6 +397,22 @@ function closeSettings() {
   if (tg && tg.BackButton) {
     tg.BackButton.offClick(closeSettings);
     tg.BackButton.hide();
+  }
+}
+
+async function saveDedupDebug(enabled) {
+  try {
+    const data = await api("/api/dedup_debug", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    });
+    state.dedupDebug = !!data.dedup_debug;
+    const dict = t();
+    showToast(state.dedupDebug ? dict.dedupDebugOn : dict.dedupDebugOff);
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+  } catch (e) {
+    el("dedup-debug-input").checked = !!state.dedupDebug;
+    showToast(e.message || t().network_error);
   }
 }
 
@@ -479,6 +510,7 @@ async function init() {
     state.channels = data.channels || [];
     state.isOwner = !!data.is_owner;
     state.autoDeleteHours = data.auto_delete_hours == null ? null : Number(data.auto_delete_hours);
+    state.dedupDebug = !!data.dedup_debug;
     rebuildLangSelect();
     applyLanguage();
     renderList();
@@ -512,6 +544,9 @@ async function init() {
   el("autodel-clear").addEventListener("click", () => {
     el("autodel-input").value = "";
     saveAutoDelete(null);
+  });
+  el("dedup-debug-input").addEventListener("change", (ev) => {
+    saveDedupDebug(!!ev.target.checked);
   });
 
   document.querySelectorAll('input[name="mode"]').forEach((input) => {

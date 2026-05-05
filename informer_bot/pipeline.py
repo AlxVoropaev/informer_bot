@@ -20,15 +20,28 @@ AnnounceNewChannelFn = Callable[[int, int, str], Awaitable[None]]
 
 
 def _format_post(
-    channel_title: str, summary: str, link: str, marker: str | None = None
+    channel_title: str,
+    summary: str,
+    link: str,
+    marker: str | None = None,
+    tail: str | None = None,
 ) -> str:
     body = (
         f'<a href="{html.escape(link, quote=True)}">{html.escape(channel_title)}</a>'
         f'\n{html.escape(summary)}'
     )
     if marker:
-        return f"{html.escape(marker)}\n{body}"
+        body = f"{html.escape(marker)}\n{body}"
+    if tail:
+        body = f"{body}\n{tail}"
     return body
+
+
+def _original_link_html(label: str, title: str, url: str) -> str:
+    return (
+        f'↳ {html.escape(label)}: '
+        f'<a href="{html.escape(url, quote=True)}">{html.escape(title)}</a>'
+    )
 
 
 async def handle_new_post(
@@ -133,9 +146,17 @@ async def handle_new_post(
 
         send_kwargs = {"save_button": save_label} if save_label is not None else {}
 
-        if duplicate is not None and mode == "debug":
+        dedup_debug = duplicate is not None and db.get_dedup_debug(user_id)
+
+        if duplicate is not None and dedup_debug:
             dup_marker = t(lang, "debug_duplicate_marker")
-            body = _format_post(channel_title, summary.text, link, dup_marker)
+            orig_title = db.get_channel_title(duplicate.channel_id) or ""
+            tail_html = _original_link_html(
+                t(lang, "original_label"), orig_title, duplicate.link,
+            )
+            body = _format_post(
+                channel_title, summary.text, link, dup_marker, tail=tail_html,
+            )
             bot_msg_id = await send_dm(user_id, body, photo, **send_kwargs)
             with db.transaction():
                 if bot_msg_id is not None:
