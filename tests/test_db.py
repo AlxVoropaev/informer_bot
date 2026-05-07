@@ -1,3 +1,4 @@
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -215,62 +216,93 @@ def test_delete_channel_removes_channel_and_subscriptions(db: Database) -> None:
 
 # ---------- usage tracking ----------
 
-def test_get_usage_returns_zero_for_unknown_user(db: Database) -> None:
-    assert db.get_usage(user_id=42) == (0, 0)
+def test_get_usage_returns_empty_for_unknown_user(db: Database) -> None:
+    assert db.get_usage(user_id=42) == []
 
 
 def test_add_usage_accumulates(db: Database) -> None:
-    db.add_usage(user_id=42, input_tokens=100, output_tokens=20)
-    db.add_usage(user_id=42, input_tokens=50, output_tokens=10)
+    db.add_usage(user_id=42, provider="anthropic", input_tokens=100, output_tokens=20)
+    db.add_usage(user_id=42, provider="anthropic", input_tokens=50, output_tokens=10)
 
-    assert db.get_usage(user_id=42) == (150, 30)
+    assert db.get_usage(user_id=42) == [("anthropic", 150, 30)]
 
 
 def test_add_usage_separate_users(db: Database) -> None:
-    db.add_usage(user_id=10, input_tokens=100, output_tokens=20)
-    db.add_usage(user_id=20, input_tokens=200, output_tokens=40)
+    db.add_usage(user_id=10, provider="anthropic", input_tokens=100, output_tokens=20)
+    db.add_usage(user_id=20, provider="anthropic", input_tokens=200, output_tokens=40)
 
-    assert db.get_usage(user_id=10) == (100, 20)
-    assert db.get_usage(user_id=20) == (200, 40)
+    assert db.get_usage(user_id=10) == [("anthropic", 100, 20)]
+    assert db.get_usage(user_id=20) == [("anthropic", 200, 40)]
 
 
-def test_get_system_usage_starts_at_zero(db: Database) -> None:
-    assert db.get_system_usage() == (0, 0)
+def test_add_usage_separate_providers_for_same_user(db: Database) -> None:
+    db.add_usage(user_id=10, provider="anthropic", input_tokens=100, output_tokens=20)
+    db.add_usage(user_id=10, provider="remote", input_tokens=300, output_tokens=50)
+
+    assert db.get_usage(user_id=10) == [
+        ("anthropic", 100, 20),
+        ("remote", 300, 50),
+    ]
+
+
+def test_get_system_usage_starts_empty(db: Database) -> None:
+    assert db.get_system_usage() == []
 
 
 def test_add_system_usage_accumulates(db: Database) -> None:
-    db.add_system_usage(input_tokens=100, output_tokens=20)
-    db.add_system_usage(input_tokens=50, output_tokens=10)
+    db.add_system_usage(provider="anthropic", input_tokens=100, output_tokens=20)
+    db.add_system_usage(provider="anthropic", input_tokens=50, output_tokens=10)
 
-    assert db.get_system_usage() == (150, 30)
+    assert db.get_system_usage() == [("anthropic", 150, 30)]
+
+
+def test_add_system_usage_separate_providers(db: Database) -> None:
+    db.add_system_usage(provider="anthropic", input_tokens=100, output_tokens=20)
+    db.add_system_usage(provider="remote", input_tokens=300, output_tokens=50)
+
+    assert db.get_system_usage() == [
+        ("anthropic", 100, 20),
+        ("remote", 300, 50),
+    ]
 
 
 def test_list_all_usage_returns_raw_fields(db: Database) -> None:
     db.add_pending_user(user_id=10, username="alice", first_name="Alice")
     db.add_pending_user(user_id=20, username=None, first_name="Bob")
     db.add_pending_user(user_id=30, username=None, first_name=None)
-    db.add_usage(user_id=10, input_tokens=100, output_tokens=20)
-    db.add_usage(user_id=20, input_tokens=50, output_tokens=10)
-    db.add_usage(user_id=30, input_tokens=25, output_tokens=5)
+    db.add_usage(user_id=10, provider="anthropic", input_tokens=100, output_tokens=20)
+    db.add_usage(user_id=20, provider="anthropic", input_tokens=50, output_tokens=10)
+    db.add_usage(user_id=30, provider="anthropic", input_tokens=25, output_tokens=5)
 
-    rows = {
-        uid: (username, first_name, inp, out)
-        for uid, username, first_name, inp, out in db.list_all_usage()
+    rows = db.list_all_usage()
+    by_uid = {
+        uid: (username, first_name, provider, inp, out)
+        for uid, username, first_name, provider, inp, out in rows
     }
 
-    assert rows[10] == ("alice", "Alice", 100, 20)
-    assert rows[20] == (None, "Bob", 50, 10)
-    assert rows[30] == (None, None, 25, 5)
+    assert by_uid[10] == ("alice", "Alice", "anthropic", 100, 20)
+    assert by_uid[20] == (None, "Bob", "anthropic", 50, 10)
+    assert by_uid[30] == (None, None, "anthropic", 25, 5)
 
 
 def test_list_all_usage_includes_users_without_user_row(db: Database) -> None:
-    db.add_usage(user_id=99, input_tokens=10, output_tokens=2)
+    db.add_usage(user_id=99, provider="anthropic", input_tokens=10, output_tokens=2)
 
     rows = {
-        uid: (username, first_name, inp, out)
-        for uid, username, first_name, inp, out in db.list_all_usage()
+        uid: (username, first_name, provider, inp, out)
+        for uid, username, first_name, provider, inp, out in db.list_all_usage()
     }
-    assert rows[99] == (None, None, 10, 2)
+    assert rows[99] == (None, None, "anthropic", 10, 2)
+
+
+def test_list_all_usage_returns_one_row_per_user_provider(db: Database) -> None:
+    db.add_pending_user(user_id=10, username="alice")
+    db.add_usage(user_id=10, provider="anthropic", input_tokens=100, output_tokens=20)
+    db.add_usage(user_id=10, provider="remote", input_tokens=300, output_tokens=50)
+
+    rows = db.list_all_usage()
+    providers = sorted(provider for _, _, _, provider, _, _ in rows)
+    assert providers == ["anthropic", "remote"]
 
 
 def test_format_user_label_renders_username_first_name_and_fallback() -> None:
@@ -538,15 +570,106 @@ def test_purge_dedup_older_than_cutoff(db: Database) -> None:
     assert [r[1] for r in rows] == [200]
 
 
-def test_get_embedding_usage_starts_at_zero(db: Database) -> None:
-    assert db.get_embedding_usage() == 0
+def test_get_embedding_usage_starts_empty(db: Database) -> None:
+    assert db.get_embedding_usage() == []
 
 
 def test_add_embedding_usage_accumulates(db: Database) -> None:
-    db.add_embedding_usage(50)
-    db.add_embedding_usage(25)
+    db.add_embedding_usage(provider="openai", tokens=50)
+    db.add_embedding_usage(provider="openai", tokens=25)
 
-    assert db.get_embedding_usage() == 75
+    assert db.get_embedding_usage() == [("openai", 75)]
+
+
+def test_add_embedding_usage_separate_providers(db: Database) -> None:
+    db.add_embedding_usage(provider="openai", tokens=50)
+    db.add_embedding_usage(provider="remote", tokens=20)
+
+    assert db.get_embedding_usage() == [("openai", 50), ("remote", 20)]
+
+
+def test_migration_v10_to_v11_preserves_old_usage_under_unknown(
+    tmp_path: Path,
+) -> None:
+    """Pre-populate a v10-shape DB with the old singleton-row usage tables,
+    then open it through Database and confirm the rows survive under
+    provider='unknown'."""
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE channels (
+            id INTEGER PRIMARY KEY, title TEXT NOT NULL,
+            blacklisted INTEGER NOT NULL DEFAULT 0, username TEXT, about TEXT
+        );
+        CREATE TABLE subscriptions (
+            user_id INTEGER NOT NULL, channel_id INTEGER NOT NULL,
+            mode TEXT NOT NULL DEFAULT 'filtered'
+                CHECK(mode IN ('off','filtered','debug','all')),
+            filter_prompt TEXT,
+            PRIMARY KEY (user_id, channel_id),
+            FOREIGN KEY (channel_id) REFERENCES channels(id)
+        );
+        CREATE TABLE seen (
+            channel_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
+            PRIMARY KEY (channel_id, message_id)
+        );
+        CREATE TABLE users (
+            user_id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL CHECK(status IN ('pending','approved','denied')),
+            username TEXT, first_name TEXT,
+            language TEXT NOT NULL DEFAULT 'en' CHECK(language IN ('en','ru')),
+            auto_delete_hours INTEGER,
+            dedup_debug INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE usage (
+            user_id INTEGER PRIMARY KEY,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE system_usage (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE post_embeddings (
+            channel_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
+            created_at INTEGER NOT NULL, embedding BLOB NOT NULL,
+            summary TEXT NOT NULL, link TEXT NOT NULL,
+            PRIMARY KEY (channel_id, message_id)
+        );
+        CREATE TABLE delivered (
+            user_id INTEGER NOT NULL, channel_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL, bot_message_id INTEGER NOT NULL,
+            is_photo INTEGER NOT NULL, body TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            dup_links_json TEXT NOT NULL DEFAULT '[]',
+            saved INTEGER NOT NULL DEFAULT 0,
+            delete_at INTEGER,
+            PRIMARY KEY (user_id, channel_id, message_id)
+        );
+        CREATE TABLE embedding_usage (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            tokens INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO usage (user_id, input_tokens, output_tokens)
+            VALUES (10, 123, 45), (20, 7, 1);
+        INSERT INTO system_usage (id, input_tokens, output_tokens)
+            VALUES (1, 999, 100);
+        INSERT INTO embedding_usage (id, tokens) VALUES (1, 555);
+        INSERT INTO meta (key, value) VALUES ('schema_version', '10');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(db_path)
+
+    assert db.get_usage(user_id=10) == [("unknown", 123, 45)]
+    assert db.get_usage(user_id=20) == [("unknown", 7, 1)]
+    assert db.get_system_usage() == [("unknown", 999, 100)]
+    assert db.get_embedding_usage() == [("unknown", 555)]
 
 
 def test_purge_dedup_all_clears_both_tables(db: Database) -> None:
@@ -724,34 +847,34 @@ def test_delete_delivered_row_removes_only_that_row(db: Database) -> None:
 def test_transaction_commits_on_success(db: Database) -> None:
     db.add_pending_user(user_id=1, username="a")
     with db.transaction():
-        db.add_usage(user_id=1, input_tokens=10, output_tokens=2)
-        db.add_system_usage(input_tokens=10, output_tokens=2)
+        db.add_usage(user_id=1, provider="anthropic", input_tokens=10, output_tokens=2)
+        db.add_system_usage(provider="anthropic", input_tokens=10, output_tokens=2)
 
-    assert db.get_usage(user_id=1) == (10, 2)
-    assert db.get_system_usage() == (10, 2)
+    assert db.get_usage(user_id=1) == [("anthropic", 10, 2)]
+    assert db.get_system_usage() == [("anthropic", 10, 2)]
 
 
 def test_transaction_rolls_back_on_exception(db: Database) -> None:
     db.add_pending_user(user_id=1, username="a")
-    db.add_usage(user_id=1, input_tokens=5, output_tokens=1)
-    db.add_system_usage(input_tokens=5, output_tokens=1)
+    db.add_usage(user_id=1, provider="anthropic", input_tokens=5, output_tokens=1)
+    db.add_system_usage(provider="anthropic", input_tokens=5, output_tokens=1)
 
     with pytest.raises(RuntimeError):
         with db.transaction():
-            db.add_usage(user_id=1, input_tokens=100, output_tokens=20)
-            db.add_system_usage(input_tokens=100, output_tokens=20)
+            db.add_usage(user_id=1, provider="anthropic", input_tokens=100, output_tokens=20)
+            db.add_system_usage(provider="anthropic", input_tokens=100, output_tokens=20)
             raise RuntimeError("boom")
 
-    assert db.get_usage(user_id=1) == (5, 1)
-    assert db.get_system_usage() == (5, 1)
+    assert db.get_usage(user_id=1) == [("anthropic", 5, 1)]
+    assert db.get_system_usage() == [("anthropic", 5, 1)]
 
 
 def test_transaction_nested_flat(db: Database) -> None:
     db.add_pending_user(user_id=1, username="a")
     with db.transaction():
-        db.add_usage(user_id=1, input_tokens=3, output_tokens=1)
+        db.add_usage(user_id=1, provider="anthropic", input_tokens=3, output_tokens=1)
         with db.transaction():
-            db.add_system_usage(input_tokens=3, output_tokens=1)
+            db.add_system_usage(provider="anthropic", input_tokens=3, output_tokens=1)
 
-    assert db.get_usage(user_id=1) == (3, 1)
-    assert db.get_system_usage() == (3, 1)
+    assert db.get_usage(user_id=1) == [("anthropic", 3, 1)]
+    assert db.get_system_usage() == [("anthropic", 3, 1)]

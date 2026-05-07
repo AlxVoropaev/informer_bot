@@ -206,36 +206,88 @@ async def _usage(request: web.Request) -> web.Response:
     db = request.app[DB_KEY]
     owner_id = request.app[OWNER_ID_KEY]
     user_id: int = request["user_id"]
-    inp, out = db.get_usage(user_id)
+    user_rows = [
+        (p, i, o) for p, i, o in db.get_usage(user_id)
+        if p != "unknown" or i != 0 or o != 0
+    ]
+    user_total_in = sum(i for _, i, _ in user_rows)
+    user_total_out = sum(o for _, _, o in user_rows)
+    user_total_cost = sum(estimate_cost_usd(p, i, o) for p, i, o in user_rows)
     payload: dict = {
         "is_owner": user_id == owner_id,
         "user": {
-            "input_tokens": inp,
-            "output_tokens": out,
-            "cost_usd": estimate_cost_usd(inp, out),
+            "by_provider": [
+                {
+                    "provider": p,
+                    "input_tokens": i,
+                    "output_tokens": o,
+                    "cost_usd": estimate_cost_usd(p, i, o),
+                }
+                for p, i, o in user_rows
+            ],
+            "input_tokens": user_total_in,
+            "output_tokens": user_total_out,
+            "cost_usd": user_total_cost,
         },
     }
     if user_id == owner_id:
-        sys_in, sys_out = db.get_system_usage()
-        emb_tokens = db.get_embedding_usage()
-        payload["per_user"] = [
-            {
+        sys_rows = [
+            (p, i, o) for p, i, o in db.get_system_usage()
+            if p != "unknown" or i != 0 or o != 0
+        ]
+        emb_rows = [
+            (p, t) for p, t in db.get_embedding_usage()
+            if p != "unknown" or t != 0
+        ]
+        per_user: dict[int, dict] = {}
+        for uid, username, first_name, provider, ui, uo in db.list_all_usage():
+            if provider == "unknown" and ui == 0 and uo == 0:
+                continue
+            entry = per_user.setdefault(uid, {
                 "user_id": uid,
                 "label": format_user_label(uid, username, first_name),
+                "by_provider": [],
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cost_usd": 0.0,
+            })
+            entry["by_provider"].append({
+                "provider": provider,
                 "input_tokens": ui,
                 "output_tokens": uo,
-                "cost_usd": estimate_cost_usd(ui, uo),
-            }
-            for uid, username, first_name, ui, uo in db.list_all_usage()
-        ]
+                "cost_usd": estimate_cost_usd(provider, ui, uo),
+            })
+            entry["input_tokens"] += ui
+            entry["output_tokens"] += uo
+            entry["cost_usd"] += estimate_cost_usd(provider, ui, uo)
+        payload["per_user"] = list(per_user.values())
         payload["system"] = {
-            "input_tokens": sys_in,
-            "output_tokens": sys_out,
-            "cost_usd": estimate_cost_usd(sys_in, sys_out),
+            "by_provider": [
+                {
+                    "provider": p,
+                    "input_tokens": i,
+                    "output_tokens": o,
+                    "cost_usd": estimate_cost_usd(p, i, o),
+                }
+                for p, i, o in sys_rows
+            ],
+            "input_tokens": sum(i for _, i, _ in sys_rows),
+            "output_tokens": sum(o for _, _, o in sys_rows),
+            "cost_usd": sum(estimate_cost_usd(p, i, o) for p, i, o in sys_rows),
         }
         payload["embeddings"] = {
-            "tokens": emb_tokens,
-            "cost_usd": estimate_embedding_cost_usd(emb_tokens),
+            "by_provider": [
+                {
+                    "provider": p,
+                    "tokens": t,
+                    "cost_usd": estimate_embedding_cost_usd(p, t),
+                }
+                for p, t in emb_rows
+            ],
+            "tokens": sum(t for _, t in emb_rows),
+            "cost_usd": sum(
+                estimate_embedding_cost_usd(p, t) for p, t in emb_rows
+            ),
         }
     return web.json_response(payload)
 

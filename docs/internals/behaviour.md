@@ -41,9 +41,13 @@ See also: [storage.md](storage.md), [dedup.md](dedup.md),
   - `/help` — text-only listing of available commands. Tells users to open the
     Mini App for channel/filter/language management. Owner sees an extra admin
     section listing `/blacklist` and `/update`.
-  - `/usage` — show your input/output token totals + estimated USD cost. Owner sees
-    a per-user breakdown plus the system total (actual API spend, including filter checks).
-    Available both as a Telegram command and inside the Mini App
+  - `/usage` — show your input/output token totals + estimated USD cost,
+    broken down per provider (`anthropic`, `remote`, etc.) plus a total.
+    Costs are looked up per-provider via `summarizer.estimate_cost_usd`, so
+    free local providers (Ollama, remote) read $0 while any fallback to
+    Claude/OpenAI keeps its real price. Owner sees a per-user, per-provider
+    breakdown plus the system total (actual API spend, including filter
+    checks). Available both as a Telegram command and inside the Mini App
     (`GET /api/usage`, top-bar 📊 button).
   - `/app` — replies with an inline `🪟 Open Mini App` button
     (`web_app=WebAppInfo(MINIAPP_URL)`). Replies with `miniapp_unconfigured` if

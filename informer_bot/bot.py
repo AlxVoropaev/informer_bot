@@ -187,9 +187,32 @@ async def cmd_app(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await message.reply_text(t(lang, "miniapp_intro"), reply_markup=keyboard)
 
 
-def _format_usage_line(label: str, input_tokens: int, output_tokens: int) -> str:
-    cost = estimate_cost_usd(input_tokens, output_tokens)
-    return f"{label}: in={input_tokens:,} out={output_tokens:,} ≈ ${cost:.4f}"
+def _format_chat_line(
+    label: str, provider: str, input_tokens: int, output_tokens: int
+) -> str:
+    cost = estimate_cost_usd(provider, input_tokens, output_tokens)
+    return (
+        f"  {label}: in={input_tokens:,} out={output_tokens:,} ≈ ${cost:.4f}"
+    )
+
+
+def _format_embed_line(label: str, provider: str, tokens: int) -> str:
+    cost = estimate_embedding_cost_usd(provider, tokens)
+    return f"  {label}: tokens={tokens:,} ≈ ${cost:.4f}"
+
+
+def _visible_chat_rows(
+    rows: list[tuple[str, int, int]],
+) -> list[tuple[str, int, int]]:
+    """Hide a zeroed-out 'unknown' bucket but keep nonzero legacy data."""
+    return [
+        (p, i, o) for p, i, o in rows
+        if p != "unknown" or i != 0 or o != 0
+    ]
+
+
+def _visible_embed_rows(rows: list[tuple[str, int]]) -> list[tuple[str, int]]:
+    return [(p, t_) for p, t_ in rows if p != "unknown" or t_ != 0]
 
 
 async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -203,32 +226,56 @@ async def cmd_usage(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     if user_id == _owner_id(context):
-        rows = db.list_all_usage()
-        sys_in, sys_out = db.get_system_usage()
-        emb_tokens = db.get_embedding_usage()
+        all_rows = db.list_all_usage()
+        sys_rows = _visible_chat_rows(db.get_system_usage())
+        emb_rows = _visible_embed_rows(db.get_embedding_usage())
         lines = [t(lang, "usage_admin_header")]
-        if rows:
-            for uid, username, first_name, inp, out in rows:
-                label = format_user_label(uid, username, first_name)
-                lines.append(_format_usage_line(label, inp, out))
+        if all_rows:
+            current_uid: int | None = None
+            for uid, username, first_name, provider, inp, out in all_rows:
+                if provider == "unknown" and inp == 0 and out == 0:
+                    continue
+                if uid != current_uid:
+                    current_uid = uid
+                    lines.append(format_user_label(uid, username, first_name))
+                lines.append(_format_chat_line(provider, provider, inp, out))
         else:
             lines.append(t(lang, "usage_admin_none"))
         lines.append("")
-        lines.append(_format_usage_line(t(lang, "usage_admin_system_label"), sys_in, sys_out))
-        lines.append(t(
-            lang, "usage_admin_embedding_line",
-            label=t(lang, "usage_admin_embedding_label"),
-            tokens=emb_tokens,
-            cost=estimate_embedding_cost_usd(emb_tokens),
-        ))
+        lines.append(t(lang, "usage_admin_system_label"))
+        if sys_rows:
+            for provider, inp, out in sys_rows:
+                lines.append(_format_chat_line(provider, provider, inp, out))
+        else:
+            lines.append(t(lang, "usage_admin_none"))
+        lines.append("")
+        lines.append(t(lang, "usage_admin_embedding_label"))
+        if emb_rows:
+            for provider, tokens in emb_rows:
+                lines.append(_format_embed_line(provider, provider, tokens))
+        else:
+            lines.append(t(lang, "usage_admin_none"))
         await message.reply_text("\n".join(lines))
         return
 
-    inp, out = db.get_usage(user_id)
-    cost = estimate_cost_usd(inp, out)
-    await message.reply_text(
-        t(lang, "usage_user_block", inp=inp, out=out, cost=cost)
-    )
+    rows = _visible_chat_rows(db.get_usage(user_id))
+    lines = [t(lang, "usage_user_header")]
+    if rows:
+        total_in = 0
+        total_out = 0
+        total_cost = 0.0
+        for provider, inp, out in rows:
+            lines.append(_format_chat_line(provider, provider, inp, out))
+            total_in += inp
+            total_out += out
+            total_cost += estimate_cost_usd(provider, inp, out)
+        lines.append(t(
+            lang, "usage_user_total",
+            inp=total_in, out=total_out, cost=total_cost,
+        ))
+    else:
+        lines.append(t(lang, "usage_user_none"))
+    await message.reply_text("\n".join(lines))
 
 
 async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

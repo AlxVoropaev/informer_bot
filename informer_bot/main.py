@@ -55,7 +55,6 @@ from informer_bot.pipeline import (
     handle_new_post,
 )
 from informer_bot.remote_processor import RemoteProcessorClient
-from informer_bot import summarizer
 from informer_bot.summarizer import (
     EMBED_DIMENSIONS,
     EMBED_MODEL,
@@ -88,7 +87,9 @@ def setup_embedder(
         if not cfg.openai_api_key:
             raise SystemExit("EMBEDDING_PROVIDER=openai but OPENAI_API_KEY is missing")
         openai_client = AsyncOpenAI(api_key=cfg.openai_api_key)
-        embed_fn = functools.partial(embed_summary, client=openai_client)
+        embed_fn = functools.partial(
+            embed_summary, client=openai_client, provider="openai",
+        )
         embedding_id = f"openai:{EMBED_MODEL}:{EMBED_DIMENSIONS}"
         log.info("embedding provider: openai (%s, %d dims)", EMBED_MODEL, EMBED_DIMENSIONS)
     elif provider == "ollama":
@@ -98,6 +99,7 @@ def setup_embedder(
         embed_fn = functools.partial(
             embed_summary,
             client=client,
+            provider="ollama",
             model=cfg.ollama_embedding_model,
             dimensions=None,
         )
@@ -146,13 +148,14 @@ def _build_openai_embed_fn(cfg: Config) -> EmbedFn:
     if not cfg.openai_api_key:
         raise SystemExit("OPENAI_API_KEY missing for embedding fallback")
     openai_client = AsyncOpenAI(api_key=cfg.openai_api_key)
-    return functools.partial(embed_summary, client=openai_client)
+    return functools.partial(embed_summary, client=openai_client, provider="openai")
 
 
 def _build_ollama_embed_fn(cfg: Config, ollama_client: AsyncOpenAI) -> EmbedFn:
     return functools.partial(
         embed_summary,
         client=ollama_client,
+        provider="ollama",
         model=cfg.ollama_embedding_model,
         dimensions=None,
     )
@@ -349,9 +352,6 @@ async def main() -> None:
     if cfg.chat_provider == "ollama":
         ollama_client = AsyncOpenAI(base_url=cfg.ollama_base_url, api_key="ollama")
         summarize_fn, is_relevant_fn = _build_ollama_chat_fns(cfg, ollama_client)
-        # Local model has no per-token cost; zero out chat prices.
-        summarizer.PRICE_PER_MTOK_INPUT = 0.0
-        summarizer.PRICE_PER_MTOK_OUTPUT = 0.0
         log.info(
             "chat provider: ollama (%s @ %s)",
             cfg.ollama_chat_model, cfg.ollama_base_url,
@@ -366,9 +366,6 @@ async def main() -> None:
             fb_sum, fb_rel = _build_ollama_chat_fns(cfg, ollama_client)
         else:
             fb_sum, fb_rel = _build_anthropic_chat_fns(cfg)
-        # Remote inference is local on the processor side; zero out chat prices.
-        summarizer.PRICE_PER_MTOK_INPUT = 0.0
-        summarizer.PRICE_PER_MTOK_OUTPUT = 0.0
         log.info(
             "chat provider: remote (fallback=%s)", cfg.chat_provider_fallback,
         )
@@ -400,16 +397,12 @@ async def main() -> None:
         db.purge_dedup_older_than(
             cutoff=int(time.time()) - cfg.dedup_window_hours * 3600
         )
-        summarizer.EMBED_PRICE_PER_MTOK = 0.0
         log.info(
             "embedding provider: remote (fallback=%s)",
             cfg.embedding_provider_fallback,
         )
     else:
         embed_fn, embedding_id = setup_embedder(cfg, db, ollama_client=ollama_client)
-        if embedding_id is not None and embedding_id.startswith("ollama:"):
-            # Local embeddings have no per-token cost.
-            summarizer.EMBED_PRICE_PER_MTOK = 0.0
 
     if remote is not None:
         dispatcher = FallbackDispatcher(

@@ -377,7 +377,10 @@ async def test_usage_blocks_non_approved_user(db: Database) -> None:
 
 
 async def test_usage_for_regular_user_shows_own_totals_and_cost(db: Database) -> None:
-    db.add_usage(user_id=USER_ID, input_tokens=1_000_000, output_tokens=200_000)
+    db.add_usage(
+        user_id=USER_ID, provider="anthropic",
+        input_tokens=1_000_000, output_tokens=200_000,
+    )
     update = _msg_update(USER_ID)
 
     await cmd_usage(update, _ctx(db))
@@ -386,6 +389,58 @@ async def test_usage_for_regular_user_shows_own_totals_and_cost(db: Database) ->
     assert "1,000,000" in text or "1000000" in text
     assert "200,000" in text or "200000" in text
     assert "$" in text
+    assert "anthropic" in text
+
+
+async def test_usage_for_regular_user_shows_each_provider_and_total(
+    db: Database,
+) -> None:
+    db.add_usage(
+        user_id=USER_ID, provider="anthropic",
+        input_tokens=1_000, output_tokens=200,
+    )
+    db.add_usage(
+        user_id=USER_ID, provider="remote",
+        input_tokens=4_000, output_tokens=800,
+    )
+    update = _msg_update(USER_ID)
+
+    await cmd_usage(update, _ctx(db))
+
+    text = update.message.reply_text.await_args.args[0]
+    assert "anthropic" in text
+    assert "remote" in text
+    # Total line aggregates all providers.
+    assert "5,000" in text or "5000" in text
+    assert "1,000" in text or "1000" in text
+
+
+async def test_usage_for_regular_user_hides_zero_unknown_bucket(
+    db: Database,
+) -> None:
+    # No data at all: the "unknown" provider must not appear, just the empty
+    # placeholder.
+    update = _msg_update(USER_ID)
+
+    await cmd_usage(update, _ctx(db))
+
+    text = update.message.reply_text.await_args.args[0]
+    assert "unknown" not in text
+
+
+async def test_usage_for_regular_user_shows_legacy_unknown_when_nonzero(
+    db: Database,
+) -> None:
+    db.add_usage(
+        user_id=USER_ID, provider="unknown",
+        input_tokens=100, output_tokens=20,
+    )
+    update = _msg_update(USER_ID)
+
+    await cmd_usage(update, _ctx(db))
+
+    text = update.message.reply_text.await_args.args[0]
+    assert "unknown" in text
 
 
 async def test_usage_for_admin_shows_per_user_breakdown_and_system_total(db: Database) -> None:
@@ -393,9 +448,13 @@ async def test_usage_for_admin_shows_per_user_breakdown_and_system_total(db: Dat
     db.add_pending_user(user_id=20, username=None, first_name="Bob")
     db.set_user_status(user_id=10, status="approved")
     db.set_user_status(user_id=20, status="approved")
-    db.add_usage(user_id=10, input_tokens=100, output_tokens=20)
-    db.add_usage(user_id=20, input_tokens=50, output_tokens=10)
-    db.add_system_usage(input_tokens=75, output_tokens=15)
+    db.add_usage(
+        user_id=10, provider="anthropic", input_tokens=100, output_tokens=20,
+    )
+    db.add_usage(
+        user_id=20, provider="anthropic", input_tokens=50, output_tokens=10,
+    )
+    db.add_system_usage(provider="anthropic", input_tokens=75, output_tokens=15)
 
     update = _msg_update(OWNER_ID)
     await cmd_usage(update, _ctx(db))
@@ -407,6 +466,26 @@ async def test_usage_for_admin_shows_per_user_breakdown_and_system_total(db: Dat
     assert "50" in text and "10" in text
     assert "system" in text.lower() or "total" in text.lower()
     assert "75" in text and "15" in text
+
+
+async def test_usage_for_admin_breaks_out_user_by_provider(db: Database) -> None:
+    db.add_pending_user(user_id=10, username="alice")
+    db.set_user_status(user_id=10, status="approved")
+    db.add_usage(
+        user_id=10, provider="anthropic", input_tokens=100, output_tokens=20,
+    )
+    db.add_usage(
+        user_id=10, provider="remote", input_tokens=4000, output_tokens=800,
+    )
+
+    update = _msg_update(OWNER_ID)
+    await cmd_usage(update, _ctx(db))
+
+    text = update.message.reply_text.await_args.args[0]
+    assert "anthropic" in text
+    assert "remote" in text
+    # User label appears once before its per-provider sub-rows.
+    assert text.count("@alice (10)") == 1
 
 
 # ---------- pagination (blacklist only) ----------

@@ -4,12 +4,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 from informer_bot.summarizer import (
+    CHAT_PRICES_PER_MTOK,
     EMBED_DIMENSIONS,
     EMBED_MODEL,
-    PRICE_PER_MTOK_INPUT,
-    PRICE_PER_MTOK_OUTPUT,
+    EMBEDDING_PRICES_PER_MTOK,
     embed_summary,
     estimate_cost_usd,
+    estimate_embedding_cost_usd,
     is_relevant,
     summarize,
 )
@@ -119,10 +120,11 @@ async def test_embed_summary_returns_vector_and_tokens() -> None:
         return_value=_fake_embed_response([0.1, 0.2, 0.3], total_tokens=11)
     )
 
-    result = await embed_summary("Brief summary.", client=client)
+    result = await embed_summary("Brief summary.", client=client, provider="openai")
 
     assert result.vector == [0.1, 0.2, 0.3]
     assert result.tokens == 11
+    assert result.provider == "openai"
 
 
 async def test_embed_summary_uses_configured_model_and_dims() -> None:
@@ -131,7 +133,7 @@ async def test_embed_summary_uses_configured_model_and_dims() -> None:
         return_value=_fake_embed_response([0.0])
     )
 
-    await embed_summary("Brief.", client=client)
+    await embed_summary("Brief.", client=client, provider="openai")
 
     kwargs = client.embeddings.create.await_args.kwargs
     assert kwargs["model"] == EMBED_MODEL
@@ -145,7 +147,7 @@ async def test_embed_summary_omits_dimensions_when_none() -> None:
         return_value=_fake_embed_response([0.0])
     )
 
-    await embed_summary("Brief.", client=client, dimensions=None)
+    await embed_summary("Brief.", client=client, provider="ollama", dimensions=None)
 
     kwargs = client.embeddings.create.await_args.kwargs
     assert "dimensions" not in kwargs
@@ -216,14 +218,46 @@ async def test_is_relevant_ollama_yes_and_no() -> None:
     assert no.relevant is False
 
 
-def test_estimate_cost_usd_matches_per_mtok_pricing() -> None:
-    cost = estimate_cost_usd(input_tokens=1_000_000, output_tokens=0)
-    assert cost == pytest.approx(PRICE_PER_MTOK_INPUT)
+def test_estimate_cost_usd_anthropic_matches_per_mtok_pricing() -> None:
+    p_in, p_out = CHAT_PRICES_PER_MTOK["anthropic"]
+    cost = estimate_cost_usd("anthropic", input_tokens=1_000_000, output_tokens=0)
+    assert cost == pytest.approx(p_in)
 
-    cost = estimate_cost_usd(input_tokens=0, output_tokens=1_000_000)
-    assert cost == pytest.approx(PRICE_PER_MTOK_OUTPUT)
+    cost = estimate_cost_usd("anthropic", input_tokens=0, output_tokens=1_000_000)
+    assert cost == pytest.approx(p_out)
 
-    cost = estimate_cost_usd(input_tokens=500_000, output_tokens=200_000)
-    assert cost == pytest.approx(
-        0.5 * PRICE_PER_MTOK_INPUT + 0.2 * PRICE_PER_MTOK_OUTPUT
+    cost = estimate_cost_usd(
+        "anthropic", input_tokens=500_000, output_tokens=200_000,
     )
+    assert cost == pytest.approx(0.5 * p_in + 0.2 * p_out)
+
+
+def test_estimate_cost_usd_zero_for_local_providers() -> None:
+    assert estimate_cost_usd(
+        "ollama", input_tokens=1_000_000, output_tokens=1_000_000,
+    ) == 0.0
+    assert estimate_cost_usd(
+        "remote", input_tokens=1_000_000, output_tokens=1_000_000,
+    ) == 0.0
+
+
+def test_estimate_cost_usd_unknown_provider_defaults_to_anthropic_legacy() -> None:
+    p_in, p_out = CHAT_PRICES_PER_MTOK["unknown"]
+    assert (p_in, p_out) == CHAT_PRICES_PER_MTOK["anthropic"]
+    cost = estimate_cost_usd("unknown", input_tokens=1_000_000, output_tokens=0)
+    assert cost == pytest.approx(p_in)
+
+
+def test_estimate_cost_usd_truly_unknown_provider_returns_zero() -> None:
+    assert estimate_cost_usd(
+        "made-up", input_tokens=1_000_000, output_tokens=1_000_000,
+    ) == 0.0
+
+
+def test_estimate_embedding_cost_usd_per_provider() -> None:
+    assert estimate_embedding_cost_usd("openai", 1_000_000) == pytest.approx(
+        EMBEDDING_PRICES_PER_MTOK["openai"]
+    )
+    assert estimate_embedding_cost_usd("ollama", 1_000_000) == 0.0
+    assert estimate_embedding_cost_usd("remote", 1_000_000) == 0.0
+    assert estimate_embedding_cost_usd("made-up", 1_000_000) == 0.0

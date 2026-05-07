@@ -8,13 +8,31 @@ from informer_bot.pipeline import handle_new_post, refresh_channels
 from informer_bot.summarizer import Embedding, RelevanceCheck, Summary
 
 
-def _summary(text: str = "Brief.", input_tokens: int = 100, output_tokens: int = 20) -> Summary:
-    return Summary(text=text, input_tokens=input_tokens, output_tokens=output_tokens)
+def _summary(
+    text: str = "Brief.",
+    input_tokens: int = 100,
+    output_tokens: int = 20,
+    provider: str = "anthropic",
+) -> Summary:
+    return Summary(
+        text=text,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        provider=provider,
+    )
 
 
-def _relevance(relevant: bool, input_tokens: int = 30, output_tokens: int = 1) -> RelevanceCheck:
+def _relevance(
+    relevant: bool,
+    input_tokens: int = 30,
+    output_tokens: int = 1,
+    provider: str = "anthropic",
+) -> RelevanceCheck:
     return RelevanceCheck(
-        relevant=relevant, input_tokens=input_tokens, output_tokens=output_tokens
+        relevant=relevant,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        provider=provider,
     )
 
 
@@ -26,8 +44,14 @@ def _send_dm(message_id: int = 999) -> AsyncMock:
     return AsyncMock(return_value=message_id)
 
 
-def _embed_fn(vector: list[float] | None = None, tokens: int = 5) -> AsyncMock:
-    return AsyncMock(return_value=Embedding(vector=vector or [0.0, 1.0], tokens=tokens))
+def _embed_fn(
+    vector: list[float] | None = None,
+    tokens: int = 5,
+    provider: str = "openai",
+) -> AsyncMock:
+    return AsyncMock(return_value=Embedding(
+        vector=vector or [0.0, 1.0], tokens=tokens, provider=provider,
+    ))
 
 
 def _edit_dm() -> AsyncMock:
@@ -137,9 +161,65 @@ async def test_handle_new_post_records_per_user_and_system_usage(db: Database) -
         embed_fn=_embed_fn(), edit_dm=_edit_dm(),
     )
 
-    assert db.get_usage(user_id=10) == (100, 20)
-    assert db.get_usage(user_id=20) == (100, 20)
-    assert db.get_system_usage() == (100, 20)
+    assert db.get_usage(user_id=10) == [("anthropic", 100, 20)]
+    assert db.get_usage(user_id=20) == [("anthropic", 100, 20)]
+    assert db.get_system_usage() == [("anthropic", 100, 20)]
+
+
+async def test_handle_new_post_records_provider_from_summary(
+    db: Database,
+) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.subscribe(user_id=10, channel_id=1)
+    summarize = AsyncMock(return_value=_summary(
+        "Brief.", input_tokens=100, output_tokens=20, provider="remote",
+    ))
+    is_rel = AsyncMock()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="body",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=_send_dm(),
+        embed_fn=_embed_fn(provider="ollama", tokens=7), edit_dm=_edit_dm(),
+    )
+
+    assert db.get_usage(user_id=10) == [("remote", 100, 20)]
+    assert db.get_system_usage() == [("remote", 100, 20)]
+    assert db.get_embedding_usage() == [("ollama", 7)]
+
+
+async def test_handle_new_post_filter_uses_relevance_provider(
+    db: Database,
+) -> None:
+    """Filter check tokens land under the provider on the RelevanceCheck —
+    even when a separate fallback summarize provider would differ."""
+    db.upsert_channel(channel_id=1, title="A")
+    db.add_pending_user(user_id=10, username="alice")
+    db.set_user_status(user_id=10, status="approved")
+    db.subscribe(user_id=10, channel_id=1)
+    db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="AI")
+    summarize = AsyncMock(return_value=_summary(
+        "Brief.", input_tokens=100, output_tokens=20, provider="anthropic",
+    ))
+    is_rel = AsyncMock(return_value=_relevance(
+        True, input_tokens=30, output_tokens=1, provider="remote",
+    ))
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="AI news",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=_send_dm(),
+        embed_fn=_embed_fn(), edit_dm=_edit_dm(),
+    )
+
+    assert sorted(db.get_usage(user_id=10)) == [
+        ("anthropic", 100, 20),
+        ("remote", 30, 1),
+    ]
+    assert sorted(db.get_system_usage()) == [
+        ("anthropic", 100, 20),
+        ("remote", 30, 1),
+    ]
 
 
 async def test_handle_new_post_is_idempotent_per_message(db: Database) -> None:
@@ -296,8 +376,8 @@ async def test_handle_new_post_charges_filter_tokens_to_user_and_system(db: Data
         embed_fn=_embed_fn(), edit_dm=_edit_dm(),
     )
 
-    assert db.get_usage(user_id=10) == (130, 21)
-    assert db.get_system_usage() == (130, 21)
+    assert db.get_usage(user_id=10) == [("anthropic", 130, 21)]
+    assert db.get_system_usage() == [("anthropic", 130, 21)]
 
 
 async def test_handle_new_post_mode_all_skips_filter_check(db: Database) -> None:
@@ -457,8 +537,8 @@ async def test_handle_new_post_debug_charges_filter_tokens_when_excluded(
         embed_fn=_embed_fn(), edit_dm=_edit_dm(),
     )
 
-    assert db.get_usage(user_id=10) == (130, 21)
-    assert db.get_system_usage() == (130, 21)
+    assert db.get_usage(user_id=10) == [("anthropic", 130, 21)]
+    assert db.get_system_usage() == [("anthropic", 130, 21)]
 
 
 async def test_handle_new_post_debug_mixed_with_filtered_recipient(db: Database) -> None:
@@ -508,8 +588,8 @@ async def test_handle_new_post_filter_tokens_recorded_even_when_user_excluded(
         embed_fn=_embed_fn(), edit_dm=_edit_dm(),
     )
 
-    assert db.get_usage(user_id=10) == (30, 1)
-    assert db.get_system_usage() == (30, 1)
+    assert db.get_usage(user_id=10) == [("anthropic", 30, 1)]
+    assert db.get_system_usage() == [("anthropic", 30, 1)]
     summarize.assert_not_called()
 
 
@@ -661,7 +741,7 @@ async def test_handle_new_post_records_delivered_and_embedding_on_first_send(
         1, 100, 4242, False, [], "https://t.me/a/100",
     )
     assert vec == pytest.approx([1.0, 0.0], rel=1e-5)
-    assert db.get_embedding_usage() == 8
+    assert db.get_embedding_usage() == [("openai", 8)]
 
 
 async def test_handle_new_post_dedup_edits_existing_on_duplicate(db: Database) -> None:
@@ -1017,7 +1097,7 @@ async def test_handle_new_post_dedup_charges_embedding_tokens_to_system(
         embed_fn=embed_fn, edit_dm=_edit_dm(), now=1000,
     )
 
-    assert db.get_embedding_usage() == 42
+    assert db.get_embedding_usage() == [("openai", 42)]
 
 
 async def test_handle_new_post_skips_dedup_when_embed_fn_is_none(db: Database) -> None:
@@ -1035,7 +1115,7 @@ async def test_handle_new_post_skips_dedup_when_embed_fn_is_none(db: Database) -
     )
 
     send_dm.assert_awaited_once()
-    assert db.get_embedding_usage() == 0
+    assert db.get_embedding_usage() == []
     assert db.list_dedup_candidates(user_id=10, since=0) == []
 
 

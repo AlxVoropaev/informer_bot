@@ -145,6 +145,7 @@ class RemoteProcessorClient:
             text=reply.text,
             input_tokens=reply.input_tokens,
             output_tokens=reply.output_tokens,
+            provider="remote",
         )
 
     async def is_relevant(self, text: str, filter_prompt: str) -> RelevanceCheck:
@@ -159,6 +160,7 @@ class RemoteProcessorClient:
             relevant=reply.relevant,
             input_tokens=reply.input_tokens,
             output_tokens=reply.output_tokens,
+            provider="remote",
         )
 
     async def embed(self, text: str) -> Embedding:
@@ -171,7 +173,9 @@ class RemoteProcessorClient:
             await self._set_healthy(False)
             raise
         assert isinstance(reply, EmbedReply)
-        return Embedding(vector=list(reply.vector), tokens=reply.tokens)
+        return Embedding(
+            vector=list(reply.vector), tokens=reply.tokens, provider="remote",
+        )
 
     async def ping(self) -> None:
         req = PingRequest.new()

@@ -51,6 +51,7 @@ async def handle_request(
             emb = await embed_summary(
                 req.text,
                 client=client,
+                provider="ollama",
                 model=embedding_model,
                 dimensions=req.dimensions,
             )

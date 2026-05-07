@@ -21,8 +21,12 @@
   `dedup_debug` is a 0/1 user-level flag — when 1, duplicate-of-recent posts
   are delivered as a fresh DM tagged `🔁 DUPLICATE` with a `↳ Original: …`
   link instead of being silently chained as a button on the original DM.
-- `usage(user_id, input_tokens, output_tokens)` — per-user delivered-summary tokens
-- `system_usage(id=1, input_tokens, output_tokens)` — total API spend (incl. filter checks)
+- `usage(user_id, provider, input_tokens, output_tokens)` —
+  per-user delivered-summary tokens, broken down by provider
+  (`anthropic`, `openai`, `ollama`, `remote`, plus `unknown` for legacy
+  pre-v11 rows). `(user_id, provider)` is the primary key.
+- `system_usage(provider, input_tokens, output_tokens)` —
+  total API spend (incl. filter checks), one row per provider.
 - `post_embeddings(channel_id, message_id, created_at, embedding, summary, link)` —
   one row per post that reached at least one recipient. `embedding` is a
   little-endian packed `float32` array (`db.pack_vector`/`unpack_vector`).
@@ -35,4 +39,5 @@
   chained onto this DM via inline URL buttons. `saved` (0/1) and `delete_at`
   (UNIX seconds, NULL when not scheduled) drive the Auto-delete feature; the
   sweeper deletes rows where `saved=0 AND delete_at <= now`.
-- `embedding_usage(id=1, tokens)` — running total of OpenAI embedding tokens.
+- `embedding_usage(provider, tokens)` — running total of embedding tokens,
+  one row per provider.

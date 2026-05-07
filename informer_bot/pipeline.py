@@ -83,10 +83,13 @@ async def handle_new_post(
             continue
         check = await is_relevant_fn(text, filter_prompt)
         db.add_system_usage(
-            input_tokens=check.input_tokens, output_tokens=check.output_tokens
+            provider=check.provider,
+            input_tokens=check.input_tokens,
+            output_tokens=check.output_tokens,
         )
         db.add_usage(
             user_id=user_id,
+            provider=check.provider,
             input_tokens=check.input_tokens,
             output_tokens=check.output_tokens,
         )
@@ -110,13 +113,15 @@ async def handle_new_post(
     )
     summary = await summarize_fn(text)
     db.add_system_usage(
-        input_tokens=summary.input_tokens, output_tokens=summary.output_tokens
+        provider=summary.provider,
+        input_tokens=summary.input_tokens,
+        output_tokens=summary.output_tokens,
     )
 
     emb: Embedding | None = None
     if embed_fn is not None:
         emb = await embed_fn(summary.text)
-        db.add_embedding_usage(emb.tokens)
+        db.add_embedding_usage(provider=emb.provider, tokens=emb.tokens)
 
     now_ts = int(time.time()) if now is None else now
     channel_title = db.get_channel_title(channel_id) or ""
@@ -172,6 +177,7 @@ async def handle_new_post(
                     )
                 db.add_usage(
                     user_id=user_id,
+                    provider=summary.provider,
                     input_tokens=summary.input_tokens,
                     output_tokens=summary.output_tokens,
                 )
@@ -213,6 +219,7 @@ async def handle_new_post(
                     )
                 db.add_usage(
                     user_id=user_id,
+                    provider=summary.provider,
                     input_tokens=summary.input_tokens,
                     output_tokens=summary.output_tokens,
                 )
@@ -232,6 +239,7 @@ async def handle_new_post(
                     )
                 db.add_usage(
                     user_id=user_id,
+                    provider=summary.provider,
                     input_tokens=summary.input_tokens,
                     output_tokens=summary.output_tokens,
                 )

@@ -52,16 +52,17 @@ CREATE TABLE IF NOT EXISTS users (
     dedup_debug       INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS usage (
-    user_id       INTEGER PRIMARY KEY,
+    user_id       INTEGER NOT NULL,
+    provider      TEXT NOT NULL,
     input_tokens  INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, provider)
 );
 CREATE TABLE IF NOT EXISTS system_usage (
-    id            INTEGER PRIMARY KEY CHECK (id = 1),
+    provider      TEXT PRIMARY KEY,
     input_tokens  INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0
 );
-INSERT OR IGNORE INTO system_usage (id, input_tokens, output_tokens) VALUES (1, 0, 0);
 CREATE TABLE IF NOT EXISTS post_embeddings (
     channel_id INTEGER NOT NULL,
     message_id INTEGER NOT NULL,
@@ -88,10 +89,9 @@ CREATE TABLE IF NOT EXISTS delivered (
 CREATE INDEX IF NOT EXISTS idx_delivered_user_created ON delivered(user_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_delivered_user_botmsg ON delivered(user_id, bot_message_id);
 CREATE TABLE IF NOT EXISTS embedding_usage (
-    id     INTEGER PRIMARY KEY CHECK (id = 1),
-    tokens INTEGER NOT NULL DEFAULT 0
+    provider TEXT PRIMARY KEY,
+    tokens   INTEGER NOT NULL DEFAULT 0
 );
-INSERT OR IGNORE INTO embedding_usage (id, tokens) VALUES (1, 0);
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -145,6 +145,41 @@ _MIGRATIONS: list[str] = [
     """,
     # 9 -> 10: users.dedup_debug
     "ALTER TABLE users ADD COLUMN dedup_debug INTEGER NOT NULL DEFAULT 0",
+    # 10 -> 11: per-provider usage tables (rebuild usage / system_usage /
+    # embedding_usage with a `provider` column, preserving old totals under
+    # provider='unknown').
+    """
+    CREATE TABLE usage_new (
+        user_id       INTEGER NOT NULL,
+        provider      TEXT NOT NULL,
+        input_tokens  INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (user_id, provider)
+    );
+    INSERT INTO usage_new (user_id, provider, input_tokens, output_tokens)
+        SELECT user_id, 'unknown', input_tokens, output_tokens FROM usage;
+    DROP TABLE usage;
+    ALTER TABLE usage_new RENAME TO usage;
+
+    CREATE TABLE system_usage_new (
+        provider      TEXT PRIMARY KEY,
+        input_tokens  INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO system_usage_new (provider, input_tokens, output_tokens)
+        SELECT 'unknown', input_tokens, output_tokens FROM system_usage WHERE id = 1;
+    DROP TABLE system_usage;
+    ALTER TABLE system_usage_new RENAME TO system_usage;
+
+    CREATE TABLE embedding_usage_new (
+        provider TEXT PRIMARY KEY,
+        tokens   INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO embedding_usage_new (provider, tokens)
+        SELECT 'unknown', tokens FROM embedding_usage WHERE id = 1;
+    DROP TABLE embedding_usage;
+    ALTER TABLE embedding_usage_new RENAME TO embedding_usage;
+    """,
 ]
 
 
@@ -552,58 +587,72 @@ class Database:
             self._commit()
         log.debug("set_language user=%s language=%s", user_id, language)
 
-    def add_usage(self, user_id: int, input_tokens: int, output_tokens: int) -> None:
+    def add_usage(
+        self,
+        user_id: int,
+        provider: str,
+        input_tokens: int,
+        output_tokens: int,
+    ) -> None:
         with self._lock:
             self._conn.execute(
-                "INSERT INTO usage (user_id, input_tokens, output_tokens) VALUES (?, ?, ?) "
-                "ON CONFLICT(user_id) DO UPDATE SET "
+                "INSERT INTO usage (user_id, provider, input_tokens, output_tokens) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(user_id, provider) DO UPDATE SET "
                 "input_tokens = usage.input_tokens + excluded.input_tokens, "
                 "output_tokens = usage.output_tokens + excluded.output_tokens",
-                (user_id, input_tokens, output_tokens),
+                (user_id, provider, input_tokens, output_tokens),
             )
             self._commit()
 
-    def get_usage(self, user_id: int) -> tuple[int, int]:
+    def get_usage(self, user_id: int) -> list[tuple[str, int, int]]:
         with self._lock:
-            row = self._conn.execute(
-                "SELECT input_tokens, output_tokens FROM usage WHERE user_id = ?",
+            rows = self._conn.execute(
+                "SELECT provider, input_tokens, output_tokens FROM usage "
+                "WHERE user_id = ? ORDER BY provider",
                 (user_id,),
-            ).fetchone()
-        return (row[0], row[1]) if row else (0, 0)
+            ).fetchall()
+        return [(p, i, o) for p, i, o in rows]
 
     def list_all_usage(
         self,
-    ) -> list[tuple[int, str | None, str | None, int, int]]:
-        """Return raw `(user_id, username, first_name, input_tokens, output_tokens)`
-        rows. Use `format_user_label` to render a display label."""
+    ) -> list[tuple[int, str | None, str | None, str, int, int]]:
+        """Return raw `(user_id, username, first_name, provider, input_tokens,
+        output_tokens)` rows ordered by user_id then provider. Use
+        `format_user_label` to render a display label."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT u.user_id, usr.username, usr.first_name, u.input_tokens, u.output_tokens "
+                "SELECT u.user_id, usr.username, usr.first_name, u.provider, "
+                "       u.input_tokens, u.output_tokens "
                 "FROM usage u LEFT JOIN users usr ON usr.user_id = u.user_id "
-                "ORDER BY u.user_id"
+                "ORDER BY u.user_id, u.provider"
             ).fetchall()
         return [
-            (user_id, username, first_name, inp, output)
-            for user_id, username, first_name, inp, output in rows
+            (user_id, username, first_name, provider, inp, output)
+            for user_id, username, first_name, provider, inp, output in rows
         ]
 
-    def add_system_usage(self, input_tokens: int, output_tokens: int) -> None:
+    def add_system_usage(
+        self, provider: str, input_tokens: int, output_tokens: int
+    ) -> None:
         with self._lock:
             self._conn.execute(
-                "UPDATE system_usage SET "
-                "input_tokens = input_tokens + ?, "
-                "output_tokens = output_tokens + ? "
-                "WHERE id = 1",
-                (input_tokens, output_tokens),
+                "INSERT INTO system_usage (provider, input_tokens, output_tokens) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(provider) DO UPDATE SET "
+                "input_tokens = system_usage.input_tokens + excluded.input_tokens, "
+                "output_tokens = system_usage.output_tokens + excluded.output_tokens",
+                (provider, input_tokens, output_tokens),
             )
             self._commit()
 
-    def get_system_usage(self) -> tuple[int, int]:
+    def get_system_usage(self) -> list[tuple[str, int, int]]:
         with self._lock:
-            row = self._conn.execute(
-                "SELECT input_tokens, output_tokens FROM system_usage WHERE id = 1"
-            ).fetchone()
-        return (row[0], row[1]) if row else (0, 0)
+            rows = self._conn.execute(
+                "SELECT provider, input_tokens, output_tokens FROM system_usage "
+                "ORDER BY provider"
+            ).fetchall()
+        return [(p, i, o) for p, i, o in rows]
 
     def mark_seen(self, channel_id: int, message_id: int) -> bool:
         with self._lock:
@@ -852,17 +901,19 @@ class Database:
             )
             self._commit()
 
-    def add_embedding_usage(self, tokens: int) -> None:
+    def add_embedding_usage(self, provider: str, tokens: int) -> None:
         with self._lock:
             self._conn.execute(
-                "UPDATE embedding_usage SET tokens = tokens + ? WHERE id = 1",
-                (tokens,),
+                "INSERT INTO embedding_usage (provider, tokens) VALUES (?, ?) "
+                "ON CONFLICT(provider) DO UPDATE SET "
+                "tokens = embedding_usage.tokens + excluded.tokens",
+                (provider, tokens),
             )
             self._commit()
 
-    def get_embedding_usage(self) -> int:
+    def get_embedding_usage(self) -> list[tuple[str, int]]:
         with self._lock:
-            row = self._conn.execute(
-                "SELECT tokens FROM embedding_usage WHERE id = 1"
-            ).fetchone()
-        return row[0] if row else 0
+            rows = self._conn.execute(
+                "SELECT provider, tokens FROM embedding_usage ORDER BY provider"
+            ).fetchall()
+        return [(p, t) for p, t in rows]

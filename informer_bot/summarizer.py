@@ -22,11 +22,22 @@ FILTER_SYSTEM_PROMPT = (
 )
 FILTER_MAX_TOKENS = 4
 
-# Pricing for claude-haiku-4-5 (USD per 1M tokens).
-PRICE_PER_MTOK_INPUT = 1.00
-PRICE_PER_MTOK_OUTPUT = 5.00
-# Pricing for text-embedding-3-small (USD per 1M input tokens).
-EMBED_PRICE_PER_MTOK = 0.02
+# Per-provider chat pricing in USD per 1M tokens (input, output).
+CHAT_PRICES_PER_MTOK: dict[str, tuple[float, float]] = {
+    "anthropic": (1.00, 5.00),  # claude-haiku-4-5
+    "openai":    (0.0, 0.0),    # not currently a chat option but keep slot
+    "ollama":    (0.0, 0.0),
+    "remote":    (0.0, 0.0),
+    "unknown":   (1.00, 5.00),  # legacy data — assume Anthropic (the old default)
+}
+
+# Per-provider embedding pricing in USD per 1M tokens.
+EMBEDDING_PRICES_PER_MTOK: dict[str, float] = {
+    "openai":  0.02,  # text-embedding-3-small
+    "ollama":  0.0,
+    "remote":  0.0,
+    "unknown": 0.02,
+}
 
 
 @dataclass(frozen=True)
@@ -34,6 +45,7 @@ class Summary:
     text: str
     input_tokens: int
     output_tokens: int
+    provider: str
 
 
 @dataclass(frozen=True)
@@ -41,23 +53,23 @@ class RelevanceCheck:
     relevant: bool
     input_tokens: int
     output_tokens: int
+    provider: str
 
 
 @dataclass(frozen=True)
 class Embedding:
     vector: list[float]
     tokens: int
+    provider: str
 
 
-def estimate_cost_usd(input_tokens: int, output_tokens: int) -> float:
-    return (
-        input_tokens / 1_000_000 * PRICE_PER_MTOK_INPUT
-        + output_tokens / 1_000_000 * PRICE_PER_MTOK_OUTPUT
-    )
+def estimate_cost_usd(provider: str, input_tokens: int, output_tokens: int) -> float:
+    p_in, p_out = CHAT_PRICES_PER_MTOK.get(provider, (0.0, 0.0))
+    return input_tokens / 1_000_000 * p_in + output_tokens / 1_000_000 * p_out
 
 
-def estimate_embedding_cost_usd(tokens: int) -> float:
-    return tokens / 1_000_000 * EMBED_PRICE_PER_MTOK
+def estimate_embedding_cost_usd(provider: str, tokens: int) -> float:
+    return tokens / 1_000_000 * EMBEDDING_PRICES_PER_MTOK.get(provider, 0.0)
 
 
 async def summarize(text: str, client: AsyncAnthropic | None = None) -> Summary:
@@ -78,6 +90,7 @@ async def summarize(text: str, client: AsyncAnthropic | None = None) -> Summary:
         text=summary,
         input_tokens=response.usage.input_tokens,
         output_tokens=response.usage.output_tokens,
+        provider="anthropic",
     )
 
 
@@ -106,6 +119,7 @@ async def is_relevant(
         relevant=relevant,
         input_tokens=response.usage.input_tokens,
         output_tokens=response.usage.output_tokens,
+        provider="anthropic",
     )
 
 
@@ -113,6 +127,7 @@ async def embed_summary(
     summary_text: str,
     client: AsyncOpenAI | None = None,
     *,
+    provider: str,
     model: str = EMBED_MODEL,
     dimensions: int | None = EMBED_DIMENSIONS,
 ) -> Embedding:
@@ -131,7 +146,9 @@ async def embed_summary(
         "embed_summary: got %d dims (tokens=%d)",
         len(vector), response.usage.total_tokens,
     )
-    return Embedding(vector=vector, tokens=response.usage.total_tokens)
+    return Embedding(
+        vector=vector, tokens=response.usage.total_tokens, provider=provider,
+    )
 
 
 async def summarize_ollama(
@@ -156,6 +173,7 @@ async def summarize_ollama(
         text=summary,
         input_tokens=response.usage.prompt_tokens,
         output_tokens=response.usage.completion_tokens,
+        provider="ollama",
     )
 
 
@@ -186,4 +204,5 @@ async def is_relevant_ollama(
         relevant=relevant,
         input_tokens=response.usage.prompt_tokens,
         output_tokens=response.usage.completion_tokens,
+        provider="ollama",
     )

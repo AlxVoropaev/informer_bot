@@ -184,9 +184,12 @@ async def test_pending_user_blocked_on_every_endpoint(
 async def test_usage_for_owner_includes_per_user_system_embeddings(
     client: TestClient, db: Database
 ) -> None:
-    db.add_usage(user_id=USER_ID, input_tokens=1000, output_tokens=200)
-    db.add_system_usage(input_tokens=500, output_tokens=100)
-    db.add_embedding_usage(75)
+    db.add_usage(
+        user_id=USER_ID, provider="anthropic",
+        input_tokens=1000, output_tokens=200,
+    )
+    db.add_system_usage(provider="anthropic", input_tokens=500, output_tokens=100)
+    db.add_embedding_usage(provider="openai", tokens=75)
     init_data = _make_init_data(user_id=OWNER_ID)
     resp = await client.get(
         "/api/usage", headers={"X-Telegram-Init-Data": init_data}
@@ -199,12 +202,16 @@ async def test_usage_for_owner_includes_per_user_system_embeddings(
     assert "embeddings" in body
     assert body["system"]["input_tokens"] == 500
     assert body["embeddings"]["tokens"] == 75
+    assert body["system"]["by_provider"][0]["provider"] == "anthropic"
+    assert body["embeddings"]["by_provider"][0]["provider"] == "openai"
 
 
 async def test_usage_for_non_owner_omits_admin_keys(
     client: TestClient, db: Database
 ) -> None:
-    db.add_usage(user_id=USER_ID, input_tokens=10, output_tokens=2)
+    db.add_usage(
+        user_id=USER_ID, provider="anthropic", input_tokens=10, output_tokens=2,
+    )
     init_data = _make_init_data(user_id=USER_ID)
     resp = await client.get(
         "/api/usage", headers={"X-Telegram-Init-Data": init_data}
