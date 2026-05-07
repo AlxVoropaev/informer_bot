@@ -468,6 +468,15 @@ async def main() -> None:
             log.info("set chat menu button -> %s", miniapp_url)
         except Exception:
             log.exception("failed to set chat menu button")
+    else:
+        log.warning(
+            "MINIAPP_URL is not set: Mini App is disabled and the webapp on "
+            "port %d will not start. The container will be reported as "
+            "'unhealthy' (the compose healthcheck probes that port), but the "
+            "bot itself works fine. To enable the Mini App, set MINIAPP_URL "
+            "in data/.env (see docs/internals/miniapp.md).",
+            cfg.webapp_port,
+        )
 
     await catch_up(
         tg, db, buffer, max_age_seconds=cfg.catch_up_window_hours * 3600,
