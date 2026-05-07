@@ -118,7 +118,7 @@ def request_op(req: Request) -> Op:
 def encode_request(req: Request) -> str:
     op = request_op(req)
     payload = {"op": op.value, **asdict(req)}
-    return json.dumps(payload)
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def decode_request(s: str) -> Request:
@@ -148,7 +148,7 @@ def encode_reply(reply: Reply) -> str:
         payload = {"id": reply.id, "ok": False, "error": reply.error}
     else:
         payload = {"id": reply.id, "ok": True, **{k: v for k, v in payload.items() if k != "id"}}
-    return json.dumps(payload)
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def decode_reply(s: str, op: Op) -> Reply:
