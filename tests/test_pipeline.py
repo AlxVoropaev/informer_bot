@@ -5,6 +5,7 @@ import pytest
 
 from informer_bot.db import Database
 from informer_bot.pipeline import handle_new_post, refresh_channels
+from informer_bot.remote_processor import RemoteProcessorError
 from informer_bot.summarizer import Embedding, RelevanceCheck, Summary
 
 
@@ -1291,3 +1292,27 @@ async def test_handle_new_post_dup_chain_skips_extension_when_saved(
         user_id=10, channel_id=1, message_id=100,
     )
     assert state == (True, None)
+
+
+async def test_handle_new_post_embed_failure_delivers_without_dedup(
+    db: Database,
+) -> None:
+    db.upsert_channel(channel_id=1, title="Channel A")
+    db.subscribe(user_id=10, channel_id=1, mode="all")
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock()
+    send_dm = _send_dm(message_id=4242)
+    embed_fn = AsyncMock(side_effect=RemoteProcessorError("remote unhealthy"))
+    edit_dm = _edit_dm()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="hello",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+        embed_fn=embed_fn, edit_dm=edit_dm, now=1000,
+    )
+
+    send_dm.assert_awaited_once()
+    edit_dm.assert_not_called()
+    assert db.list_dedup_candidates(user_id=10, since=0) == []
+    assert db.get_embedding_usage() == []

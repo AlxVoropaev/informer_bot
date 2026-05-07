@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from informer_bot.db import Database
 from informer_bot.dedup import find_duplicate
 from informer_bot.i18n import t
+from informer_bot.remote_processor import RemoteProcessorError, RemoteProcessorTimeout
 from informer_bot.summarizer import Embedding, RelevanceCheck, Summary
 
 log = logging.getLogger(__name__)
@@ -120,8 +121,15 @@ async def handle_new_post(
 
     emb: Embedding | None = None
     if embed_fn is not None:
-        emb = await embed_fn(summary.text)
-        db.add_embedding_usage(provider=emb.provider, tokens=emb.tokens)
+        try:
+            emb = await embed_fn(summary.text)
+        except (RemoteProcessorError, RemoteProcessorTimeout) as exc:
+            log.warning(
+                "embed unavailable for post %s/%s, skipping dedup: %s",
+                channel_id, message_id, exc,
+            )
+        else:
+            db.add_embedding_usage(provider=emb.provider, tokens=emb.tokens)
 
     now_ts = int(time.time()) if now is None else now
     channel_title = db.get_channel_title(channel_id) or ""
