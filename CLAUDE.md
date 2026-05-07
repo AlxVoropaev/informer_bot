@@ -82,6 +82,11 @@ Subagents produce a worktree + branch. To bring their work onto `main`:
    sanity checks before declaring success.
 5. **Wait for the user's explicit approval** before merging the feature
    branch into `main`. Don't merge to `main` autonomously.
+6. **Clean up after merging to `main`**: remove each subagent worktree
+   with `git worktree remove <path>` and delete each merged branch with
+   `git branch -d <branch-name>`. Use `-D` only if the branch is verifiably
+   merged but git refuses (e.g. it was rebased rather than fast-forwarded).
+   Skip cleanup only if the user explicitly says "leave it" or "don't touch".
 
 ## 5. Keep Docs Current
 
