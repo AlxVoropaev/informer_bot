@@ -68,6 +68,7 @@ If you're the bot's `OWNER_ID`, you also get:
 - [Run with Docker Compose](docs/docker.md) — production deployment.
 - [Mini App URL & hosting](docs/miniapp-hosting.md) — `MINIAPP_URL`, Caddy + Let's Encrypt, alternatives.
 - [Embedding provider (deduplication)](docs/embeddings.md) — OpenAI vs local Ollama vs disabled.
+- [Processor bot for private GPU hosts](docs/processor-bot.md) — sidecar bot that runs Ollama on a private GPU server, talks to informer over a Telegram bus group.
 - [Auto-update from GitHub](docs/auto-update.md) — pull-based cron deploy.
 - [Tests](docs/tests.md) — running the test suite.
 

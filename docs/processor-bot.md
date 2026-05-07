@@ -53,7 +53,7 @@ the result to the pipeline.
    else in the group is ignored.
 5. On the informer host: `CHAT_PROVIDER=remote` and/or
    `EMBEDDING_PROVIDER=remote`, plus the bus vars from step 3-4. See
-   [env-vars.md](env-vars.md) for the full list.
+   [internals/env-vars.md](internals/env-vars.md) for the full list.
 6. On the GPU host: install Ollama, pull the chat + embedding models,
    then run `python -m processor_bot`.
 
@@ -138,7 +138,7 @@ App, no Caddy. Reaches Ollama on the host via
 `OLLAMA_BASE_URL=http://host.docker.internal:11434/v1` in `data/.env`).
 
 For pull-based auto-deploy from GitHub, see
-[../auto-update.md](../auto-update.md).
+[auto-update.md](auto-update.md).
 
 The session file lives at `data/processor.session` by default
 (`SESSION_PATH`). No SQLite, no Mini App, no user state — the

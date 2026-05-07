@@ -69,6 +69,7 @@ HTML-интерфейс внутри Telegram. Открыть его можно 
 - [Запуск через Docker Compose](docs/docker.md) — продакшн-деплой.
 - [URL Mini App и хостинг](docs/miniapp-hosting.md) — `MINIAPP_URL`, Caddy + Let's Encrypt, альтернативы.
 - [Провайдер эмбеддингов (дедуп)](docs/embeddings.md) — OpenAI / локальный Ollama / выключенный.
+- [Processor bot для приватного GPU-хоста](docs/processor-bot.md) — отдельный бот, запускающий Ollama на приватной GPU-машине; общается с informer через приватную Telegram-группу.
 - [Авто-обновление из GitHub](docs/auto-update.md) — pull-деплой через cron.
 - [Тесты](docs/tests.md) — как запустить тесты.
 

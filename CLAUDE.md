@@ -103,5 +103,5 @@ the ones relevant to your current task; don't load everything blindly.
 - [storage.md](docs/internals/storage.md) — SQLite schema.
 - [dedup.md](docs/internals/dedup.md) — deduplication pipeline.
 - [auto-delete.md](docs/internals/auto-delete.md) — per-user auto-delete + sweeper.
-- [processor-bot.md](docs/internals/processor-bot.md) — sidecar bot for private GPU hosts (bus group, protocol, fallback).
+- [processor-bot.md](docs/processor-bot.md) — sidecar bot for private GPU hosts (bus group, protocol, fallback).
 - [todos.md](docs/internals/todos.md) — open TODOs.

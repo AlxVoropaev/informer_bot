@@ -14,7 +14,7 @@ A second process (`processor_bot`) is optional: when running local Ollama on a
 private GPU machine that the informer host cannot reach over the network, set
 `CHAT_PROVIDER=remote` / `EMBEDDING_PROVIDER=remote` and run `processor_bot`
 on the GPU host. The two bots talk over a private Telegram group ("the bus
-group"). See [processor-bot.md](processor-bot.md).
+group"). See [processor-bot.md](../processor-bot.md).
 
 ## Roles
 
