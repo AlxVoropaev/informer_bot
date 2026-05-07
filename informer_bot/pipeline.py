@@ -26,11 +26,19 @@ def _format_post(
     link: str,
     marker: str | None = None,
     tail: str | None = None,
+    settings_url: str | None = None,
+    settings_label: str | None = None,
 ) -> str:
-    body = (
+    title_html = (
         f'<a href="{html.escape(link, quote=True)}">{html.escape(channel_title)}</a>'
-        f'\n{html.escape(summary)}'
     )
+    if settings_url and settings_label:
+        title_html = (
+            f'{title_html} '
+            f'<a href="{html.escape(settings_url, quote=True)}">'
+            f'{html.escape(settings_label)}</a>'
+        )
+    body = f'{title_html}\n{html.escape(summary)}'
     if marker:
         body = f"{html.escape(marker)}\n{body}"
     if tail:
@@ -43,6 +51,13 @@ def _original_link_html(label: str, title: str, url: str) -> str:
         f'↳ {html.escape(label)}: '
         f'<a href="{html.escape(url, quote=True)}">{html.escape(title)}</a>'
     )
+
+
+def _channel_settings_url(deeplink: str | None, channel_id: int) -> str | None:
+    if not deeplink:
+        return None
+    sep = "&" if "?" in deeplink else "?"
+    return f"{deeplink}{sep}startapp=channel_{channel_id}"
 
 
 async def handle_new_post(
@@ -60,6 +75,7 @@ async def handle_new_post(
     photo: bytes | None = None,
     dedup_threshold: float = 0.85,
     dedup_window_seconds: int = 48 * 3600,
+    miniapp_tg_deeplink: str | None = None,
     now: int | None = None,
 ) -> None:
     if not text.strip():
@@ -141,11 +157,18 @@ async def handle_new_post(
 
     now_ts = int(time.time()) if now is None else now
     channel_title = db.get_channel_title(channel_id) or ""
+    settings_url = _channel_settings_url(miniapp_tg_deeplink, channel_id)
 
     for user_id, mode, marked_filter in recipients:
         lang = db.get_language(user_id)
         marker = t(lang, "debug_filtered_marker") if marked_filter else None
-        body = _format_post(channel_title, summary.text, link, marker)
+        settings_label = (
+            t(lang, "channel_settings_link") if settings_url else None
+        )
+        body = _format_post(
+            channel_title, summary.text, link, marker,
+            settings_url=settings_url, settings_label=settings_label,
+        )
         auto_hours = db.get_user_auto_delete_hours(user_id)
         save_label = t(lang, "save_button") if auto_hours is not None else None
         send_delete_at = (
@@ -177,6 +200,7 @@ async def handle_new_post(
             )
             body = _format_post(
                 channel_title, summary.text, link, dup_marker, tail=tail_html,
+                settings_url=settings_url, settings_label=settings_label,
             )
             bot_msg_id = await send_dm(user_id, body, photo, **send_kwargs)
             with db.transaction():

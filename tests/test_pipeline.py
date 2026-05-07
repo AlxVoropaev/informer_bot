@@ -928,6 +928,111 @@ async def test_handle_new_post_dedup_debug_marker_and_original_link_localized(
     assert '↳ Оригинал: <a href="https://t.me/a/100">Канал А</a>' in body
 
 
+async def test_handle_new_post_appends_settings_link_when_deeplink_set(
+    db: Database,
+) -> None:
+    db.upsert_channel(channel_id=42, title="Channel A")
+    db.subscribe(user_id=10, channel_id=42, mode="all")
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock()
+    send_dm = _send_dm()
+
+    await handle_new_post(
+        channel_id=42, message_id=100, text="post",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+        embed_fn=_embed_fn(), edit_dm=_edit_dm(),
+        miniapp_tg_deeplink="https://t.me/MyBot/app",
+    )
+
+    body = send_dm.await_args.args[1]
+    assert (
+        '<a href="https://t.me/a/100">Channel A</a> '
+        '<a href="https://t.me/MyBot/app?startapp=channel_42">⚙</a>\n'
+        'Brief.'
+    ) == body
+
+
+async def test_handle_new_post_settings_link_handles_negative_id_and_query(
+    db: Database,
+) -> None:
+    db.upsert_channel(channel_id=-1001234567890, title="Big Channel")
+    db.subscribe(user_id=10, channel_id=-1001234567890, mode="all")
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock()
+    send_dm = _send_dm()
+
+    await handle_new_post(
+        channel_id=-1001234567890, message_id=1, text="post",
+        link="https://t.me/c/1234567890/1", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+        embed_fn=_embed_fn(), edit_dm=_edit_dm(),
+        miniapp_tg_deeplink="https://t.me/MyBot/app?ref=foo",
+    )
+
+    body = send_dm.await_args.args[1]
+    assert (
+        '<a href="https://t.me/MyBot/app?ref=foo'
+        '&amp;startapp=channel_-1001234567890">⚙</a>'
+    ) in body
+
+
+async def test_handle_new_post_no_settings_link_when_deeplink_unset(
+    db: Database,
+) -> None:
+    db.upsert_channel(channel_id=42, title="Channel A")
+    db.subscribe(user_id=10, channel_id=42, mode="all")
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock()
+    send_dm = _send_dm()
+
+    await handle_new_post(
+        channel_id=42, message_id=100, text="post",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+        embed_fn=_embed_fn(), edit_dm=_edit_dm(),
+    )
+
+    body = send_dm.await_args.args[1]
+    assert "startapp" not in body
+    assert "⚙" not in body
+
+
+async def test_handle_new_post_settings_link_in_dedup_debug_path(
+    db: Database,
+) -> None:
+    db.upsert_channel(channel_id=1, title="Channel A")
+    db.upsert_channel(channel_id=2, title="Channel B")
+    db.subscribe(user_id=10, channel_id=2, mode="all")
+    db.set_dedup_debug(user_id=10, enabled=True)
+    db.store_post_embedding(
+        channel_id=1, message_id=100, embedding=[1.0, 0.0],
+        summary="prev", link="https://t.me/a/100", now=900,
+    )
+    db.record_delivered(
+        user_id=10, channel_id=1, message_id=100, bot_message_id=555,
+        is_photo=False, body="prev_body", now=900,
+    )
+    summarize = AsyncMock(return_value=_summary("Brief."))
+    is_rel = AsyncMock()
+    send_dm = _send_dm(message_id=777)
+    embed_fn = _embed_fn(vector=[1.0, 0.0])
+    edit_dm = _edit_dm()
+
+    await handle_new_post(
+        channel_id=2, message_id=200, text="dup",
+        link="https://t.me/b/200", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+        embed_fn=embed_fn, edit_dm=edit_dm,
+        miniapp_tg_deeplink="https://t.me/MyBot/app", now=1000,
+    )
+
+    body = send_dm.await_args.args[1]
+    assert (
+        '<a href="https://t.me/MyBot/app?startapp=channel_2">⚙</a>'
+    ) in body
+
+
 async def test_handle_new_post_filter_debug_without_dedup_debug_chains(
     db: Database,
 ) -> None:

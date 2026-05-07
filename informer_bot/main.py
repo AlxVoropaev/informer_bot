@@ -441,6 +441,7 @@ async def main() -> None:
             embed_fn=embed_fn, edit_dm=edit_dm,
             dedup_threshold=cfg.dedup_threshold,
             dedup_window_seconds=cfg.dedup_window_hours * 3600,
+            miniapp_tg_deeplink=cfg.miniapp_tg_deeplink,
             photo=photo,
         )
 

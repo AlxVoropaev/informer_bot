@@ -23,6 +23,7 @@ DEDUP_THRESHOLD=0.85       # optional, cosine threshold for "same story"
 DEDUP_WINDOW_HOURS=48      # optional, lookback window for dedup
 CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
 MINIAPP_URL=               # optional, public HTTPS URL of the Mini App; enables /app, the burger-menu launcher, and the in-process aiohttp server
+MINIAPP_TG_DEEPLINK=       # optional, t.me prefix for the Mini App (e.g. https://t.me/MyBot/app); when set, summary DMs include a ⚙ link next to the channel title that opens the Mini App on that channel's settings. Requires registering a Web App short-name in @BotFather (/newapp).
 WEBAPP_HOST=0.0.0.0        # optional, bind host for the Mini App server (default 0.0.0.0)
 WEBAPP_PORT=8085           # optional, bind port for the Mini App server (default 8085)
 ```

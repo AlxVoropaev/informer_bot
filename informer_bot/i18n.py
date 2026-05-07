@@ -64,6 +64,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "miniapp_menu_label": "Channels",
         "save_button": "💾 Save",
         "saved_button": "✅ Saved",
+        "channel_settings_link": "⚙",
     },
     "ru": {
         "greeting": "Привет, я informer. Открой Mini App, чтобы выбрать каналы — через бургер-меню или команду /app. /help — все команды.",
@@ -126,6 +127,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "miniapp_menu_label": "Каналы",
         "save_button": "💾 Сохранить",
         "saved_button": "✅ Сохранено",
+        "channel_settings_link": "⚙",
     },
 }
 

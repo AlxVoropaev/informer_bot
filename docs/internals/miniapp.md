@@ -30,8 +30,16 @@ checked against `users.status='approved'`.
 The new-channel announcement DM (sent on `/update`) attaches a
 `web_app=WebAppInfo(url=f"{MINIAPP_URL}?channel=<id>")` button. On open,
 `webapp/app.js` reads `?channel=<id>` (and falls back to
-`tg.initDataUnsafe.start_param` matching `^channel_(\d+)$`) and auto-opens
+`tg.initDataUnsafe.start_param` matching `^channel_(-?\d+)$`) and auto-opens
 that channel's details view.
+
+When the optional `MINIAPP_TG_DEEPLINK` env var is set (e.g.
+`https://t.me/MyBot/app` — requires a Web App short-name registered via
+`/newapp` in @BotFather), every summary DM includes a small ⚙ link next to
+the channel title. The URL is `<MINIAPP_TG_DEEPLINK>?startapp=channel_<id>`,
+which Telegram clients intercept inside chats and open the Mini App on the
+target channel's details view via `start_param`. Without the env var the
+summary message is unchanged.
 
 Subscription/filter behaviour mirrors the inline-keyboard handlers — setting a
 filter on an `off`/no-row channel auto-bumps it to `filtered`, same as
