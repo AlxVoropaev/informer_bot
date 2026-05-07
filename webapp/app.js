@@ -52,6 +52,13 @@ const I18N = {
     dedupDebugHint: "When on, near-duplicate posts are still delivered as fresh DMs marked 🔁 DUPLICATE with a link to the original. Off: duplicates are silently chained as buttons under the first DM.",
     dedupDebugOn: "Dedup debug on.",
     dedupDebugOff: "Dedup debug off.",
+    summaryPromptHeading: "📝 Summary system prompt",
+    summaryPromptLabel: "System prompt",
+    summaryPromptHint: "This prompt is sent to the model for every summary, for all users. Reset restores the hardcoded default.",
+    summaryPromptSave: "Save",
+    summaryPromptReset: "Reset",
+    summaryPromptSaved: "System prompt saved.",
+    summaryPromptResetDone: "System prompt reset to default.",
   },
   ru: {
     search: "Поиск каналов…",
@@ -102,6 +109,13 @@ const I18N = {
     dedupDebugHint: "Когда включено, похожие посты приходят отдельными сообщениями с пометкой 🔁 ДУБЛЬ и ссылкой на оригинал. Выключено: дубли молча добавляются кнопкой к первому сообщению.",
     dedupDebugOn: "Отладка дедупликации включена.",
     dedupDebugOff: "Отладка дедупликации выключена.",
+    summaryPromptHeading: "📝 Системный промпт сводок",
+    summaryPromptLabel: "Системный промпт",
+    summaryPromptHint: "Этот промпт отправляется модели для каждой сводки и применяется ко всем пользователям. Сброс возвращает значение по умолчанию.",
+    summaryPromptSave: "Сохранить",
+    summaryPromptReset: "Сбросить",
+    summaryPromptSaved: "Системный промпт сохранён.",
+    summaryPromptResetDone: "Системный промпт сброшен к значению по умолчанию.",
   },
 };
 
@@ -114,6 +128,8 @@ const state = {
   isOwner: false,
   autoDeleteHours: null,
   dedupDebug: false,
+  summaryPrompt: null,
+  summaryPromptDefault: null,
 };
 
 function t() { return I18N[state.language] || I18N.en; }
@@ -163,6 +179,11 @@ function applyLanguage() {
   el("dedup-debug-heading").textContent = dict.dedupDebugHeading;
   el("dedup-debug-label").textContent = dict.dedupDebugLabel;
   el("dedup-debug-hint").textContent = dict.dedupDebugHint;
+  el("summary-prompt-heading").textContent = dict.summaryPromptHeading;
+  el("summary-prompt-label").textContent = dict.summaryPromptLabel;
+  el("summary-prompt-hint").textContent = dict.summaryPromptHint;
+  el("summary-prompt-save").textContent = dict.summaryPromptSave;
+  el("summary-prompt-reset").textContent = dict.summaryPromptReset;
   document.querySelectorAll('input[name="mode"]').forEach((input) => {
     const labelSpan = input.nextElementSibling;
     labelSpan.textContent = dict.modes[input.value];
@@ -378,6 +399,13 @@ function closeUsage() {
 function openSettings() {
   el("autodel-input").value = state.autoDeleteHours == null ? "" : String(state.autoDeleteHours);
   el("dedup-debug-input").checked = !!state.dedupDebug;
+  const promptSection = el("summary-prompt-section");
+  if (state.isOwner) {
+    promptSection.hidden = false;
+    el("summary-prompt-input").value = state.summaryPrompt == null ? "" : state.summaryPrompt;
+  } else {
+    promptSection.hidden = true;
+  }
   el("settings").classList.remove("hidden");
   el("settings").setAttribute("aria-hidden", "false");
   el("list").classList.add("hidden");
@@ -432,6 +460,23 @@ async function saveAutoDelete(hours) {
     if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
   } catch (e) {
     showToast(e.message === "bad_hours" ? t().autoDeleteBad : (e.message || t().network_error));
+  }
+}
+
+async function saveSummaryPrompt(prompt, resetDone) {
+  try {
+    const data = await api("/api/summary_prompt", {
+      method: "POST",
+      body: JSON.stringify({ prompt }),
+    });
+    state.summaryPrompt = data.summary_prompt == null ? null : String(data.summary_prompt);
+    state.summaryPromptDefault = data.summary_prompt_default == null ? null : String(data.summary_prompt_default);
+    el("summary-prompt-input").value = state.summaryPrompt == null ? "" : state.summaryPrompt;
+    const dict = t();
+    showToast(resetDone ? dict.summaryPromptResetDone : dict.summaryPromptSaved);
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+  } catch (e) {
+    showToast(e.message || t().network_error);
   }
 }
 
@@ -511,6 +556,8 @@ async function init() {
     state.isOwner = !!data.is_owner;
     state.autoDeleteHours = data.auto_delete_hours == null ? null : Number(data.auto_delete_hours);
     state.dedupDebug = !!data.dedup_debug;
+    state.summaryPrompt = data.summary_prompt == null ? null : String(data.summary_prompt);
+    state.summaryPromptDefault = data.summary_prompt_default == null ? null : String(data.summary_prompt_default);
     rebuildLangSelect();
     applyLanguage();
     renderList();
@@ -547,6 +594,14 @@ async function init() {
   });
   el("dedup-debug-input").addEventListener("change", (ev) => {
     saveDedupDebug(!!ev.target.checked);
+  });
+  el("summary-prompt-save").addEventListener("click", () => {
+    const value = el("summary-prompt-input").value.trim();
+    saveSummaryPrompt(value || null, false);
+  });
+  el("summary-prompt-reset").addEventListener("click", () => {
+    el("summary-prompt-input").value = state.summaryPromptDefault == null ? "" : state.summaryPromptDefault;
+    saveSummaryPrompt(null, true);
   });
 
   document.querySelectorAll('input[name="mode"]').forEach((input) => {
