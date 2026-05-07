@@ -18,7 +18,7 @@ class FallbackDispatcher:
         self,
         *,
         remote: RemoteProcessorClient,
-        fallback_summarize: Callable[[str], Awaitable[Summary]] | None,
+        fallback_summarize: Callable[..., Awaitable[Summary]] | None,
         fallback_is_relevant: (
             Callable[[str, str], Awaitable[RelevanceCheck]] | None
         ),
@@ -29,20 +29,22 @@ class FallbackDispatcher:
         self._fallback_is_relevant = fallback_is_relevant
         self._fallback_embed = fallback_embed
 
-    async def summarize(self, text: str) -> Summary:
+    async def summarize(
+        self, text: str, *, system_prompt: str | None = None,
+    ) -> Summary:
         if self._remote.healthy:
             try:
-                return await self._remote.summarize(text)
+                return await self._remote.summarize(text, system_prompt=system_prompt)
             except (RemoteProcessorTimeout, RemoteProcessorError) as exc:
                 if self._fallback_summarize is None:
                     raise
                 log.warning("fallback summarize: %s", exc)
-                return await self._fallback_summarize(text)
+                return await self._fallback_summarize(text, system_prompt=system_prompt)
         if self._fallback_summarize is None:
             raise RemoteProcessorError(
                 "remote unhealthy and no summarize fallback configured"
             )
-        return await self._fallback_summarize(text)
+        return await self._fallback_summarize(text, system_prompt=system_prompt)
 
     async def is_relevant(self, text: str, filter_prompt: str) -> RelevanceCheck:
         if self._remote.healthy:

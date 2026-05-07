@@ -30,7 +30,10 @@ async def handle_request(
         case PingRequest():
             return PingReply(id=req.id)
         case SummarizeRequest():
-            result = await summarize_ollama(req.text, client=client, model=chat_model)
+            result = await summarize_ollama(
+                req.text, client=client, model=chat_model,
+                system_prompt=req.system_prompt,
+            )
             return SummarizeReply(
                 id=req.id,
                 text=result.text,

@@ -134,8 +134,10 @@ class RemoteProcessorClient:
             )
         )
 
-    async def summarize(self, text: str) -> Summary:
-        req = SummarizeRequest.new(text)
+    async def summarize(
+        self, text: str, *, system_prompt: str | None = None,
+    ) -> Summary:
+        req = SummarizeRequest.new(text, system_prompt=system_prompt)
         try:
             reply = await self._send_and_wait(req, Op.summarize)
         except RemoteProcessorTimeout:

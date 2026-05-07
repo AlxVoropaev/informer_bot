@@ -4,8 +4,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from informer_bot.db import Database
-from informer_bot.main import _wrap_embed_with_remote_model_check
-from informer_bot.summarizer import EMBED_DIMENSIONS, Embedding
+from informer_bot.main import (
+    _wrap_embed_with_remote_model_check,
+    _wrap_summarize_with_custom_prompt,
+)
+from informer_bot.summarizer import EMBED_DIMENSIONS, Embedding, Summary
 
 
 @pytest.fixture
@@ -61,6 +64,39 @@ async def test_wrap_keeps_index_when_model_unchanged(db: Database) -> None:
     await wrapped("text2")
 
     assert _post_embedding_count(db) == 1
+
+
+def _summary() -> Summary:
+    return Summary(text="s", input_tokens=1, output_tokens=1, provider="anthropic")
+
+
+async def test_wrap_summarize_forwards_none_when_meta_unset(db: Database) -> None:
+    inner = AsyncMock(return_value=_summary())
+    wrapped = _wrap_summarize_with_custom_prompt(inner, db)
+
+    await wrapped("text")
+
+    inner.assert_awaited_once_with("text", system_prompt=None)
+
+
+async def test_wrap_summarize_forwards_custom_when_meta_set(db: Database) -> None:
+    db.set_meta("summary_prompt", "CUSTOM")
+    inner = AsyncMock(return_value=_summary())
+    wrapped = _wrap_summarize_with_custom_prompt(inner, db)
+
+    await wrapped("text")
+
+    inner.assert_awaited_once_with("text", system_prompt="CUSTOM")
+
+
+async def test_wrap_summarize_forwards_none_when_meta_empty(db: Database) -> None:
+    db.set_meta("summary_prompt", "")
+    inner = AsyncMock(return_value=_summary())
+    wrapped = _wrap_summarize_with_custom_prompt(inner, db)
+
+    await wrapped("text")
+
+    inner.assert_awaited_once_with("text", system_prompt=None)
 
 
 async def test_wrap_purges_when_fallback_provider_replies(db: Database) -> None:

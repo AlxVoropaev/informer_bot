@@ -23,10 +23,11 @@ class Op(StrEnum):
 class SummarizeRequest:
     id: str
     text: str
+    system_prompt: str | None = None
 
     @classmethod
-    def new(cls, text: str) -> "SummarizeRequest":
-        return cls(id=str(uuid.uuid4()), text=text)
+    def new(cls, text: str, system_prompt: str | None = None) -> "SummarizeRequest":
+        return cls(id=str(uuid.uuid4()), text=text, system_prompt=system_prompt)
 
 
 @dataclass(frozen=True)

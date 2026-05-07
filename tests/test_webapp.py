@@ -391,6 +391,114 @@ async def test_dedup_debug_set_then_clear(
     assert state["dedup_debug"] is False
 
 
+# ---------- summary prompt (owner-only) ----------
+
+async def test_state_includes_summary_prompt_for_owner(
+    client: TestClient, db: Database
+) -> None:
+    from informer_bot.summarizer import SYSTEM_PROMPT
+
+    init_data = _make_init_data(user_id=OWNER_ID)
+    resp = await client.get(
+        "/api/state", headers={"X-Telegram-Init-Data": init_data}
+    )
+    body = await resp.json()
+    assert body["summary_prompt"] == SYSTEM_PROMPT
+    assert body["summary_prompt_default"] == SYSTEM_PROMPT
+
+
+async def test_state_returns_custom_summary_prompt_for_owner(
+    client: TestClient, db: Database
+) -> None:
+    from informer_bot.summarizer import SYSTEM_PROMPT
+
+    db.set_meta("summary_prompt", "CUSTOM")
+    init_data = _make_init_data(user_id=OWNER_ID)
+    resp = await client.get(
+        "/api/state", headers={"X-Telegram-Init-Data": init_data}
+    )
+    body = await resp.json()
+    assert body["summary_prompt"] == "CUSTOM"
+    assert body["summary_prompt_default"] == SYSTEM_PROMPT
+
+
+async def test_state_omits_summary_prompt_for_non_owner(
+    client: TestClient,
+) -> None:
+    init_data = _make_init_data(user_id=USER_ID)
+    resp = await client.get(
+        "/api/state", headers={"X-Telegram-Init-Data": init_data}
+    )
+    body = await resp.json()
+    assert "summary_prompt" not in body
+    assert "summary_prompt_default" not in body
+
+
+async def test_summary_prompt_set_then_reset(
+    client: TestClient, db: Database
+) -> None:
+    from informer_bot.summarizer import SYSTEM_PROMPT
+
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+    resp = await client.post(
+        "/api/summary_prompt", headers=headers, json={"prompt": "CUSTOM"}
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["ok"] is True
+    assert body["summary_prompt"] == "CUSTOM"
+    assert body["summary_prompt_default"] == SYSTEM_PROMPT
+    assert db.get_meta("summary_prompt") == "CUSTOM"
+
+    resp = await client.post(
+        "/api/summary_prompt", headers=headers, json={"prompt": None}
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["summary_prompt"] == SYSTEM_PROMPT
+    assert db.get_meta("summary_prompt") == ""
+
+
+async def test_summary_prompt_empty_resets(
+    client: TestClient, db: Database
+) -> None:
+    from informer_bot.summarizer import SYSTEM_PROMPT
+
+    db.set_meta("summary_prompt", "CUSTOM")
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+    resp = await client.post(
+        "/api/summary_prompt", headers=headers, json={"prompt": "   "}
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["summary_prompt"] == SYSTEM_PROMPT
+    assert db.get_meta("summary_prompt") == ""
+
+
+async def test_summary_prompt_strips_whitespace(
+    client: TestClient, db: Database
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+    resp = await client.post(
+        "/api/summary_prompt", headers=headers, json={"prompt": "  CUSTOM  "}
+    )
+    assert resp.status == 200
+    assert db.get_meta("summary_prompt") == "CUSTOM"
+
+
+async def test_summary_prompt_non_owner_forbidden(
+    client: TestClient, db: Database
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)}
+    resp = await client.post(
+        "/api/summary_prompt", headers=headers, json={"prompt": "CUSTOM"}
+    )
+    assert resp.status == 403
+    body = await resp.json()
+    assert body["error"] == "not_owner"
+    assert db.get_meta("summary_prompt") is None
+
+
 @pytest.mark.parametrize("bad", [0, -1, 721, "abc"])
 async def test_auto_delete_rejects_bad_values(
     client: TestClient, db: Database, bad

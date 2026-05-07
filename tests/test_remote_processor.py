@@ -265,6 +265,29 @@ async def test_request_is_sent_as_json_document(
     assert parsed["text"] == "hi"
 
 
+async def test_summarize_forwards_system_prompt_on_wire(
+    remote: tuple[RemoteProcessorClient, SimpleNamespace],
+) -> None:
+    rp, app_mock = remote
+    rp.start()
+
+    async def replier() -> None:
+        await asyncio.sleep(0.01)
+        body = await _request_payload(app_mock)
+        req = json.loads(body)
+        reply = encode_reply(SummarizeReply(
+            id=req["id"], text="ok", input_tokens=1, output_tokens=1,
+        ))
+        await _fire_reply(rp, app_mock, reply)
+
+    asyncio.create_task(replier())
+    await rp.summarize("hi", system_prompt="CUSTOM")
+
+    body = await _request_payload(app_mock)
+    parsed = json.loads(body)
+    assert parsed["system_prompt"] == "CUSTOM"
+
+
 async def test_summarize_timeout_marks_unhealthy_and_calls_callback() -> None:
     app_mock = _make_app_mock()
     rp = RemoteProcessorClient(

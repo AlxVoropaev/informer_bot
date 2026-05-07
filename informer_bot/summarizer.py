@@ -78,13 +78,18 @@ def estimate_embedding_cost_usd(provider: str, tokens: int) -> float:
     return tokens / 1_000_000 * EMBEDDING_PRICES_PER_MTOK.get(provider, 0.0)
 
 
-async def summarize(text: str, client: AsyncAnthropic | None = None) -> Summary:
+async def summarize(
+    text: str,
+    client: AsyncAnthropic | None = None,
+    *,
+    system_prompt: str | None = None,
+) -> Summary:
     client = client or AsyncAnthropic()
     log.debug("summarize: sending %d chars to %s", len(text), MODEL)
     response = await client.messages.create(
         model=MODEL,
         max_tokens=MAX_TOKENS_CLAUDE,
-        system=SYSTEM_PROMPT,
+        system=system_prompt or SYSTEM_PROMPT,
         messages=[{"role": "user", "content": text}],
     )
     summary = next(b.text for b in response.content if b.type == "text").strip()
@@ -161,7 +166,7 @@ async def embed_summary(
 
 
 async def summarize_ollama(
-    text: str, *, client: AsyncOpenAI, model: str
+    text: str, *, client: AsyncOpenAI, model: str, system_prompt: str | None = None,
 ) -> Summary:
     log.debug("summarize_ollama: sending %d chars to %s", len(text), model)
     response = await client.chat.completions.create(
@@ -169,7 +174,7 @@ async def summarize_ollama(
         max_tokens=MAX_TOKENS_OLLAMA,
         temperature=0,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT + OLLAMA_NO_THINK},
+            {"role": "system", "content": (system_prompt or SYSTEM_PROMPT) + OLLAMA_NO_THINK},
             {"role": "user", "content": text},
         ],
     )

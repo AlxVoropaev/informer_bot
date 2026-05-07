@@ -18,7 +18,11 @@ from aiohttp import web
 
 from informer_bot.db import Database, format_user_label
 from informer_bot.i18n import LANGUAGES
-from informer_bot.summarizer import estimate_cost_usd, estimate_embedding_cost_usd
+from informer_bot.summarizer import (
+    SYSTEM_PROMPT,
+    estimate_cost_usd,
+    estimate_embedding_cost_usd,
+)
 
 log = logging.getLogger(__name__)
 
@@ -131,14 +135,19 @@ async def _state(request: web.Request) -> web.Response:
     db = request.app[DB_KEY]
     owner_id = request.app[OWNER_ID_KEY]
     user_id: int = request["user_id"]
-    return web.json_response({
+    payload: dict = {
         "user_id": user_id,
         "language": db.get_language(user_id),
         "is_owner": user_id == owner_id,
         "auto_delete_hours": db.get_user_auto_delete_hours(user_id),
         "dedup_debug": db.get_dedup_debug(user_id),
         "channels": _channel_payload(db, user_id),
-    })
+    }
+    if user_id == owner_id:
+        custom = db.get_meta("summary_prompt") or ""
+        payload["summary_prompt"] = custom or SYSTEM_PROMPT
+        payload["summary_prompt_default"] = SYSTEM_PROMPT
+    return web.json_response(payload)
 
 
 _AUTO_DELETE_MAX_HOURS = 720  # 30 days
@@ -302,6 +311,27 @@ async def _dedup_debug(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "dedup_debug": enabled})
 
 
+async def _summary_prompt(request: web.Request) -> web.Response:
+    db = request.app[DB_KEY]
+    owner_id = request.app[OWNER_ID_KEY]
+    user_id: int = request["user_id"]
+    if user_id != owner_id:
+        return web.json_response({"error": "not_owner"}, status=403)
+    body = await request.json()
+    raw = body.get("prompt")
+    prompt = (str(raw).strip() if raw is not None else "")
+    db.set_meta("summary_prompt", prompt)
+    log.info(
+        "miniapp: owner=%s summary_prompt %s",
+        user_id, "set" if prompt else "reset",
+    )
+    return web.json_response({
+        "ok": True,
+        "summary_prompt": prompt or SYSTEM_PROMPT,
+        "summary_prompt_default": SYSTEM_PROMPT,
+    })
+
+
 async def _language(request: web.Request) -> web.Response:
     db = request.app[DB_KEY]
     user_id: int = request["user_id"]
@@ -325,6 +355,7 @@ def build_app(*, db: Database, bot_token: str, owner_id: int) -> web.Application
     app.router.add_post("/api/language", _language)
     app.router.add_post("/api/auto_delete", _auto_delete)
     app.router.add_post("/api/dedup_debug", _dedup_debug)
+    app.router.add_post("/api/summary_prompt", _summary_prompt)
     app.router.add_get("/api/usage", _usage)
 
     async def index(_req: web.Request) -> web.FileResponse:

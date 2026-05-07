@@ -25,6 +25,22 @@ def test_summarize_request_roundtrip() -> None:
     assert got == req
 
 
+def test_summarize_request_with_system_prompt_roundtrip() -> None:
+    req = SummarizeRequest.new(text="hello", system_prompt="CUSTOM")
+    got = decode_request(encode_request(req))
+    assert got == req
+    assert isinstance(got, SummarizeRequest)
+    assert got.system_prompt == "CUSTOM"
+
+
+def test_summarize_request_decodes_legacy_payload_without_system_prompt() -> None:
+    legacy = '{"op":"summarize","id":"x","text":"hi"}'
+    got = decode_request(legacy)
+    assert isinstance(got, SummarizeRequest)
+    assert got.text == "hi"
+    assert got.system_prompt is None
+
+
 def test_is_relevant_request_roundtrip() -> None:
     req = IsRelevantRequest.new(text="post", filter_prompt="ai news")
     got = decode_request(encode_request(req))

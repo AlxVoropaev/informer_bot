@@ -161,6 +161,15 @@ def _build_ollama_embed_fn(cfg: Config, ollama_client: AsyncOpenAI) -> EmbedFn:
     )
 
 
+def _wrap_summarize_with_custom_prompt(
+    summarize_fn: SummarizeFn, db: Database
+) -> SummarizeFn:
+    async def wrapped(text: str):
+        custom = db.get_meta("summary_prompt")
+        return await summarize_fn(text, system_prompt=custom or None)
+    return wrapped
+
+
 def _wrap_embed_with_remote_model_check(embed_fn: EmbedFn, db: Database) -> EmbedFn:
     # Remote replies carry the embedding model the processor used. Reset the
     # dedup index when that model (or the active provider, on fallback) changes
@@ -427,6 +436,7 @@ async def main() -> None:
             is_relevant_fn = dispatcher.is_relevant
         if cfg.embedding_provider == "remote":
             embed_fn = _wrap_embed_with_remote_model_check(dispatcher.embed, db)
+    summarize_fn = _wrap_summarize_with_custom_prompt(summarize_fn, db)
     send_dm = _make_send_dm(app)
     edit_dm: EditDmFn | None = _make_edit_dm(app) if embed_fn is not None else None
     announce_new_channel = _make_announce_new_channel(app, db, miniapp_url)

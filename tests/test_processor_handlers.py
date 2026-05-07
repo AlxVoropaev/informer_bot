@@ -60,6 +60,21 @@ async def test_summarize_returns_summarize_reply() -> None:
     assert reply.output_tokens == 3
 
 
+async def test_summarize_forwards_system_prompt() -> None:
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=_fake_chat("brief")
+    )
+    req = SummarizeRequest.new("Body", system_prompt="CUSTOM")
+
+    await handle_request(
+        req, client=client, chat_model="m", embedding_model="e",
+    )
+
+    kwargs = client.chat.completions.create.await_args.kwargs
+    assert kwargs["messages"][0]["content"].startswith("CUSTOM")
+
+
 async def test_is_relevant_yes() -> None:
     client = AsyncMock()
     client.chat.completions.create = AsyncMock(return_value=_fake_chat("YES"))

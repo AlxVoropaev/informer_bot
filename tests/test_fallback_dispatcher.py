@@ -48,8 +48,41 @@ async def test_summarize_healthy_uses_remote() -> None:
     result = await d.summarize("text")
 
     assert result.text == "remote"
-    remote_summarize.assert_awaited_once_with("text")
+    remote_summarize.assert_awaited_once_with("text", system_prompt=None)
     fb.assert_not_awaited()
+
+
+async def test_summarize_forwards_system_prompt_to_remote() -> None:
+    remote_summarize = AsyncMock(return_value=_summary("remote"))
+    fb = AsyncMock(return_value=_summary("fb"))
+    remote = _remote(healthy=True, summarize=remote_summarize)
+    d = FallbackDispatcher(
+        remote=remote,  # type: ignore[arg-type]
+        fallback_summarize=fb,
+        fallback_is_relevant=None,
+        fallback_embed=None,
+    )
+
+    await d.summarize("text", system_prompt="CUSTOM")
+
+    remote_summarize.assert_awaited_once_with("text", system_prompt="CUSTOM")
+    fb.assert_not_awaited()
+
+
+async def test_summarize_forwards_system_prompt_to_fallback() -> None:
+    remote_summarize = AsyncMock(side_effect=RemoteProcessorTimeout("timed out"))
+    fb = AsyncMock(return_value=_summary("fb"))
+    remote = _remote(healthy=True, summarize=remote_summarize)
+    d = FallbackDispatcher(
+        remote=remote,  # type: ignore[arg-type]
+        fallback_summarize=fb,
+        fallback_is_relevant=None,
+        fallback_embed=None,
+    )
+
+    await d.summarize("text", system_prompt="CUSTOM")
+
+    fb.assert_awaited_once_with("text", system_prompt="CUSTOM")
 
 
 async def test_summarize_unhealthy_skips_remote() -> None:
@@ -67,7 +100,7 @@ async def test_summarize_unhealthy_skips_remote() -> None:
 
     assert result.text == "fb"
     remote_summarize.assert_not_awaited()
-    fb.assert_awaited_once_with("text")
+    fb.assert_awaited_once_with("text", system_prompt=None)
 
 
 async def test_summarize_remote_timeout_falls_back() -> None:
@@ -84,7 +117,7 @@ async def test_summarize_remote_timeout_falls_back() -> None:
     result = await d.summarize("text")
 
     assert result.text == "fb"
-    fb.assert_awaited_once_with("text")
+    fb.assert_awaited_once_with("text", system_prompt=None)
 
 
 async def test_summarize_remote_processor_error_falls_back() -> None:
@@ -101,7 +134,7 @@ async def test_summarize_remote_processor_error_falls_back() -> None:
     result = await d.summarize("text")
 
     assert result.text == "fb"
-    fb.assert_awaited_once_with("text")
+    fb.assert_awaited_once_with("text", system_prompt=None)
 
 
 async def test_summarize_no_fallback_propagates_remote_error() -> None:

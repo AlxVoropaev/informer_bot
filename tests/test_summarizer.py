@@ -56,6 +56,20 @@ async def test_summarize_calls_haiku_with_system_prompt_and_user_text(
     assert kwargs["messages"] == [{"role": "user", "content": "Post body here"}]
 
 
+async def test_summarize_uses_custom_system_prompt(fake_client: AsyncMock) -> None:
+    await summarize("Body", client=fake_client, system_prompt="CUSTOM")
+
+    kwargs = fake_client.messages.create.await_args.kwargs
+    assert kwargs["system"] == "CUSTOM"
+
+
+async def test_summarize_default_system_prompt_when_none(fake_client: AsyncMock) -> None:
+    await summarize("Body", client=fake_client, system_prompt=None)
+
+    kwargs = fake_client.messages.create.await_args.kwargs
+    assert "one or two sentences" in kwargs["system"].lower()
+
+
 async def test_summarize_strips_whitespace(fake_client: AsyncMock) -> None:
     fake_client.messages.create.return_value = _fake_response("  Brief with padding.\n\n")
 
@@ -196,6 +210,36 @@ async def test_summarize_ollama_calls_with_temperature_zero_and_model() -> None:
     assert isinstance(kwargs["max_tokens"], int) and kwargs["max_tokens"] > 0
     assert kwargs["messages"][0]["role"] == "system"
     assert kwargs["messages"][1] == {"role": "user", "content": "Body"}
+
+
+async def test_summarize_ollama_uses_custom_system_prompt() -> None:
+    from informer_bot.summarizer import summarize_ollama
+
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=_fake_chat_response("brief")
+    )
+
+    await summarize_ollama(
+        "Body", client=client, model="m", system_prompt="CUSTOM",
+    )
+
+    kwargs = client.chat.completions.create.await_args.kwargs
+    assert kwargs["messages"][0]["content"].startswith("CUSTOM")
+
+
+async def test_summarize_ollama_default_system_prompt_when_none() -> None:
+    from informer_bot.summarizer import summarize_ollama
+
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=_fake_chat_response("brief")
+    )
+
+    await summarize_ollama("Body", client=client, model="m")
+
+    kwargs = client.chat.completions.create.await_args.kwargs
+    assert "one or two sentences" in kwargs["messages"][0]["content"].lower()
 
 
 async def test_is_relevant_ollama_yes_and_no() -> None:
