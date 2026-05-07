@@ -17,11 +17,14 @@ class Config:
     dedup_threshold: float = 0.85
     dedup_window_hours: int = 48
     catch_up_window_hours: int = 48
-    embedding_provider: str = "auto"  # 'auto', 'openai', 'ollama', 'none'
-    chat_provider: str = "anthropic"  # 'anthropic' or 'ollama'
+    embedding_provider: str = "auto"  # 'auto', 'openai', 'ollama', 'remote', 'none'
+    chat_provider: str = "anthropic"  # 'anthropic', 'ollama', or 'remote'
     ollama_base_url: str = "http://localhost:11434/v1"
     ollama_chat_model: str = "qwen3.5:4b"
     ollama_embedding_model: str = "qwen3-embedding:4b"
+    bus_group_id: int | None = None
+    processor_bot_user_id: int | None = None
+    processor_timeout_seconds: float = 60.0
     miniapp_url: str | None = None
     webapp_host: str = "0.0.0.0"
     webapp_port: int = 8085
@@ -30,17 +33,25 @@ class Config:
 def load_config() -> Config:
     load_dotenv("data/.env")
     chat_provider = os.environ.get("CHAT_PROVIDER", "anthropic").lower()
-    if chat_provider not in {"anthropic", "ollama"}:
+    if chat_provider not in {"anthropic", "ollama", "remote"}:
         raise SystemExit(
-            f"CHAT_PROVIDER must be one of anthropic/ollama, got {chat_provider!r}"
+            f"CHAT_PROVIDER must be one of anthropic/ollama/remote, got {chat_provider!r}"
         )
     if chat_provider == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"):
         raise SystemExit("ANTHROPIC_API_KEY missing in .env")
     provider = os.environ.get("EMBEDDING_PROVIDER", "auto").lower()
-    if provider not in {"auto", "openai", "ollama", "none"}:
+    if provider not in {"auto", "openai", "ollama", "remote", "none"}:
         raise SystemExit(
-            f"EMBEDDING_PROVIDER must be one of auto/openai/ollama/none, got {provider!r}"
+            f"EMBEDDING_PROVIDER must be one of auto/openai/ollama/remote/none, got {provider!r}"
         )
+    bus_group_id_raw = os.environ.get("BUS_GROUP_ID")
+    processor_user_id_raw = os.environ.get("PROCESSOR_BOT_USER_ID")
+    if chat_provider == "remote" or provider == "remote":
+        if not bus_group_id_raw or not processor_user_id_raw:
+            raise SystemExit(
+                "CHAT_PROVIDER/EMBEDDING_PROVIDER=remote requires "
+                "BUS_GROUP_ID and PROCESSOR_BOT_USER_ID in .env"
+            )
     return Config(
         telegram_api_id=int(os.environ["TELEGRAM_API_ID"]),
         telegram_api_hash=os.environ["TELEGRAM_API_HASH"],
@@ -61,6 +72,13 @@ def load_config() -> Config:
         ollama_chat_model=os.environ.get("OLLAMA_CHAT_MODEL", "qwen3.5:4b"),
         ollama_embedding_model=os.environ.get(
             "OLLAMA_EMBEDDING_MODEL", "qwen3-embedding:4b"
+        ),
+        bus_group_id=int(bus_group_id_raw) if bus_group_id_raw else None,
+        processor_bot_user_id=(
+            int(processor_user_id_raw) if processor_user_id_raw else None
+        ),
+        processor_timeout_seconds=float(
+            os.environ.get("PROCESSOR_TIMEOUT_SECONDS", "60.0")
         ),
         miniapp_url=os.environ.get("MINIAPP_URL") or None,
         webapp_host=os.environ.get("WEBAPP_HOST", "0.0.0.0"),

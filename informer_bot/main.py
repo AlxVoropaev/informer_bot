@@ -47,9 +47,12 @@ from informer_bot.pipeline import (
     EditDmFn,
     EmbedFn,
     FetchChannelsFn,
+    IsRelevantFn,
     SendDmFn,
+    SummarizeFn,
     handle_new_post,
 )
+from informer_bot.remote_processor import RemoteProcessorClient
 from informer_bot import summarizer
 from informer_bot.summarizer import (
     EMBED_DIMENSIONS,
@@ -275,7 +278,25 @@ async def main() -> None:
     ):
         app.add_handler(handler)
 
+    remote: RemoteProcessorClient | None = None
+    if cfg.chat_provider == "remote" or cfg.embedding_provider == "remote":
+        assert cfg.bus_group_id is not None
+        assert cfg.processor_bot_user_id is not None
+        remote = RemoteProcessorClient(
+            telethon_client=tg,
+            bus_group_id=cfg.bus_group_id,
+            processor_bot_user_id=cfg.processor_bot_user_id,
+            timeout_seconds=cfg.processor_timeout_seconds,
+        )
+        await remote.start()
+        log.info(
+            "remote processor: bus=%s peer=%s timeout=%.1fs",
+            cfg.bus_group_id, cfg.processor_bot_user_id, cfg.processor_timeout_seconds,
+        )
+
     ollama_client: AsyncOpenAI | None = None
+    summarize_fn: SummarizeFn
+    is_relevant_fn: IsRelevantFn
     if cfg.chat_provider == "ollama":
         ollama_client = AsyncOpenAI(base_url=cfg.ollama_base_url, api_key="ollama")
         summarize_fn = functools.partial(
@@ -291,14 +312,41 @@ async def main() -> None:
             "chat provider: ollama (%s @ %s)",
             cfg.ollama_chat_model, cfg.ollama_base_url,
         )
+    elif cfg.chat_provider == "remote":
+        assert remote is not None
+        summarize_fn = remote.summarize
+        is_relevant_fn = remote.is_relevant
+        # Remote inference is local on the processor side; zero out chat prices.
+        summarizer.PRICE_PER_MTOK_INPUT = 0.0
+        summarizer.PRICE_PER_MTOK_OUTPUT = 0.0
+        log.info("chat provider: remote")
     else:
         summarize_fn = summarize
         is_relevant_fn = is_relevant
 
-    embed_fn, _embedding_id = setup_embedder(cfg, db, ollama_client=ollama_client)
-    if _embedding_id is not None and _embedding_id.startswith("ollama:"):
-        # Local embeddings have no per-token cost.
+    embed_fn: EmbedFn | None
+    if cfg.embedding_provider == "remote":
+        assert remote is not None
+        embed_fn = remote.embed
+        remote_embed_id = "remote"
+        prev = db.get_meta("embedding_id")
+        if prev is not None and prev != remote_embed_id:
+            log.warning(
+                "embedding model changed (%s -> %s); dropping dedup index",
+                prev, remote_embed_id,
+            )
+            db.purge_dedup_all()
+        db.set_meta("embedding_id", remote_embed_id)
+        db.purge_dedup_older_than(
+            cutoff=int(time.time()) - cfg.dedup_window_hours * 3600
+        )
         summarizer.EMBED_PRICE_PER_MTOK = 0.0
+        log.info("embedding provider: remote")
+    else:
+        embed_fn, embedding_id = setup_embedder(cfg, db, ollama_client=ollama_client)
+        if embedding_id is not None and embedding_id.startswith("ollama:"):
+            # Local embeddings have no per-token cost.
+            summarizer.EMBED_PRICE_PER_MTOK = 0.0
     send_dm = _make_send_dm(app)
     edit_dm: EditDmFn | None = _make_edit_dm(app) if embed_fn is not None else None
     announce_new_channel = _make_announce_new_channel(app, db, miniapp_url)

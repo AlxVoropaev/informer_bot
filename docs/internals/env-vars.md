@@ -8,11 +8,14 @@ ANTHROPIC_API_KEY=...      # required only when CHAT_PROVIDER=anthropic (the def
 OPENAI_API_KEY=...         # optional — only consulted when EMBEDDING_PROVIDER picks openai
 OWNER_ID=...               # admin's Telegram user id (numeric)
 LOG_LEVEL=INFO             # optional, default INFO
-EMBEDDING_PROVIDER=auto    # optional: auto|openai|ollama|none (auto picks openai if key set, else none)
-CHAT_PROVIDER=anthropic    # optional: anthropic|ollama (default anthropic)
+EMBEDDING_PROVIDER=auto    # optional: auto|openai|ollama|remote|none (auto picks openai if key set, else none)
+CHAT_PROVIDER=anthropic    # optional: anthropic|ollama|remote (default anthropic)
 OLLAMA_BASE_URL=http://localhost:11434/v1  # optional, OpenAI-compatible endpoint of your Ollama server
 OLLAMA_CHAT_MODEL=qwen3.5:4b                # optional, Ollama tag used when CHAT_PROVIDER=ollama
 OLLAMA_EMBEDDING_MODEL=qwen3-embedding:4b   # optional, Ollama tag used when EMBEDDING_PROVIDER=ollama
+BUS_GROUP_ID=                # required when CHAT_PROVIDER=remote or EMBEDDING_PROVIDER=remote — id of the private Telegram group used to talk to processor_bot
+PROCESSOR_BOT_USER_ID=       # required when CHAT_PROVIDER=remote or EMBEDDING_PROVIDER=remote — numeric user id of processor_bot
+PROCESSOR_TIMEOUT_SECONDS=60 # optional, seconds to wait for a remote reply (default 60)
 DEDUP_THRESHOLD=0.85       # optional, cosine threshold for "same story"
 DEDUP_WINDOW_HOURS=48      # optional, lookback window for dedup
 CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay
