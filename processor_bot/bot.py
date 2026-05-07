@@ -3,7 +3,7 @@ from collections.abc import Awaitable, Callable
 from io import BytesIO
 
 from openai import AsyncOpenAI
-from telegram import InputFile, Update
+from telegram import InputFile, ReplyParameters, Update
 from telegram.ext import ContextTypes
 
 from processor_bot.config import Config
@@ -65,13 +65,13 @@ def make_handler_callback(
                     BytesIO(encoded.encode("utf-8")),
                     filename=EMBED_REPLY_FILENAME,
                 ),
-                reply_to_message_id=message.message_id,
+                reply_parameters=ReplyParameters(message_id=message.message_id),
             )
         else:
             await context.bot.send_message(
                 chat_id=cfg.bus_group_id,
                 text=encoded,
-                reply_to_message_id=message.message_id,
+                reply_parameters=ReplyParameters(message_id=message.message_id),
             )
         log.info("reply: op=%s id=%s", type(reply).__name__, reply.id)
 
