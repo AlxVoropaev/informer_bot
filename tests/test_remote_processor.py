@@ -207,3 +207,170 @@ async def test_embed_round_trip(
 
     assert result.vector == [0.1, 0.2, 0.3]
     assert result.tokens == 5
+
+
+async def test_summarize_timeout_marks_unhealthy_and_calls_callback() -> None:
+    client_mock = _make_client_mock()
+    rp = RemoteProcessorClient(
+        telethon_client=client_mock,  # type: ignore[arg-type]
+        bus_group_id=-100123,
+        processor_bot_user_id=42,
+        timeout_seconds=0.1,
+        min_send_interval_seconds=0.0,
+    )
+    await rp.start()
+
+    states: list[bool] = []
+
+    async def on_change(healthy: bool) -> None:
+        states.append(healthy)
+
+    rp.set_state_change_callback(on_change)
+    assert rp.healthy is True
+
+    with pytest.raises(RemoteProcessorTimeout):
+        await rp.summarize("never replied")
+
+    assert rp.healthy is False
+    assert states == [False]
+
+
+async def test_health_loop_ping_success_keeps_healthy() -> None:
+    # Auto-reply harness: every send triggers an immediate matching PingReply,
+    # so the loop sees consecutive successful pings until we set stop_event.
+    sent: list[SimpleNamespace] = []
+    handlers: list = []
+    next_msg_id = [1000]
+    pending_replies: list[asyncio.Task] = []
+
+    async def send_message(chat_id: int, text: str) -> SimpleNamespace:
+        next_msg_id[0] += 1
+        msg = SimpleNamespace(id=next_msg_id[0], text=text, chat_id=chat_id)
+        sent.append(msg)
+        from shared.protocol import PingReply
+        req_id = json.loads(text)["id"]
+        reply_text = encode_reply(PingReply(id=req_id))
+
+        async def fire() -> None:
+            await asyncio.sleep(0)
+            handler, _ = handlers[0]
+            await handler(_make_event(reply_text))
+
+        pending_replies.append(asyncio.create_task(fire()))
+        return msg
+
+    client_mock = SimpleNamespace(
+        send_message=AsyncMock(side_effect=send_message),
+        delete_messages=AsyncMock(return_value=None),
+        add_event_handler=lambda h, f: handlers.append((h, f)),
+    )
+    rp = RemoteProcessorClient(
+        telethon_client=client_mock,  # type: ignore[arg-type]
+        bus_group_id=-100123,
+        processor_bot_user_id=42,
+        timeout_seconds=2.0,
+        min_send_interval_seconds=0.0,
+    )
+    await rp.start()
+    states: list[bool] = []
+
+    async def on_change(healthy: bool) -> None:
+        states.append(healthy)
+
+    rp.set_state_change_callback(on_change)
+    stop_event = asyncio.Event()
+
+    async def stopper() -> None:
+        await asyncio.sleep(0.1)
+        stop_event.set()
+
+    asyncio.create_task(stopper())
+    await rp.run_health_check_loop(interval_seconds=0.02, stop_event=stop_event)
+
+    assert rp.healthy is True
+    # No transitions: started healthy, stayed healthy.
+    assert states == []
+    # At least one ping was sent.
+    assert len(sent) >= 1
+
+
+async def test_health_loop_ping_failure_flips_state() -> None:
+    client_mock = _make_client_mock()
+    rp = RemoteProcessorClient(
+        telethon_client=client_mock,  # type: ignore[arg-type]
+        bus_group_id=-100123,
+        processor_bot_user_id=42,
+        timeout_seconds=0.05,
+        min_send_interval_seconds=0.0,
+    )
+    await rp.start()
+    states: list[bool] = []
+
+    async def on_change(healthy: bool) -> None:
+        states.append(healthy)
+
+    rp.set_state_change_callback(on_change)
+    stop_event = asyncio.Event()
+
+    async def stopper() -> None:
+        # Allow one ping to time out, then exit the loop.
+        await asyncio.sleep(0.2)
+        stop_event.set()
+
+    asyncio.create_task(stopper())
+    await rp.run_health_check_loop(interval_seconds=0.02, stop_event=stop_event)
+
+    assert rp.healthy is False
+    assert states == [False]
+
+
+async def test_state_change_callback_fires_only_on_transitions() -> None:
+    client_mock = _make_client_mock()
+    rp = RemoteProcessorClient(
+        telethon_client=client_mock,  # type: ignore[arg-type]
+        bus_group_id=-100123,
+        processor_bot_user_id=42,
+        timeout_seconds=2.0,
+        min_send_interval_seconds=0.0,
+    )
+    states: list[bool] = []
+
+    async def on_change(healthy: bool) -> None:
+        states.append(healthy)
+
+    rp.set_state_change_callback(on_change)
+
+    # Already healthy: setting healthy=True is a no-op.
+    await rp._set_healthy(True)
+    assert states == []
+
+    # Transition to unhealthy.
+    await rp._set_healthy(False)
+    assert states == [False]
+
+    # Repeating unhealthy is a no-op.
+    await rp._set_healthy(False)
+    assert states == [False]
+
+    # Recover.
+    await rp._set_healthy(True)
+    assert states == [False, True]
+
+
+async def test_health_loop_exits_when_stop_event_set() -> None:
+    client_mock = _make_client_mock()
+    rp = RemoteProcessorClient(
+        telethon_client=client_mock,  # type: ignore[arg-type]
+        bus_group_id=-100123,
+        processor_bot_user_id=42,
+        timeout_seconds=2.0,
+        min_send_interval_seconds=0.0,
+    )
+    stop_event = asyncio.Event()
+    stop_event.set()
+
+    # Returns immediately because stop_event is already set.
+    await asyncio.wait_for(
+        rp.run_health_check_loop(interval_seconds=10.0, stop_event=stop_event),
+        timeout=1.0,
+    )

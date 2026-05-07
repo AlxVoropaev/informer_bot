@@ -4,6 +4,7 @@ import functools
 import logging
 import signal
 import time
+from typing import Any
 from urllib.parse import quote
 
 from openai import AsyncOpenAI
@@ -41,6 +42,7 @@ from informer_bot.client import (
 )
 from informer_bot.config import Config, load_config
 from informer_bot.db import Database
+from informer_bot.fallback_dispatcher import FallbackDispatcher
 from informer_bot.i18n import t
 from informer_bot.pipeline import (
     AnnounceNewChannelFn,
@@ -123,6 +125,39 @@ def setup_embedder(
     return embed_fn, embedding_id
 
 
+def _build_anthropic_chat_fns(cfg: Config) -> tuple[SummarizeFn, IsRelevantFn]:
+    del cfg  # AsyncAnthropic picks up ANTHROPIC_API_KEY from env automatically.
+    return summarize, is_relevant
+
+
+def _build_ollama_chat_fns(
+    cfg: Config, ollama_client: AsyncOpenAI
+) -> tuple[SummarizeFn, IsRelevantFn]:
+    summarize_fn = functools.partial(
+        summarize_ollama, client=ollama_client, model=cfg.ollama_chat_model,
+    )
+    is_relevant_fn = functools.partial(
+        is_relevant_ollama, client=ollama_client, model=cfg.ollama_chat_model,
+    )
+    return summarize_fn, is_relevant_fn
+
+
+def _build_openai_embed_fn(cfg: Config) -> EmbedFn:
+    if not cfg.openai_api_key:
+        raise SystemExit("OPENAI_API_KEY missing for embedding fallback")
+    openai_client = AsyncOpenAI(api_key=cfg.openai_api_key)
+    return functools.partial(embed_summary, client=openai_client)
+
+
+def _build_ollama_embed_fn(cfg: Config, ollama_client: AsyncOpenAI) -> EmbedFn:
+    return functools.partial(
+        embed_summary,
+        client=ollama_client,
+        model=cfg.ollama_embedding_model,
+        dimensions=None,
+    )
+
+
 def _make_send_dm(app: Application) -> SendDmFn:
     async def send_dm(
         user_id: int,
@@ -180,6 +215,20 @@ def _make_edit_dm(app: Application) -> EditDmFn:
             )
 
     return edit_dm
+
+
+async def _notify_owner_health(
+    app: Application, owner_id: int, healthy: bool
+) -> None:
+    text = (
+        "✅ Processor recovered, back on local models."
+        if healthy
+        else "⚠️ Processor unreachable, fail-safe enabled (Claude/OpenAI)."
+    )
+    try:
+        await app.bot.send_message(chat_id=owner_id, text=text)
+    except Exception:
+        log.exception("notify_owner_health failed (healthy=%s)", healthy)
 
 
 async def sweep_due_deletions(app: Application, db: Database) -> None:
@@ -299,12 +348,7 @@ async def main() -> None:
     is_relevant_fn: IsRelevantFn
     if cfg.chat_provider == "ollama":
         ollama_client = AsyncOpenAI(base_url=cfg.ollama_base_url, api_key="ollama")
-        summarize_fn = functools.partial(
-            summarize_ollama, client=ollama_client, model=cfg.ollama_chat_model,
-        )
-        is_relevant_fn = functools.partial(
-            is_relevant_ollama, client=ollama_client, model=cfg.ollama_chat_model,
-        )
+        summarize_fn, is_relevant_fn = _build_ollama_chat_fns(cfg, ollama_client)
         # Local model has no per-token cost; zero out chat prices.
         summarizer.PRICE_PER_MTOK_INPUT = 0.0
         summarizer.PRICE_PER_MTOK_OUTPUT = 0.0
@@ -314,19 +358,35 @@ async def main() -> None:
         )
     elif cfg.chat_provider == "remote":
         assert remote is not None
-        summarize_fn = remote.summarize
-        is_relevant_fn = remote.is_relevant
+        if cfg.chat_provider_fallback == "ollama":
+            if ollama_client is None:
+                ollama_client = AsyncOpenAI(
+                    base_url=cfg.ollama_base_url, api_key="ollama",
+                )
+            fb_sum, fb_rel = _build_ollama_chat_fns(cfg, ollama_client)
+        else:
+            fb_sum, fb_rel = _build_anthropic_chat_fns(cfg)
         # Remote inference is local on the processor side; zero out chat prices.
         summarizer.PRICE_PER_MTOK_INPUT = 0.0
         summarizer.PRICE_PER_MTOK_OUTPUT = 0.0
-        log.info("chat provider: remote")
+        log.info(
+            "chat provider: remote (fallback=%s)", cfg.chat_provider_fallback,
+        )
     else:
-        summarize_fn = summarize
-        is_relevant_fn = is_relevant
+        summarize_fn, is_relevant_fn = _build_anthropic_chat_fns(cfg)
 
     embed_fn: EmbedFn | None
+    fb_embed: EmbedFn | None = None
     if cfg.embedding_provider == "remote":
         assert remote is not None
+        if cfg.embedding_provider_fallback == "openai":
+            fb_embed = _build_openai_embed_fn(cfg)
+        elif cfg.embedding_provider_fallback == "ollama":
+            if ollama_client is None:
+                ollama_client = AsyncOpenAI(
+                    base_url=cfg.ollama_base_url, api_key="ollama",
+                )
+            fb_embed = _build_ollama_embed_fn(cfg, ollama_client)
         embed_fn = remote.embed
         remote_embed_id = "remote"
         prev = db.get_meta("embedding_id")
@@ -341,12 +401,28 @@ async def main() -> None:
             cutoff=int(time.time()) - cfg.dedup_window_hours * 3600
         )
         summarizer.EMBED_PRICE_PER_MTOK = 0.0
-        log.info("embedding provider: remote")
+        log.info(
+            "embedding provider: remote (fallback=%s)",
+            cfg.embedding_provider_fallback,
+        )
     else:
         embed_fn, embedding_id = setup_embedder(cfg, db, ollama_client=ollama_client)
         if embedding_id is not None and embedding_id.startswith("ollama:"):
             # Local embeddings have no per-token cost.
             summarizer.EMBED_PRICE_PER_MTOK = 0.0
+
+    if remote is not None:
+        dispatcher = FallbackDispatcher(
+            remote=remote,
+            fallback_summarize=fb_sum if cfg.chat_provider == "remote" else None,
+            fallback_is_relevant=fb_rel if cfg.chat_provider == "remote" else None,
+            fallback_embed=fb_embed if cfg.embedding_provider == "remote" else None,
+        )
+        if cfg.chat_provider == "remote":
+            summarize_fn = dispatcher.summarize
+            is_relevant_fn = dispatcher.is_relevant
+        if cfg.embedding_provider == "remote":
+            embed_fn = dispatcher.embed
     send_dm = _make_send_dm(app)
     edit_dm: EditDmFn | None = _make_edit_dm(app) if embed_fn is not None else None
     announce_new_channel = _make_announce_new_channel(app, db, miniapp_url)
@@ -434,6 +510,19 @@ async def main() -> None:
     disconnect_task = asyncio.create_task(tg.run_until_disconnected())
     stop_task = asyncio.create_task(stop_event.wait())
     sweeper_task = asyncio.create_task(sweep_due_deletions(app, db))
+    background_tasks: list[asyncio.Task[Any]] = [
+        disconnect_task, stop_task, sweeper_task,
+    ]
+    if remote is not None:
+        remote.set_state_change_callback(
+            lambda healthy: _notify_owner_health(app, cfg.owner_id, healthy)
+        )
+        health_task = asyncio.create_task(
+            remote.run_health_check_loop(
+                cfg.health_check_interval_seconds, stop_event,
+            )
+        )
+        background_tasks.append(health_task)
     try:
         await asyncio.wait(
             {disconnect_task, stop_task},
@@ -442,7 +531,7 @@ async def main() -> None:
     finally:
         await graceful_shutdown(
             app=app, tg=tg, db=db, cfg=cfg, send_dm=send_dm,
-            tasks=(disconnect_task, stop_task, sweeper_task),
+            tasks=tuple(background_tasks),
             webapp_runner=webapp_runner,
         )
 

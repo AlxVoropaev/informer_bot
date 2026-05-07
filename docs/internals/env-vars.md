@@ -16,6 +16,9 @@ OLLAMA_EMBEDDING_MODEL=qwen3-embedding:4b   # optional, Ollama tag used when EMB
 BUS_GROUP_ID=                # required when CHAT_PROVIDER=remote or EMBEDDING_PROVIDER=remote — id of the private Telegram group used to talk to processor_bot
 PROCESSOR_BOT_USER_ID=       # required when CHAT_PROVIDER=remote or EMBEDDING_PROVIDER=remote — numeric user id of processor_bot
 PROCESSOR_TIMEOUT_SECONDS=60 # optional, seconds to wait for a remote reply (default 60)
+HEALTH_CHECK_INTERVAL_SECONDS=60 # optional, ping interval used to track processor health (default 60)
+CHAT_PROVIDER_FALLBACK=anthropic # optional: anthropic|ollama — used when CHAT_PROVIDER=remote and the processor is unreachable (default anthropic)
+EMBEDDING_PROVIDER_FALLBACK=openai # optional: openai|ollama|none — used when EMBEDDING_PROVIDER=remote and the processor is unreachable (default openai)
 DEDUP_THRESHOLD=0.85       # optional, cosine threshold for "same story"
 DEDUP_WINDOW_HOURS=48      # optional, lookback window for dedup
 CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay

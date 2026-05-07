@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Any
@@ -78,6 +79,50 @@ class RemoteProcessorClient:
         self._timeout_seconds = timeout_seconds
         self._pending: dict[str, _Pending] = {}
         self._limiter = _RateLimiter(min_send_interval_seconds)
+        self._healthy: bool = True
+        self._on_state_change: Callable[[bool], Awaitable[None]] | None = None
+
+    @property
+    def healthy(self) -> bool:
+        return self._healthy
+
+    def set_state_change_callback(
+        self, callback: Callable[[bool], Awaitable[None]] | None
+    ) -> None:
+        self._on_state_change = callback
+
+    async def _set_healthy(self, healthy: bool) -> None:
+        if self._healthy == healthy:
+            return
+        self._healthy = healthy
+        log.info("remote: health state -> %s", "healthy" if healthy else "unhealthy")
+        callback = self._on_state_change
+        if callback is None:
+            return
+        try:
+            await callback(healthy)
+        except Exception:
+            log.exception("remote: state-change callback failed")
+
+    async def run_health_check_loop(
+        self, interval_seconds: float, stop_event: asyncio.Event
+    ) -> None:
+        while not stop_event.is_set():
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+                return
+            except asyncio.TimeoutError:
+                pass
+            try:
+                await self.ping()
+            except RemoteProcessorTimeout as exc:
+                log.warning("remote: health ping timed out: %s", exc)
+                await self._set_healthy(False)
+            except Exception as exc:
+                log.warning("remote: health ping failed: %s", exc)
+                await self._set_healthy(False)
+            else:
+                await self._set_healthy(True)
 
     async def start(self) -> None:
         self._client.add_event_handler(
@@ -90,7 +135,11 @@ class RemoteProcessorClient:
 
     async def summarize(self, text: str) -> Summary:
         req = SummarizeRequest.new(text)
-        reply = await self._send_and_wait(req, Op.summarize)
+        try:
+            reply = await self._send_and_wait(req, Op.summarize)
+        except RemoteProcessorTimeout:
+            await self._set_healthy(False)
+            raise
         assert isinstance(reply, SummarizeReply)
         return Summary(
             text=reply.text,
@@ -100,7 +149,11 @@ class RemoteProcessorClient:
 
     async def is_relevant(self, text: str, filter_prompt: str) -> RelevanceCheck:
         req = IsRelevantRequest.new(text, filter_prompt)
-        reply = await self._send_and_wait(req, Op.is_relevant)
+        try:
+            reply = await self._send_and_wait(req, Op.is_relevant)
+        except RemoteProcessorTimeout:
+            await self._set_healthy(False)
+            raise
         assert isinstance(reply, IsRelevantReply)
         return RelevanceCheck(
             relevant=reply.relevant,
@@ -112,7 +165,11 @@ class RemoteProcessorClient:
         from informer_bot.summarizer import EMBED_DIMENSIONS
 
         req = EmbedRequest.new(text, EMBED_DIMENSIONS)
-        reply = await self._send_and_wait(req, Op.embed)
+        try:
+            reply = await self._send_and_wait(req, Op.embed)
+        except RemoteProcessorTimeout:
+            await self._set_healthy(False)
+            raise
         assert isinstance(reply, EmbedReply)
         return Embedding(vector=list(reply.vector), tokens=reply.tokens)
 

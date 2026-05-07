@@ -25,6 +25,9 @@ class Config:
     bus_group_id: int | None = None
     processor_bot_user_id: int | None = None
     processor_timeout_seconds: float = 60.0
+    health_check_interval_seconds: float = 60.0
+    chat_provider_fallback: str = "anthropic"  # 'anthropic' or 'ollama'
+    embedding_provider_fallback: str = "openai"  # 'openai', 'ollama', or 'none'
     miniapp_url: str | None = None
     webapp_host: str = "0.0.0.0"
     webapp_port: int = 8085
@@ -52,6 +55,40 @@ def load_config() -> Config:
                 "CHAT_PROVIDER/EMBEDDING_PROVIDER=remote requires "
                 "BUS_GROUP_ID and PROCESSOR_BOT_USER_ID in .env"
             )
+    health_interval = float(os.environ.get("HEALTH_CHECK_INTERVAL_SECONDS", "60.0"))
+    if health_interval <= 0:
+        raise SystemExit(
+            f"HEALTH_CHECK_INTERVAL_SECONDS must be > 0, got {health_interval}"
+        )
+    chat_fallback = os.environ.get("CHAT_PROVIDER_FALLBACK", "anthropic").lower()
+    if chat_fallback not in {"anthropic", "ollama"}:
+        raise SystemExit(
+            f"CHAT_PROVIDER_FALLBACK must be one of anthropic/ollama, got {chat_fallback!r}"
+        )
+    embed_fallback = os.environ.get("EMBEDDING_PROVIDER_FALLBACK", "openai").lower()
+    if embed_fallback not in {"openai", "ollama", "none"}:
+        raise SystemExit(
+            f"EMBEDDING_PROVIDER_FALLBACK must be one of openai/ollama/none, "
+            f"got {embed_fallback!r}"
+        )
+    if (
+        chat_provider == "remote"
+        and chat_fallback == "anthropic"
+        and not os.environ.get("ANTHROPIC_API_KEY")
+    ):
+        raise SystemExit(
+            "CHAT_PROVIDER=remote with CHAT_PROVIDER_FALLBACK=anthropic "
+            "requires ANTHROPIC_API_KEY in .env"
+        )
+    if (
+        provider == "remote"
+        and embed_fallback == "openai"
+        and not os.environ.get("OPENAI_API_KEY")
+    ):
+        raise SystemExit(
+            "EMBEDDING_PROVIDER=remote with EMBEDDING_PROVIDER_FALLBACK=openai "
+            "requires OPENAI_API_KEY in .env"
+        )
     return Config(
         telegram_api_id=int(os.environ["TELEGRAM_API_ID"]),
         telegram_api_hash=os.environ["TELEGRAM_API_HASH"],
@@ -80,6 +117,9 @@ def load_config() -> Config:
         processor_timeout_seconds=float(
             os.environ.get("PROCESSOR_TIMEOUT_SECONDS", "60.0")
         ),
+        health_check_interval_seconds=health_interval,
+        chat_provider_fallback=chat_fallback,
+        embedding_provider_fallback=embed_fallback,
         miniapp_url=os.environ.get("MINIAPP_URL") or None,
         webapp_host=os.environ.get("WEBAPP_HOST", "0.0.0.0"),
         webapp_port=int(os.environ.get("WEBAPP_PORT", "8085")),
