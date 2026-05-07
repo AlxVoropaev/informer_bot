@@ -21,6 +21,7 @@ RUN groupadd -g "${GID}" app \
  && useradd -u "${UID}" -g "${GID}" -d /home/app -m -s /bin/sh app
 
 COPY --chown=app:app informer_bot ./informer_bot
+COPY --chown=app:app shared ./shared
 COPY --chown=app:app webapp ./webapp
 COPY --chown=app:app login.py ./login.py
 
