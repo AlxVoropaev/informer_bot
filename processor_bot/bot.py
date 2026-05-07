@@ -2,7 +2,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from io import BytesIO
 
-from openai import AsyncOpenAI
+from openai import APIConnectionError, AsyncOpenAI
 from telegram import InputFile, ReplyParameters, Update
 from telegram.ext import ContextTypes
 
@@ -10,8 +10,14 @@ from processor_bot.config import Config
 from processor_bot.handlers import handle_request
 from shared.protocol import (
     REPLY_FILENAME,
+    EmbedRequest,
     ErrorReply,
+    IsRelevantRequest,
     ProtocolError,
+    Reply,
+    Request,
+    SummarizeReply,
+    SummarizeRequest,
     decode_request,
     encode_reply,
     request_op,
@@ -20,6 +26,26 @@ from shared.protocol import (
 log = logging.getLogger(__name__)
 
 HandlerCallback = Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]
+
+_LOG_TEXT_LIMIT = 500
+
+
+def _short(s: str) -> str:
+    if len(s) <= _LOG_TEXT_LIMIT:
+        return s
+    return f"{s[:_LOG_TEXT_LIMIT]}…[+{len(s) - _LOG_TEXT_LIMIT} chars]"
+
+
+def _request_text(req: Request) -> str | None:
+    if isinstance(req, (SummarizeRequest, IsRelevantRequest, EmbedRequest)):
+        return req.text
+    return None
+
+
+def _reply_text(reply: Reply) -> str | None:
+    if isinstance(reply, SummarizeReply):
+        return reply.text
+    return None
 
 
 def make_handler_callback(
@@ -59,6 +85,12 @@ def make_handler_callback(
             log.warning("decode failed: %s", e)
             return
         log.info("request: op=%s id=%s", type(req).__name__, req.id)
+        in_text = _request_text(req)
+        if in_text is not None:
+            log.debug(
+                "request text: op=%s id=%s len=%d body=%r",
+                type(req).__name__, req.id, len(in_text), _short(in_text),
+            )
         try:
             reply = await handle_request(
                 req,
@@ -66,6 +98,12 @@ def make_handler_callback(
                 chat_model=cfg.ollama_chat_model,
                 embedding_model=cfg.ollama_embedding_model,
             )
+        except APIConnectionError as e:
+            log.warning(
+                "ollama unreachable for id=%s op=%s: %s",
+                req.id, type(req).__name__, e,
+            )
+            reply = ErrorReply(id=req.id, error=str(e))
         except Exception as e:
             log.exception("handler failed for id=%s", req.id)
             reply = ErrorReply(id=req.id, error=str(e))
@@ -82,5 +120,11 @@ def make_handler_callback(
             reply_parameters=ReplyParameters(message_id=message.message_id),
         )
         log.info("reply: op=%s id=%s", type(reply).__name__, reply.id)
+        out_text = _reply_text(reply)
+        if out_text is not None:
+            log.debug(
+                "reply text: op=%s id=%s len=%d body=%r",
+                type(reply).__name__, reply.id, len(out_text), _short(out_text),
+            )
 
     return _on_message

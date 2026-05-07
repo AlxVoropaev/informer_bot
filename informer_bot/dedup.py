@@ -61,8 +61,8 @@ def find_duplicate(
                 score=score,
             )
     if best is not None:
-        log.debug(
-            "dedup: hit user=%s -> %s/%s score=%.3f",
+        log.info(
+            "dedup: duplicate found user=%s -> %s/%s similarity=%.3f",
             user_id, best.channel_id, best.message_id, best.score,
         )
     return best
