@@ -4,12 +4,15 @@
 TELEGRAM_API_ID=...        # from my.telegram.org
 TELEGRAM_API_HASH=...      # from my.telegram.org
 TELEGRAM_BOT_TOKEN=...     # from @BotFather
-ANTHROPIC_API_KEY=...
+ANTHROPIC_API_KEY=...      # required only when CHAT_PROVIDER=anthropic (the default)
 OPENAI_API_KEY=...         # optional — only consulted when EMBEDDING_PROVIDER picks openai
 OWNER_ID=...               # admin's Telegram user id (numeric)
 LOG_LEVEL=INFO             # optional, default INFO
-EMBEDDING_PROVIDER=auto    # optional: auto|openai|local|none (auto picks openai if key set, else none)
-LOCAL_EMBEDDING_MODEL=...  # optional, fastembed model name; default intfloat/multilingual-e5-large
+EMBEDDING_PROVIDER=auto    # optional: auto|openai|ollama|none (auto picks openai if key set, else none)
+CHAT_PROVIDER=anthropic    # optional: anthropic|ollama (default anthropic)
+OLLAMA_BASE_URL=http://localhost:11434/v1  # optional, OpenAI-compatible endpoint of your Ollama server
+OLLAMA_CHAT_MODEL=qwen3.5:4b                # optional, Ollama tag used when CHAT_PROVIDER=ollama
+OLLAMA_EMBEDDING_MODEL=qwen3-embedding:4b   # optional, Ollama tag used when EMBEDDING_PROVIDER=ollama
 DEDUP_THRESHOLD=0.85       # optional, cosine threshold for "same story"
 DEDUP_WINDOW_HOURS=48      # optional, lookback window for dedup
 CATCH_UP_WINDOW_HOURS=48   # optional, max age for restart catch-up replay

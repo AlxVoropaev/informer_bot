@@ -67,7 +67,7 @@ If you're the bot's `OWNER_ID`, you also get:
 - [Self-hosting setup](docs/setup.md) — install, configure `.env`, log in, run.
 - [Run with Docker Compose](docs/docker.md) — production deployment.
 - [Mini App URL & hosting](docs/miniapp-hosting.md) — `MINIAPP_URL`, Caddy + Let's Encrypt, alternatives.
-- [Embedding provider (deduplication)](docs/embeddings.md) — OpenAI vs local fastembed vs disabled.
+- [Embedding provider (deduplication)](docs/embeddings.md) — OpenAI vs local Ollama vs disabled.
 - [Auto-update from GitHub](docs/auto-update.md) — pull-based cron deploy.
 - [Tests](docs/tests.md) — running the test suite.
 

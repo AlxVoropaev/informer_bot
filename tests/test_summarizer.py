@@ -139,41 +139,81 @@ async def test_embed_summary_uses_configured_model_and_dims() -> None:
     assert kwargs["input"] == "Brief."
 
 
-async def test_local_embedder_wraps_fastembed_with_zero_tokens(monkeypatch) -> None:
-    import sys
+async def test_embed_summary_omits_dimensions_when_none() -> None:
+    client = AsyncMock()
+    client.embeddings.create = AsyncMock(
+        return_value=_fake_embed_response([0.0])
+    )
 
-    from informer_bot import summarizer
+    await embed_summary("Brief.", client=client, dimensions=None)
 
-    class FakeVector:
-        def __init__(self, values: list[float]) -> None:
-            self._values = values
+    kwargs = client.embeddings.create.await_args.kwargs
+    assert "dimensions" not in kwargs
 
-        def tolist(self) -> list[float]:
-            return list(self._values)
 
-    class FakeTextEmbedding:
-        def __init__(
-            self,
-            model_name: str,
-            threads: int | None = None,
-            providers: list[str] | None = None,
-        ) -> None:
-            self.model_name = model_name
-            self.threads = threads
-            self.providers = providers
+def _fake_chat_response(
+    content: str, prompt_tokens: int = 12, completion_tokens: int = 7
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=content))],
+        usage=SimpleNamespace(
+            prompt_tokens=prompt_tokens, completion_tokens=completion_tokens
+        ),
+    )
 
-        def embed(self, texts):
-            for _ in texts:
-                yield FakeVector([0.5, -0.5, 0.25])
 
-    monkeypatch.setitem(sys.modules, "fastembed", SimpleNamespace(TextEmbedding=FakeTextEmbedding))
+async def test_summarize_ollama_returns_text_and_usage() -> None:
+    from informer_bot.summarizer import summarize_ollama
 
-    embedder = summarizer.LocalEmbedder(model_name="fake/model")
-    result = await embedder.embed("Brief summary.")
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=_fake_chat_response("brief", prompt_tokens=12, completion_tokens=3)
+    )
 
-    assert result.tokens == 0
-    assert result.vector == [0.5, -0.5, 0.25]
-    assert embedder.model_name == "fake/model"
+    result = await summarize_ollama("Some long post", client=client, model="qwen3.5:4b")
+
+    assert result.text == "brief"
+    assert result.input_tokens == 12
+    assert result.output_tokens == 3
+
+
+async def test_summarize_ollama_calls_with_temperature_zero_and_model() -> None:
+    from informer_bot.summarizer import summarize_ollama
+
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=_fake_chat_response("brief")
+    )
+
+    await summarize_ollama("Body", client=client, model="qwen3.5:4b")
+
+    kwargs = client.chat.completions.create.await_args.kwargs
+    assert kwargs["model"] == "qwen3.5:4b"
+    assert kwargs["temperature"] == 0
+    assert isinstance(kwargs["max_tokens"], int) and kwargs["max_tokens"] > 0
+    assert kwargs["messages"][0]["role"] == "system"
+    assert kwargs["messages"][1] == {"role": "user", "content": "Body"}
+
+
+async def test_is_relevant_ollama_yes_and_no() -> None:
+    from informer_bot.summarizer import is_relevant_ollama
+
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=_fake_chat_response("YES")
+    )
+    yes = await is_relevant_ollama(
+        "Post", "filter", client=client, model="qwen3.5:4b"
+    )
+    assert yes.relevant is True
+
+    client.chat.completions.create = AsyncMock(
+        return_value=_fake_chat_response("NO")
+    )
+    no = await is_relevant_ollama(
+        "Post", "filter", client=client, model="qwen3.5:4b"
+    )
+    assert no.relevant is False
 
 
 def test_estimate_cost_usd_matches_per_mtok_pricing() -> None:

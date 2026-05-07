@@ -50,14 +50,15 @@ from informer_bot.pipeline import (
     SendDmFn,
     handle_new_post,
 )
+from informer_bot import summarizer
 from informer_bot.summarizer import (
     EMBED_DIMENSIONS,
     EMBED_MODEL,
-    LOCAL_EMBED_DIMENSIONS,
-    LocalEmbedder,
     embed_summary,
     is_relevant,
+    is_relevant_ollama,
     summarize,
+    summarize_ollama,
 )
 from informer_bot.webapp import start_server as start_webapp_server
 
@@ -65,7 +66,7 @@ log = logging.getLogger(__name__)
 
 
 def setup_embedder(
-    cfg: Config, db: Database
+    cfg: Config, db: Database, ollama_client: AsyncOpenAI | None = None,
 ) -> tuple[EmbedFn | None, str | None]:
     """Pick an embedding provider, return (embed_fn, embedding_id).
 
@@ -85,16 +86,20 @@ def setup_embedder(
         embed_fn = functools.partial(embed_summary, client=openai_client)
         embedding_id = f"openai:{EMBED_MODEL}:{EMBED_DIMENSIONS}"
         log.info("embedding provider: openai (%s, %d dims)", EMBED_MODEL, EMBED_DIMENSIONS)
-    elif provider == "local":
-        local = LocalEmbedder(
-            model_name=cfg.local_embedding_model,
-            device=cfg.local_embedding_device,
+    elif provider == "ollama":
+        client = ollama_client or AsyncOpenAI(
+            base_url=cfg.ollama_base_url, api_key="ollama",
         )
-        embed_fn = local.embed
-        embedding_id = f"local:{cfg.local_embedding_model}:{LOCAL_EMBED_DIMENSIONS}"
+        embed_fn = functools.partial(
+            embed_summary,
+            client=client,
+            model=cfg.ollama_embedding_model,
+            dimensions=None,
+        )
+        embedding_id = f"ollama:{cfg.ollama_embedding_model}"
         log.info(
-            "embedding provider: local (%s on %s, ~%d dims)",
-            cfg.local_embedding_model, cfg.local_embedding_device, LOCAL_EMBED_DIMENSIONS,
+            "embedding provider: ollama (%s @ %s)",
+            cfg.ollama_embedding_model, cfg.ollama_base_url,
         )
     else:
         log.warning("embedding provider: none — deduplication disabled")
@@ -270,7 +275,30 @@ async def main() -> None:
     ):
         app.add_handler(handler)
 
-    embed_fn, _embedding_id = setup_embedder(cfg, db)
+    ollama_client: AsyncOpenAI | None = None
+    if cfg.chat_provider == "ollama":
+        ollama_client = AsyncOpenAI(base_url=cfg.ollama_base_url, api_key="ollama")
+        summarize_fn = functools.partial(
+            summarize_ollama, client=ollama_client, model=cfg.ollama_chat_model,
+        )
+        is_relevant_fn = functools.partial(
+            is_relevant_ollama, client=ollama_client, model=cfg.ollama_chat_model,
+        )
+        # Local model has no per-token cost; zero out chat prices.
+        summarizer.PRICE_PER_MTOK_INPUT = 0.0
+        summarizer.PRICE_PER_MTOK_OUTPUT = 0.0
+        log.info(
+            "chat provider: ollama (%s @ %s)",
+            cfg.ollama_chat_model, cfg.ollama_base_url,
+        )
+    else:
+        summarize_fn = summarize
+        is_relevant_fn = is_relevant
+
+    embed_fn, _embedding_id = setup_embedder(cfg, db, ollama_client=ollama_client)
+    if _embedding_id is not None and _embedding_id.startswith("ollama:"):
+        # Local embeddings have no per-token cost.
+        summarizer.EMBED_PRICE_PER_MTOK = 0.0
     send_dm = _make_send_dm(app)
     edit_dm: EditDmFn | None = _make_edit_dm(app) if embed_fn is not None else None
     announce_new_channel = _make_announce_new_channel(app, db, miniapp_url)
@@ -280,7 +308,8 @@ async def main() -> None:
     ) -> None:
         await handle_new_post(
             channel_id=channel_id, message_id=message_id, text=text, link=link,
-            db=db, summarize_fn=summarize, is_relevant_fn=is_relevant, send_dm=send_dm,
+            db=db, summarize_fn=summarize_fn, is_relevant_fn=is_relevant_fn,
+            send_dm=send_dm,
             embed_fn=embed_fn, edit_dm=edit_dm,
             dedup_threshold=cfg.dedup_threshold,
             dedup_window_seconds=cfg.dedup_window_hours * 3600,

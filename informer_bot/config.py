@@ -3,8 +3,6 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
-from informer_bot.summarizer import LOCAL_EMBED_MODEL_DEFAULT
-
 
 @dataclass(frozen=True)
 class Config:
@@ -19,9 +17,11 @@ class Config:
     dedup_threshold: float = 0.85
     dedup_window_hours: int = 48
     catch_up_window_hours: int = 48
-    embedding_provider: str = "auto"  # 'auto', 'openai', 'local', 'none'
-    local_embedding_model: str = LOCAL_EMBED_MODEL_DEFAULT
-    local_embedding_device: str = "cpu"  # 'cpu' or 'cuda' (needs fastembed-gpu)
+    embedding_provider: str = "auto"  # 'auto', 'openai', 'ollama', 'none'
+    chat_provider: str = "anthropic"  # 'anthropic' or 'ollama'
+    ollama_base_url: str = "http://localhost:11434/v1"
+    ollama_chat_model: str = "qwen3.5:4b"
+    ollama_embedding_model: str = "qwen3-embedding:4b"
     miniapp_url: str | None = None
     webapp_host: str = "0.0.0.0"
     webapp_port: int = 8085
@@ -29,17 +29,17 @@ class Config:
 
 def load_config() -> Config:
     load_dotenv("data/.env")
-    if not os.environ.get("ANTHROPIC_API_KEY"):
+    chat_provider = os.environ.get("CHAT_PROVIDER", "anthropic").lower()
+    if chat_provider not in {"anthropic", "ollama"}:
+        raise SystemExit(
+            f"CHAT_PROVIDER must be one of anthropic/ollama, got {chat_provider!r}"
+        )
+    if chat_provider == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"):
         raise SystemExit("ANTHROPIC_API_KEY missing in .env")
     provider = os.environ.get("EMBEDDING_PROVIDER", "auto").lower()
-    if provider not in {"auto", "openai", "local", "none"}:
+    if provider not in {"auto", "openai", "ollama", "none"}:
         raise SystemExit(
-            f"EMBEDDING_PROVIDER must be one of auto/openai/local/none, got {provider!r}"
-        )
-    device = os.environ.get("LOCAL_EMBEDDING_DEVICE", "cpu").lower()
-    if device not in {"cpu", "cuda"}:
-        raise SystemExit(
-            f"LOCAL_EMBEDDING_DEVICE must be cpu or cuda, got {device!r}"
+            f"EMBEDDING_PROVIDER must be one of auto/openai/ollama/none, got {provider!r}"
         )
     return Config(
         telegram_api_id=int(os.environ["TELEGRAM_API_ID"]),
@@ -54,10 +54,14 @@ def load_config() -> Config:
         dedup_window_hours=int(os.environ.get("DEDUP_WINDOW_HOURS", "48")),
         catch_up_window_hours=int(os.environ.get("CATCH_UP_WINDOW_HOURS", "48")),
         embedding_provider=provider,
-        local_embedding_model=os.environ.get(
-            "LOCAL_EMBEDDING_MODEL", LOCAL_EMBED_MODEL_DEFAULT
+        chat_provider=chat_provider,
+        ollama_base_url=os.environ.get(
+            "OLLAMA_BASE_URL", "http://localhost:11434/v1"
         ),
-        local_embedding_device=device,
+        ollama_chat_model=os.environ.get("OLLAMA_CHAT_MODEL", "qwen3.5:4b"),
+        ollama_embedding_model=os.environ.get(
+            "OLLAMA_EMBEDDING_MODEL", "qwen3-embedding:4b"
+        ),
         miniapp_url=os.environ.get("MINIAPP_URL") or None,
         webapp_host=os.environ.get("WEBAPP_HOST", "0.0.0.0"),
         webapp_port=int(os.environ.get("WEBAPP_PORT", "8085")),

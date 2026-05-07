@@ -6,9 +6,9 @@ this user's recent `delivered` rows (last `DEDUP_WINDOW_HOURS`). Cosine
 
 - **Provider** is `EMBEDDING_PROVIDER`: `auto` (default — `openai` if
   `OPENAI_API_KEY` set, else `none`), `openai`
-  (`text-embedding-3-small` @ 512 dims, paid), `local` (fastembed on CPU,
-  default `intfloat/multilingual-e5-large` @ 1024 dims, no API cost,
-  timed in logs as `local embed: ... ms`), or `none` (disabled).
+  (`text-embedding-3-small` @ 512 dims, paid), `ollama` (default
+  `qwen3-embedding:4b` @ 1024 dims via local Ollama server, no API cost),
+  or `none` (disabled).
 - **Model-switch purge:** the active provider+model+dims is stored in
   `meta.embedding_id`. On startup, if it differs from the previous run,
   `delivered` and `post_embeddings` are wiped (vectors aren't comparable

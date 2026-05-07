@@ -9,8 +9,6 @@ dependencies = [
     "anthropic>=0.40",
     "openai>=1.50",
     "python-dotenv>=1.0",
-    "fastembed>=0.4",
-    "numpy<2",
     "aiohttp>=3.10",
 ]
 

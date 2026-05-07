@@ -12,7 +12,7 @@ uv sync
 
 - `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` — from [my.telegram.org](https://my.telegram.org).
 - `TELEGRAM_BOT_TOKEN` — create a bot via [@BotFather](https://t.me/BotFather).
-- `ANTHROPIC_API_KEY` — from [console.anthropic.com](https://console.anthropic.com).
+- `ANTHROPIC_API_KEY` — required when `CHAT_PROVIDER=anthropic` (the default), from [console.anthropic.com](https://console.anthropic.com).
 - `OPENAI_API_KEY` — *optional*, from [platform.openai.com](https://platform.openai.com). Used for summary embeddings (dedup); cost is negligible (~$0.02 per million tokens with `text-embedding-3-small`). If you leave it blank, the bot starts fine — deduplication is just disabled, and the owner gets a one-time DM at startup saying so.
 - `OWNER_ID` — your numeric Telegram user ID (ask [@userinfobot](https://t.me/userinfobot)).
 

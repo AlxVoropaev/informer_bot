@@ -1,7 +1,7 @@
 """Tests for `informer_bot.config.load_config` validation and defaults.
 
 `load_config` raises `SystemExit` for unknown EMBEDDING_PROVIDER /
-LOCAL_EMBEDDING_DEVICE values, and falls back to documented defaults when
+CHAT_PROVIDER values, and falls back to documented defaults when
 optional vars are absent. Uses `monkeypatch.setenv` / `monkeypatch.delenv`
 to drive the loader without touching process state permanently.
 
@@ -12,7 +12,6 @@ environment by default, so `monkeypatch.setenv` reliably wins over any
 import pytest
 
 from informer_bot.config import load_config
-from informer_bot.summarizer import LOCAL_EMBED_MODEL_DEFAULT
 
 
 def _set_required(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -27,8 +26,10 @@ def _clear_optional(monkeypatch: pytest.MonkeyPatch) -> None:
     """Drop every optional var so we read the genuine defaults in load_config."""
     for key in (
         "EMBEDDING_PROVIDER",
-        "LOCAL_EMBEDDING_DEVICE",
-        "LOCAL_EMBEDDING_MODEL",
+        "CHAT_PROVIDER",
+        "OLLAMA_BASE_URL",
+        "OLLAMA_CHAT_MODEL",
+        "OLLAMA_EMBEDDING_MODEL",
         "OPENAI_API_KEY",
         "DEDUP_THRESHOLD",
         "DEDUP_WINDOW_HOURS",
@@ -57,17 +58,30 @@ def test_invalid_embedding_provider_raises_systemexit(
     assert "EMBEDDING_PROVIDER" in str(excinfo.value)
 
 
-def test_invalid_local_embedding_device_raises_systemexit(
+def test_invalid_chat_provider_raises_systemexit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_required(monkeypatch)
     _clear_optional(monkeypatch)
-    monkeypatch.setenv("LOCAL_EMBEDDING_DEVICE", "invalid_value")
+    monkeypatch.setenv("CHAT_PROVIDER", "invalid_value")
 
     with pytest.raises(SystemExit) as excinfo:
         load_config()
 
-    assert "LOCAL_EMBEDDING_DEVICE" in str(excinfo.value)
+    assert "CHAT_PROVIDER" in str(excinfo.value)
+
+
+def test_anthropic_key_not_required_when_chat_provider_is_ollama(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required(monkeypatch)
+    _clear_optional(monkeypatch)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setenv("CHAT_PROVIDER", "ollama")
+
+    cfg = load_config()
+
+    assert cfg.chat_provider == "ollama"
 
 
 def test_defaults_are_applied_when_optional_vars_unset(
@@ -79,8 +93,10 @@ def test_defaults_are_applied_when_optional_vars_unset(
     cfg = load_config()
 
     assert cfg.embedding_provider == "auto"
-    assert cfg.local_embedding_model == LOCAL_EMBED_MODEL_DEFAULT
-    assert cfg.local_embedding_device == "cpu"
+    assert cfg.chat_provider == "anthropic"
+    assert cfg.ollama_base_url == "http://localhost:11434/v1"
+    assert cfg.ollama_chat_model == "qwen3.5:4b"
+    assert cfg.ollama_embedding_model == "qwen3-embedding:4b"
     assert cfg.dedup_threshold == 0.85
     assert cfg.dedup_window_hours == 48
     assert cfg.catch_up_window_hours == 48
@@ -96,7 +112,7 @@ def test_defaults_are_applied_when_optional_vars_unset(
     assert cfg.owner_id == 999
 
 
-@pytest.mark.parametrize("provider", ["auto", "openai", "local", "none"])
+@pytest.mark.parametrize("provider", ["auto", "openai", "ollama", "none"])
 def test_valid_embedding_providers_accepted(
     monkeypatch: pytest.MonkeyPatch, provider: str
 ) -> None:

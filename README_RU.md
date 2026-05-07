@@ -68,7 +68,7 @@ HTML-интерфейс внутри Telegram. Открыть его можно 
 - [Установка](docs/setup.md) — зависимости, `.env`, вход в Telegram, запуск.
 - [Запуск через Docker Compose](docs/docker.md) — продакшн-деплой.
 - [URL Mini App и хостинг](docs/miniapp-hosting.md) — `MINIAPP_URL`, Caddy + Let's Encrypt, альтернативы.
-- [Провайдер эмбеддингов (дедуп)](docs/embeddings.md) — OpenAI / локальный fastembed / выключенный.
+- [Провайдер эмбеддингов (дедуп)](docs/embeddings.md) — OpenAI / локальный Ollama / выключенный.
 - [Авто-обновление из GitHub](docs/auto-update.md) — pull-деплой через cron.
 - [Тесты](docs/tests.md) — как запустить тесты.
 

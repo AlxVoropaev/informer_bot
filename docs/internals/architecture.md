@@ -23,10 +23,11 @@ One Python process runs both the client and the bot inside a single asyncio loop
 - Telegram client: **Telethon** (MTProto user account, real-time `events.NewMessage`).
 - Telegram bot: **python-telegram-bot** (v21+, asyncio).
 - LLM: **anthropic** SDK, model `claude-haiku-4-5` (cheap & fast for summaries).
+  Setting `CHAT_PROVIDER=ollama` swaps Claude for a local `qwen3.5:4b` via
+  Ollama's OpenAI-compatible endpoint.
 - Embeddings (dedup): pluggable. **OpenAI** `text-embedding-3-small` @ 512 dims
-  (paid) or **fastembed** local CPU model (default
-  `intfloat/multilingual-e5-large`, 1024 dims, ONNX, no PyTorch). Provider
-  chosen via `EMBEDDING_PROVIDER`.
+  (paid) or **Ollama** (`qwen3-embedding:4b` @ 1024 dims, local, no API cost)
+  when `EMBEDDING_PROVIDER=ollama`. Provider chosen via `EMBEDDING_PROVIDER`.
 - Storage: **SQLite** (single file, `data/informer.db`) + Telethon
   `data/informer.session` file. The `data/` directory holds all mutable state
   and is bind-mounted into the Docker container.
