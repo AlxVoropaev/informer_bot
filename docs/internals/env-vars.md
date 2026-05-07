@@ -20,3 +20,12 @@ MINIAPP_URL=               # optional, public HTTPS URL of the Mini App; enables
 WEBAPP_HOST=0.0.0.0        # optional, bind host for the Mini App server (default 0.0.0.0)
 WEBAPP_PORT=8085           # optional, bind port for the Mini App server (default 8085)
 ```
+
+## processor_bot only
+
+```
+PROCESSOR_BOT_TOKEN=...    # from @BotFather, distinct from TELEGRAM_BOT_TOKEN
+BUS_GROUP_ID=...           # negative integer id of the private bus group
+INFORMER_BOT_USER_ID=...   # numeric Telegram user id of the informer bot (sender filter)
+SESSION_PATH=data/processor  # optional, Telethon session path (default data/processor)
+```
