@@ -76,8 +76,14 @@ Subagents produce a worktree + branch. To bring their work onto `main`:
    (`git -C <worktree> add -A && git -C <worktree> commit -m "..."`). Use
    conventional-commit style messages and add a `Co-Authored-By` trailer.
 3. **Merge each subagent branch into the feature branch** sequentially
-   (`git merge --no-ff <subagent-branch>`). Disjoint file sets shouldn't
-   conflict; investigate any conflict rather than papering over it.
+   with `git merge --no-ff` and an explicit message — never accept Git's
+   default `Merge branch '<subagent-branch>'` auto-subject. Pass `-m` (or
+   `-F`) with a brief conventional-commit-style subject (e.g.
+   `Merge <scope>: <what>`) plus a short body summarizing what the merged
+   branch contains. Example:
+   `git merge --no-ff <subagent-branch> -m "Merge <scope>: <short summary>" -m "<details body>"`.
+   Disjoint file sets shouldn't conflict; investigate any conflict rather
+   than papering over it.
 4. **Verify on the feature branch**: run the full test suite and any other
    sanity checks before declaring success.
 5. **Wait for the user's explicit approval** before merging the feature
