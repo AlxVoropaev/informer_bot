@@ -33,5 +33,8 @@ WEBAPP_PORT=8085           # optional, bind port for the Mini App server (defaul
 PROCESSOR_BOT_TOKEN=...    # from @BotFather, distinct from TELEGRAM_BOT_TOKEN
 BUS_GROUP_ID=...           # negative integer id of the private bus group
 INFORMER_BOT_USER_ID=...   # numeric Telegram user id of the informer bot (sender filter)
-SESSION_PATH=data/processor  # optional, Telethon session path (default data/processor)
 ```
+
+processor_bot uses the Telegram Bot HTTP API only — it does **not**
+need `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` (those remain required
+for the informer's Telethon client).

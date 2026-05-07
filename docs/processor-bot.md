@@ -121,7 +121,6 @@ catch-up.
 ```
 uv sync
 PROCESSOR_BOT_TOKEN=... BUS_GROUP_ID=... INFORMER_BOT_USER_ID=... \
-TELEGRAM_API_ID=... TELEGRAM_API_HASH=... \
 uv run python -m processor_bot
 ```
 
@@ -140,6 +139,6 @@ App, no Caddy. Reaches Ollama on the host via
 For pull-based auto-deploy from GitHub, see
 [auto-update.md](auto-update.md).
 
-The session file lives at `data/processor.session` by default
-(`SESSION_PATH`). No SQLite, no Mini App, no user state — the
-processor is stateless.
+The processor is stateless: it uses the Telegram Bot HTTP API only
+(no MTProto, no session file), and keeps no SQLite, Mini App, or
+user state.

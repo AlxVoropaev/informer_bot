@@ -1,11 +1,10 @@
-import asyncio
-import io
 import logging
-import time
+from collections.abc import Awaitable, Callable
+from io import BytesIO
 
 from openai import AsyncOpenAI
-from telethon import TelegramClient, events
-from telethon.tl.types import DocumentAttributeFilename
+from telegram import InputFile, Update
+from telegram.ext import ContextTypes
 
 from processor_bot.config import Config
 from processor_bot.handlers import handle_request
@@ -20,39 +19,27 @@ from shared.protocol import (
 
 log = logging.getLogger(__name__)
 
-
-class RateLimiter:
-    """Ensure at least `min_interval` seconds between acquisitions."""
-
-    def __init__(self, min_interval: float) -> None:
-        self._min_interval = min_interval
-        self._lock = asyncio.Lock()
-        self._next_at: float = 0.0
-
-    async def acquire(self) -> None:
-        async with self._lock:
-            now = time.monotonic()
-            wait = self._next_at - now
-            if wait > 0:
-                await asyncio.sleep(wait)
-            self._next_at = time.monotonic() + self._min_interval
+HandlerCallback = Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]
 
 
-def register_handler(
-    tg: TelegramClient,
-    *,
-    cfg: Config,
-    ollama_client: AsyncOpenAI,
-    limiter: RateLimiter,
-) -> None:
-    @tg.on(events.NewMessage(chats=[cfg.bus_group_id]))
-    async def _on_message(event: events.NewMessage.Event) -> None:
-        if event.sender_id != cfg.informer_bot_user_id:
+def make_handler_callback(
+    *, cfg: Config, ollama_client: AsyncOpenAI
+) -> HandlerCallback:
+    async def _on_message(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        message = update.effective_message
+        if message is None:
+            return
+        # Sender check is enforced by filters at registration; keep a defensive
+        # log in case the handler is invoked outside the expected filter.
+        sender = update.effective_user
+        if sender is None or sender.id != cfg.informer_bot_user_id:
             log.debug(
-                "drop: sender=%s not informer", event.sender_id,
+                "drop: sender=%s not informer", sender.id if sender else None,
             )
             return
-        body = event.message.message or ""
+        body = message.text or ""
         try:
             req = decode_request(body)
         except ProtocolError as e:
@@ -70,20 +57,22 @@ def register_handler(
             log.exception("handler failed for id=%s", req.id)
             reply = ErrorReply(id=req.id, error=str(e))
 
-        await limiter.acquire()
+        encoded = encode_reply(reply)
         if isinstance(reply, EmbedReply):
-            buf = io.BytesIO(encode_reply(reply).encode("utf-8"))
-            buf.name = EMBED_REPLY_FILENAME
-            await tg.send_file(
-                cfg.bus_group_id,
-                file=buf,
-                reply_to=event.message.id,
-                attributes=[DocumentAttributeFilename(EMBED_REPLY_FILENAME)],
+            await context.bot.send_document(
+                chat_id=cfg.bus_group_id,
+                document=InputFile(
+                    BytesIO(encoded.encode("utf-8")),
+                    filename=EMBED_REPLY_FILENAME,
+                ),
+                reply_to_message_id=message.message_id,
             )
         else:
-            await tg.send_message(
-                cfg.bus_group_id,
-                encode_reply(reply),
-                reply_to=event.message.id,
+            await context.bot.send_message(
+                chat_id=cfg.bus_group_id,
+                text=encoded,
+                reply_to_message_id=message.message_id,
             )
         log.info("reply: op=%s id=%s", type(reply).__name__, reply.id)
+
+    return _on_message

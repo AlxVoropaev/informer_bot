@@ -6,8 +6,7 @@ ARG GID
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_NO_DEV=1 \
-    PYTHONUNBUFFERED=1 \
-    SESSION_PATH=/app/data/processor
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
