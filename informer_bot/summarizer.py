@@ -9,7 +9,8 @@ log = logging.getLogger(__name__)
 MODEL = "claude-haiku-4-5"
 EMBED_MODEL = "text-embedding-3-small"
 EMBED_DIMENSIONS = 512
-MAX_TOKENS = 256
+MAX_TOKENS_CLAUDE = 256
+MAX_TOKENS_OLLAMA = 4000
 SYSTEM_PROMPT = (
     "You summarize Telegram channel posts. "
     "Reply with a brief of one or two sentences in the language of the post. "
@@ -78,7 +79,7 @@ async def summarize(text: str, client: AsyncAnthropic | None = None) -> Summary:
     log.debug("summarize: sending %d chars to %s", len(text), MODEL)
     response = await client.messages.create(
         model=MODEL,
-        max_tokens=MAX_TOKENS,
+        max_tokens=MAX_TOKENS_CLAUDE,
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": text}],
     )
@@ -161,7 +162,7 @@ async def summarize_ollama(
     log.debug("summarize_ollama: sending %d chars to %s", len(text), model)
     response = await client.chat.completions.create(
         model=model,
-        max_tokens=MAX_TOKENS,
+        max_tokens=MAX_TOKENS_OLLAMA,
         temperature=0,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
