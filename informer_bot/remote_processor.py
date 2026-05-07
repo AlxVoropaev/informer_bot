@@ -194,6 +194,7 @@ class RemoteProcessorClient:
             req_msg = await self._app.bot.send_document(
                 chat_id=self._bus_group_id,
                 document=InputFile(BytesIO(payload), filename=REQUEST_FILENAME),
+                caption=f"op: {op.value}",
             )
             pending.request_msg_id = getattr(req_msg, "message_id", None)
             try:

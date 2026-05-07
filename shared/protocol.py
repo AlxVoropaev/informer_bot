@@ -100,18 +100,22 @@ class ErrorReply:
 Reply = SummarizeReply | IsRelevantReply | EmbedReply | PingReply | ErrorReply
 
 
-def encode_request(req: Request) -> str:
+def request_op(req: Request) -> Op:
     match req:
         case SummarizeRequest():
-            op = Op.summarize
+            return Op.summarize
         case IsRelevantRequest():
-            op = Op.is_relevant
+            return Op.is_relevant
         case EmbedRequest():
-            op = Op.embed
+            return Op.embed
         case PingRequest():
-            op = Op.ping
+            return Op.ping
         case _:
             raise ProtocolError(f"unknown request type: {type(req).__name__}")
+
+
+def encode_request(req: Request) -> str:
+    op = request_op(req)
     payload = {"op": op.value, **asdict(req)}
     return json.dumps(payload)
 

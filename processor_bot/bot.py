@@ -14,6 +14,7 @@ from shared.protocol import (
     ProtocolError,
     decode_request,
     encode_reply,
+    request_op,
 )
 
 log = logging.getLogger(__name__)
@@ -70,12 +71,14 @@ def make_handler_callback(
             reply = ErrorReply(id=req.id, error=str(e))
 
         encoded = encode_reply(reply)
+        op = request_op(req)
         await context.bot.send_document(
             chat_id=cfg.bus_group_id,
             document=InputFile(
                 BytesIO(encoded.encode("utf-8")),
                 filename=REPLY_FILENAME,
             ),
+            caption=f"op: {op.value}",
             reply_parameters=ReplyParameters(message_id=message.message_id),
         )
         log.info("reply: op=%s id=%s", type(reply).__name__, reply.id)
