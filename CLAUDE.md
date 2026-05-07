@@ -58,13 +58,20 @@ spawn multiple subagents in parallel.**
   no `sed -i`, no `>` redirects that mutate tracked files. Running tests,
   reading, and git operations that bring subagent branches in (`git merge`,
   cherry-pick) are fine.
+- The primary working tree stays on `main`. Never `git checkout` (or
+  `git switch`) it to a feature branch — feature branches always live in
+  fresh worktrees created via `git worktree add -b feat/<name> <path> main`.
+  This keeps `main` always available to other agents reading the canonical
+  tree.
 
 ### Merge workflow (after subagents finish)
 
 Subagents produce a worktree + branch. To bring their work onto `main`:
 
-1. **Create a feature branch from `main`** (e.g. `feat/<short-name>`). Never
-   merge subagent branches straight into `main`.
+1. **Create a feature branch from `main`** in its own worktree
+   (`git worktree add -b feat/<short-name> <path> main`, never
+   `git checkout -b` in the primary tree). Never merge subagent branches
+   straight into `main`.
 2. **Commit each worktree's work** on its own branch inside the worktree
    (`git -C <worktree> add -A && git -C <worktree> commit -m "..."`). Use
    conventional-commit style messages and add a `Co-Authored-By` trailer.
