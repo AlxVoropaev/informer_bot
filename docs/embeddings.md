@@ -14,7 +14,7 @@ dedup didn't exist.
 
 | Var | Values | Default | Notes |
 | --- | --- | --- | --- |
-| `EMBEDDING_PROVIDER` | `auto` \| `openai` \| `ollama` \| `none` | `auto` | `auto` picks `openai` if `OPENAI_API_KEY` is set, otherwise `none`. |
+| `EMBEDDING_PROVIDER` | `auto` \| `openai` \| `ollama` \| `remote` \| `none` | `auto` | `auto` picks `openai` if `OPENAI_API_KEY` is set, otherwise `none`. `remote` routes through `processor_bot` — see [internals/processor-bot.md](internals/processor-bot.md). |
 | `OLLAMA_BASE_URL` | URL | `http://localhost:11434/v1` | OpenAI-compatible endpoint of your local Ollama server. Shared with `CHAT_PROVIDER=ollama`. |
 | `OLLAMA_EMBEDDING_MODEL` | any Ollama embedding tag | `qwen3-embedding:4b` | Only used when provider is `ollama`. |
 | `DEDUP_THRESHOLD` | float 0..1 | `0.85` | Cosine similarity at or above which two posts count as the same story. |
@@ -32,6 +32,11 @@ dedup didn't exist.
   Ollama to be installed and the model pulled
   (`ollama pull qwen3-embedding:4b`). Point `OLLAMA_BASE_URL` at your server
   if it isn't on `localhost:11434`.
+- `remote` — sends the request to `processor_bot` over a private Telegram bus
+  group. Use this when the GPU host is on a private network and cannot be
+  reached over IP from the informer host. See
+  [internals/processor-bot.md](internals/processor-bot.md) for setup and the
+  wire protocol.
 - `none` — disable dedup entirely; owner gets a one-time DM at startup.
 
 Switching between providers (or between Ollama model tags) is safe — on the

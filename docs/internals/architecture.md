@@ -10,6 +10,12 @@ link to the original.
 
 One Python process runs both the client and the bot inside a single asyncio loop.
 
+A second process (`processor_bot`) is optional: when running local Ollama on a
+private GPU machine that the informer host cannot reach over the network, set
+`CHAT_PROVIDER=remote` / `EMBEDDING_PROVIDER=remote` and run `processor_bot`
+on the GPU host. The two bots talk over a private Telegram group ("the bus
+group"). See [processor-bot.md](processor-bot.md).
+
 ## Roles
 
 - **Admin** (single, hard-coded `OWNER_ID`): owns the user-account session, owns the
@@ -24,10 +30,14 @@ One Python process runs both the client and the bot inside a single asyncio loop
 - Telegram bot: **python-telegram-bot** (v21+, asyncio).
 - LLM: **anthropic** SDK, model `claude-haiku-4-5` (cheap & fast for summaries).
   Setting `CHAT_PROVIDER=ollama` swaps Claude for a local `qwen3.5:4b` via
-  Ollama's OpenAI-compatible endpoint.
+  Ollama's OpenAI-compatible endpoint. `CHAT_PROVIDER=remote` routes calls
+  through `processor_bot` over the bus group; if the processor is unreachable,
+  informer falls back to the `CHAT_PROVIDER_FALLBACK` provider (Claude by default)
+  and DMs the owner.
 - Embeddings (dedup): pluggable. **OpenAI** `text-embedding-3-small` @ 512 dims
   (paid) or **Ollama** (`qwen3-embedding:4b` @ 1024 dims, local, no API cost)
-  when `EMBEDDING_PROVIDER=ollama`. Provider chosen via `EMBEDDING_PROVIDER`.
+  when `EMBEDDING_PROVIDER=ollama`. `EMBEDDING_PROVIDER=remote` routes through
+  `processor_bot` with `EMBEDDING_PROVIDER_FALLBACK` as the safety net.
 - Storage: **SQLite** (single file, `data/informer.db`) + Telethon
   `data/informer.session` file. The `data/` directory holds all mutable state
   and is bind-mounted into the Docker container.
