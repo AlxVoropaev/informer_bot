@@ -161,6 +161,26 @@ def _build_ollama_embed_fn(cfg: Config, ollama_client: AsyncOpenAI) -> EmbedFn:
     )
 
 
+def _wrap_embed_with_remote_model_check(embed_fn: EmbedFn, db: Database) -> EmbedFn:
+    # Remote replies carry the embedding model the processor used. Reset the
+    # dedup index when that model (or the active provider, on fallback) changes
+    # — vectors aren't comparable across embedding spaces.
+    async def wrapped(text: str):
+        emb = await embed_fn(text)
+        new_id = f"{emb.provider}:{emb.model}:{EMBED_DIMENSIONS}"
+        prev = db.get_meta("embedding_id")
+        if prev != new_id:
+            if prev is not None:
+                log.warning(
+                    "embedding model changed (%s -> %s); dropping dedup index",
+                    prev, new_id,
+                )
+                db.purge_dedup_all()
+            db.set_meta("embedding_id", new_id)
+        return emb
+    return wrapped
+
+
 def _make_send_dm(app: Application) -> SendDmFn:
     async def send_dm(
         user_id: int,
@@ -385,15 +405,6 @@ async def main() -> None:
                 )
             fb_embed = _build_ollama_embed_fn(cfg, ollama_client)
         embed_fn = remote.embed
-        remote_embed_id = "remote"
-        prev = db.get_meta("embedding_id")
-        if prev is not None and prev != remote_embed_id:
-            log.warning(
-                "embedding model changed (%s -> %s); dropping dedup index",
-                prev, remote_embed_id,
-            )
-            db.purge_dedup_all()
-        db.set_meta("embedding_id", remote_embed_id)
         db.purge_dedup_older_than(
             cutoff=int(time.time()) - cfg.dedup_window_hours * 3600
         )
@@ -415,7 +426,7 @@ async def main() -> None:
             summarize_fn = dispatcher.summarize
             is_relevant_fn = dispatcher.is_relevant
         if cfg.embedding_provider == "remote":
-            embed_fn = dispatcher.embed
+            embed_fn = _wrap_embed_with_remote_model_check(dispatcher.embed, db)
     send_dm = _make_send_dm(app)
     edit_dm: EditDmFn | None = _make_edit_dm(app) if embed_fn is not None else None
     announce_new_channel = _make_announce_new_channel(app, db, miniapp_url)

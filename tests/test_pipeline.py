@@ -49,9 +49,13 @@ def _embed_fn(
     vector: list[float] | None = None,
     tokens: int = 5,
     provider: str = "openai",
+    model: str = "text-embedding-3-small",
 ) -> AsyncMock:
     return AsyncMock(return_value=Embedding(
-        vector=vector or [0.0, 1.0], tokens=tokens, provider=provider,
+        vector=vector or [0.0, 1.0],
+        tokens=tokens,
+        provider=provider,
+        model=model,
     ))
 
 

@@ -56,9 +56,18 @@ def test_is_relevant_reply_roundtrip() -> None:
 
 
 def test_embed_reply_roundtrip() -> None:
-    reply = EmbedReply(id="x", vector=[0.1, 0.2, 0.3], tokens=11)
+    reply = EmbedReply(
+        id="x", vector=[0.1, 0.2, 0.3], tokens=11, model="qwen3-embedding:4b",
+    )
     got = decode_reply(encode_reply(reply), Op.embed)
     assert got == reply
+
+
+def test_embed_reply_decodes_legacy_payload_without_model() -> None:
+    legacy = '{"id":"x","ok":true,"vector":[0.1],"tokens":3}'
+    got = decode_reply(legacy, Op.embed)
+    assert isinstance(got, EmbedReply)
+    assert got.model == ""
 
 
 def test_ping_reply_roundtrip() -> None:

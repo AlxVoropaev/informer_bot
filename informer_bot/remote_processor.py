@@ -175,7 +175,10 @@ class RemoteProcessorClient:
             raise
         assert isinstance(reply, EmbedReply)
         return Embedding(
-            vector=list(reply.vector), tokens=reply.tokens, provider="remote",
+            vector=list(reply.vector),
+            tokens=reply.tokens,
+            provider="remote",
+            model=reply.model,
         )
 
     async def ping(self) -> None:

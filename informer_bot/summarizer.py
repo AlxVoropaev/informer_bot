@@ -61,6 +61,7 @@ class Embedding:
     vector: list[float]
     tokens: int
     provider: str
+    model: str
 
 
 def estimate_cost_usd(provider: str, input_tokens: int, output_tokens: int) -> float:
@@ -147,7 +148,10 @@ async def embed_summary(
         len(vector), response.usage.total_tokens,
     )
     return Embedding(
-        vector=vector, tokens=response.usage.total_tokens, provider=provider,
+        vector=vector,
+        tokens=response.usage.total_tokens,
+        provider=provider,
+        model=model,
     )
 
 

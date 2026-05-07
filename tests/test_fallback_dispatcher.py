@@ -22,7 +22,7 @@ def _relevance(flag: bool, provider: str = "remote") -> RelevanceCheck:
 
 
 def _embedding(provider: str = "remote") -> Embedding:
-    return Embedding(vector=[0.1, 0.2], tokens=2, provider=provider)
+    return Embedding(vector=[0.1, 0.2], tokens=2, provider=provider, model="m")
 
 
 def _remote(*, healthy: bool, **methods: AsyncMock) -> SimpleNamespace:
@@ -186,7 +186,7 @@ async def test_is_relevant_remote_error_falls_back() -> None:
 
 async def test_embed_healthy_uses_remote() -> None:
     remote_embed = AsyncMock(return_value=_embedding())
-    fb = AsyncMock(return_value=Embedding(vector=[9.9], tokens=99, provider="openai"))
+    fb = AsyncMock(return_value=Embedding(vector=[9.9], tokens=99, provider="openai", model="text-embedding-3-small"))
     remote = _remote(healthy=True, embed=remote_embed)
     d = FallbackDispatcher(
         remote=remote,  # type: ignore[arg-type]
@@ -203,7 +203,7 @@ async def test_embed_healthy_uses_remote() -> None:
 
 async def test_embed_unhealthy_uses_fallback() -> None:
     remote_embed = AsyncMock(return_value=_embedding())
-    fb = AsyncMock(return_value=Embedding(vector=[9.9], tokens=99, provider="openai"))
+    fb = AsyncMock(return_value=Embedding(vector=[9.9], tokens=99, provider="openai", model="text-embedding-3-small"))
     remote = _remote(healthy=False, embed=remote_embed)
     d = FallbackDispatcher(
         remote=remote,  # type: ignore[arg-type]
@@ -221,7 +221,7 @@ async def test_embed_unhealthy_uses_fallback() -> None:
 
 async def test_embed_remote_timeout_falls_back() -> None:
     remote_embed = AsyncMock(side_effect=RemoteProcessorTimeout("timed out"))
-    fb = AsyncMock(return_value=Embedding(vector=[9.9], tokens=99, provider="openai"))
+    fb = AsyncMock(return_value=Embedding(vector=[9.9], tokens=99, provider="openai", model="text-embedding-3-small"))
     remote = _remote(healthy=True, embed=remote_embed)
     d = FallbackDispatcher(
         remote=remote,  # type: ignore[arg-type]

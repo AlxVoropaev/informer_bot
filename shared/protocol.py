@@ -84,6 +84,7 @@ class EmbedReply:
     id: str
     vector: list[float] = field(default_factory=list)
     tokens: int = 0
+    model: str = ""
 
 
 @dataclass(frozen=True)

@@ -102,6 +102,7 @@ async def test_embed_returns_embed_reply() -> None:
     assert reply.id == req.id
     assert reply.vector == [0.1, 0.2, 0.3]
     assert reply.tokens == 7
+    assert reply.model == "qwen3-embedding:4b"
 
 
 async def test_embed_passes_model_and_dimensions() -> None:

@@ -10,9 +10,14 @@ this user's recent `delivered` rows (last `DEDUP_WINDOW_HOURS`). Cosine
   `qwen3-embedding:4b` @ 1024 dims via local Ollama server, no API cost),
   or `none` (disabled).
 - **Model-switch purge:** the active provider+model+dims is stored in
-  `meta.embedding_id`. On startup, if it differs from the previous run,
-  `delivered` and `post_embeddings` are wiped (vectors aren't comparable
-  across spaces). Switching freely is fine — you just lose dedup history.
+  `meta.embedding_id`. For local providers (`openai`, `ollama`) the check
+  runs at startup. For `remote`, the processor returns the embedding model
+  name on every `EmbedReply`, so the check runs lazily on each remote reply
+  — that also catches the processor switching models without an informer
+  restart, and detects when calls fall back to `openai`/`ollama` (different
+  embedding space). On any mismatch, `delivered` and `post_embeddings` are
+  wiped (vectors aren't comparable across spaces). Switching freely is
+  fine — you just lose dedup history.
 - **`none` (or `auto` with no key):** `main.py` passes `embed_fn=None` /
   `edit_dm=None`. `handle_new_post` then skips embedding, dedup lookup,
   `delivered` records, and `post_embeddings` writes — DMs go out as if dedup

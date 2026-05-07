@@ -225,7 +225,7 @@ async def test_embed_round_trip(
         body = await _request_payload(app_mock)
         req = json.loads(body)
         payload = encode_reply(EmbedReply(
-            id=req["id"], vector=[0.1, 0.2, 0.3], tokens=5,
+            id=req["id"], vector=[0.1, 0.2, 0.3], tokens=5, model="qwen3:4b",
         ))
         await _fire_reply(rp, app_mock, payload)
 
@@ -234,6 +234,8 @@ async def test_embed_round_trip(
 
     assert result.vector == [0.1, 0.2, 0.3]
     assert result.tokens == 5
+    assert result.model == "qwen3:4b"
+    assert result.provider == "remote"
 
 
 async def test_request_is_sent_as_json_document(

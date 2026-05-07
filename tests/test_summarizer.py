@@ -125,6 +125,7 @@ async def test_embed_summary_returns_vector_and_tokens() -> None:
     assert result.vector == [0.1, 0.2, 0.3]
     assert result.tokens == 11
     assert result.provider == "openai"
+    assert result.model == EMBED_MODEL
 
 
 async def test_embed_summary_uses_configured_model_and_dims() -> None:

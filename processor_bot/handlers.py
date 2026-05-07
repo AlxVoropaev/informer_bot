@@ -55,4 +55,9 @@ async def handle_request(
                 model=embedding_model,
                 dimensions=req.dimensions,
             )
-            return EmbedReply(id=req.id, vector=emb.vector, tokens=emb.tokens)
+            return EmbedReply(
+                id=req.id,
+                vector=emb.vector,
+                tokens=emb.tokens,
+                model=embedding_model,
+            )
