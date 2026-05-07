@@ -46,8 +46,16 @@ the result to the pipeline.
    (see [Bot-to-Bot communication](https://core.telegram.org/bots/features#bot-to-bot-communication)).
    Without this, neither side will see the other's messages in the group.
 3. Create a private Telegram group. Add **both** bots to it, grant
-   each delete-message rights. Disable history-for-new-members so an
-   added third party cannot read past traffic.
+   each delete-message rights (this requires promoting both bots to
+   admin). Disable history-for-new-members so an added third party
+   cannot read past traffic.
+
+   In addition, the processor must receive the informer's first
+   request, which is neither a reply nor a mention. Per Telegram's
+   rules, that requires the processor bot to **either** be an admin in
+   the group **or** have Group Privacy Mode disabled (`@BotFather` →
+   *Bot Settings* → *Group Privacy* → *Turn off*). Granting admin in
+   step 3 already satisfies this; otherwise turn privacy off.
 4. Get the group's chat id (negative integer). Add it to both `.env`
    files as `BUS_GROUP_ID`.
 5. Get each bot's numeric user id. The informer needs
