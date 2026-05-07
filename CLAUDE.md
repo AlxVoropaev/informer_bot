@@ -70,29 +70,39 @@ Subagents produce a worktree + branch. To bring their work onto `main`:
 
 1. **Create a feature branch from `main`** in its own worktree
    (`git worktree add -b feat/<short-name> <path> main`, never
-   `git checkout -b` in the primary tree). Never merge subagent branches
-   straight into `main`.
-2. **Commit each worktree's work** on its own branch inside the worktree
-   (`git -C <worktree> add -A && git -C <worktree> commit -m "..."`). Use
-   conventional-commit style messages and add a `Co-Authored-By` trailer.
-3. **Merge each subagent branch into the feature branch** sequentially
-   with `git merge --no-ff` and an explicit message — never accept Git's
-   default `Merge branch '<subagent-branch>'` auto-subject. Pass `-m` (or
-   `-F`) with a brief conventional-commit-style subject (e.g.
-   `Merge <scope>: <what>`) plus a short body summarizing what the merged
-   branch contains. Example:
-   `git merge --no-ff <subagent-branch> -m "Merge <scope>: <short summary>" -m "<details body>"`.
-   Disjoint file sets shouldn't conflict; investigate any conflict rather
-   than papering over it.
-4. **Verify on the feature branch**: run the full test suite and any other
-   sanity checks before declaring success.
-5. **Wait for the user's explicit approval** before merging the feature
-   branch into `main`. Don't merge to `main` autonomously.
-6. **Clean up after merging to `main`**: remove each subagent worktree
-   with `git worktree remove <path>` and delete each merged branch with
-   `git branch -d <branch-name>`. Use `-D` only if the branch is verifiably
-   merged but git refuses (e.g. it was rebased rather than fast-forwarded).
-   Skip cleanup only if the user explicitly says "leave it" or "don't touch".
+   `git checkout -b` in the primary tree). Never rebase subagent
+   branches straight onto `main`.
+2. **Commit each worktree's work** on its own branch inside the
+   worktree (`git -C <worktree> add -A && git -C <worktree> commit -m "..."`).
+   Multiple commits per subagent are fine — they'll be squashed in
+   the next step.
+3. **Squash-merge each subagent branch into the feature branch**
+   sequentially with `git merge --squash`. This stages the diff
+   without creating a merge commit; then commit it as a single
+   conventional-commit-style commit with a `Co-Authored-By` trailer.
+   Example:
+   `git -C <feature-worktree> merge --squash <subagent-branch> && git -C <feature-worktree> commit -m "<scope>: <short summary>" -m "<details body>"`
+   (add the `Co-Authored-By` trailer in the commit message body).
+   Disjoint file sets shouldn't conflict; investigate any conflict
+   rather than papering over it. Result: one commit per subagent on
+   the feature branch.
+4. **Verify on the feature branch**: run the full test suite and any
+   other sanity checks before declaring success.
+5. **Wait for the user's explicit approval** before landing the
+   feature branch on `main`. Don't update `main` autonomously.
+6. **Rebase the feature branch onto `main`, then fast-forward `main`**
+   once approved: `git -C <feature-worktree> rebase main` followed by
+   `git -C <main-tree> merge --ff-only <feature-branch>`. Never use
+   `git merge` with `--no-ff` (or a plain `git merge` that would
+   create a merge commit) for this step — `main`'s history should
+   be a linear sequence of one-commit-per-subagent, with no merge
+   commits.
+7. **Clean up after landing on `main`**: remove each subagent worktree
+   and the feature worktree with `git worktree remove <path>` and
+   delete each landed branch with `git branch -d <branch-name>`. Use
+   `-D` only if the branch is verifiably merged but git refuses (e.g.
+   it was rebased rather than fast-forwarded). Skip cleanup only if
+   the user explicitly says "leave it" or "don't touch".
 
 ## 5. Keep Docs Current
 
