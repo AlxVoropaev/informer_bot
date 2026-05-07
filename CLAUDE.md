@@ -43,13 +43,38 @@ When your changes create orphans:
 
 The test: Every changed line should trace directly to the user's request.
 
-## 4. Worktree for Subagents Only
+## 4. All Code Changes via Subagents in Worktrees
 
-**Run code-changing subagents in an isolated git worktree. The main session
-edits the working tree directly — no worktree needed.**
+**The main session must not edit any project files. All implementation goes
+through isolated subagents. When work can be split into independent parts,
+spawn multiple subagents in parallel.**
 
-When spawning subagents via the Agent tool that will write or edit files, always
-pass `isolation: "worktree"`. Read-only research/exploration agents don't need it.
+- Always pass `isolation: "worktree"` when spawning subagents that will write
+  or edit files.
+- Read-only agents (Explore, planning, research) don't need worktree isolation.
+- The main session reads, plans, delegates to subagents, and merges their
+  results — it never authors changes directly.
+- Treat the project source as read-only from the main session: no Edit/Write,
+  no `sed -i`, no `>` redirects that mutate tracked files. Running tests,
+  reading, and git operations that bring subagent branches in (`git merge`,
+  cherry-pick) are fine.
+
+### Merge workflow (after subagents finish)
+
+Subagents produce a worktree + branch. To bring their work onto `main`:
+
+1. **Create a feature branch from `main`** (e.g. `feat/<short-name>`). Never
+   merge subagent branches straight into `main`.
+2. **Commit each worktree's work** on its own branch inside the worktree
+   (`git -C <worktree> add -A && git -C <worktree> commit -m "..."`). Use
+   conventional-commit style messages and add a `Co-Authored-By` trailer.
+3. **Merge each subagent branch into the feature branch** sequentially
+   (`git merge --no-ff <subagent-branch>`). Disjoint file sets shouldn't
+   conflict; investigate any conflict rather than papering over it.
+4. **Verify on the feature branch**: run the full test suite and any other
+   sanity checks before declaring success.
+5. **Wait for the user's explicit approval** before merging the feature
+   branch into `main`. Don't merge to `main` autonomously.
 
 ## 5. Keep Docs Current
 
