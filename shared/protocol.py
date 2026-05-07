@@ -4,7 +4,8 @@ from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from typing import Any
 
-EMBED_REPLY_FILENAME = "embedding.json"
+REQUEST_FILENAME = "request.json"
+REPLY_FILENAME = "reply.json"
 
 
 class ProtocolError(Exception):

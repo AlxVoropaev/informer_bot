@@ -44,7 +44,9 @@ def main() -> None:
     callback = make_handler_callback(cfg=cfg, ollama_client=ollama_client)
     application.add_handler(
         MessageHandler(
-            filters.Chat(cfg.bus_group_id) & filters.User(cfg.informer_bot_user_id),
+            filters.Chat(cfg.bus_group_id)
+            & filters.User(cfg.informer_bot_user_id)
+            & filters.Document.FileExtension("json"),
             callback,
         )
     )

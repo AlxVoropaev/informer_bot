@@ -335,12 +335,12 @@ async def main() -> None:
         assert cfg.bus_group_id is not None
         assert cfg.processor_bot_user_id is not None
         remote = RemoteProcessorClient(
-            telethon_client=tg,
+            application=app,
             bus_group_id=cfg.bus_group_id,
             processor_bot_user_id=cfg.processor_bot_user_id,
             timeout_seconds=cfg.processor_timeout_seconds,
         )
-        await remote.start()
+        remote.start()
         log.info(
             "remote processor: bus=%s peer=%s timeout=%.1fs",
             cfg.bus_group_id, cfg.processor_bot_user_id, cfg.processor_timeout_seconds,

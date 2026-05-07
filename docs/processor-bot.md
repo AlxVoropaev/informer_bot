@@ -42,27 +42,34 @@ the result to the pipeline.
 ## Setup
 
 1. Create a second bot via `@BotFather` → record its token (`PROCESSOR_BOT_TOKEN`).
-2. Create a private Telegram group. Add **both** bots to it, grant
+2. For **both** bots in `@BotFather`, enable bot-to-bot communication
+   (see [Bot-to-Bot communication](https://core.telegram.org/bots/features#bot-to-bot-communication)).
+   Without this, neither side will see the other's messages in the group.
+3. Create a private Telegram group. Add **both** bots to it, grant
    each delete-message rights. Disable history-for-new-members so an
    added third party cannot read past traffic.
-3. Get the group's chat id (negative integer). Add it to both `.env`
+4. Get the group's chat id (negative integer). Add it to both `.env`
    files as `BUS_GROUP_ID`.
-4. Get each bot's numeric user id. The informer needs
+5. Get each bot's numeric user id. The informer needs
    `PROCESSOR_BOT_USER_ID`; the processor needs `INFORMER_BOT_USER_ID`.
    Both filter incoming messages by sender, so traffic from anyone
    else in the group is ignored.
-5. On the informer host: `CHAT_PROVIDER=remote` and/or
-   `EMBEDDING_PROVIDER=remote`, plus the bus vars from step 3-4. See
+6. On the informer host: `CHAT_PROVIDER=remote` and/or
+   `EMBEDDING_PROVIDER=remote`, plus the bus vars from step 4-5. See
    [internals/env-vars.md](internals/env-vars.md) for the full list.
-6. On the GPU host: install Ollama, pull the chat + embedding models,
+7. On the GPU host: install Ollama, pull the chat + embedding models,
    then run `python -m processor_bot`.
 
 ## Wire protocol
 
-Every request and reply is JSON. The full schema lives in
+Both sides talk through their bot accounts (no MTProto user session is
+involved on the bus). Every request and reply is JSON, sent as a
+`.json` document attachment — never as a plain text message. This
+sidesteps Telegram's 4096-char text-message limit for long channel
+posts and large embedding vectors. The full schema lives in
 `shared/protocol.py`; this is a summary.
 
-Requests (informer → processor, sent as the message body):
+Requests (informer bot → processor bot, attached as `request.json`):
 
 ```
 {"op": "summarize",   "id": "<uuid>", "text": "..."}
@@ -71,18 +78,15 @@ Requests (informer → processor, sent as the message body):
 {"op": "ping",        "id": "<uuid>"}
 ```
 
-Replies (processor → informer, via Telegram reply):
+Replies (processor bot → informer bot, attached as `reply.json`,
+quote-replying to the request):
 
 ```
 {"id": "<uuid>", "ok": true,  "text": "...", "input_tokens": N, "output_tokens": N}
 {"id": "<uuid>", "ok": true,  "relevant": true|false, "input_tokens": N, "output_tokens": N}
+{"id": "<uuid>", "ok": true,  "vector": [...], "tokens": N}
 {"id": "<uuid>", "ok": false, "error": "..."}
 ```
-
-`embed` replies arrive as a `.json` file attachment named
-`embedding.json` (a 512-dim float vector exceeds Telegram's 4096-char
-text-message limit). The file content is JSON of shape
-`{"id": ..., "ok": true, "vector": [...], "tokens": N}`.
 
 Correlation is by the `id` field, not by Telegram's `reply_to`. After
 a successful round-trip the informer deletes both messages.

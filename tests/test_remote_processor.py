@@ -21,68 +21,110 @@ from shared.protocol import (
 )
 
 
-def _make_client_mock() -> SimpleNamespace:
+def _make_app_mock() -> SimpleNamespace:
     sent: list[SimpleNamespace] = []
+    files: dict[str, bytes] = {}
     next_msg_id = [1000]
+    next_file_id = [0]
 
-    async def send_message(chat_id: int, text: str) -> SimpleNamespace:
+    async def send_document(*, chat_id, document, **_kwargs):
         next_msg_id[0] += 1
-        msg = SimpleNamespace(id=next_msg_id[0], text=text, chat_id=chat_id)
+        next_file_id[0] += 1
+        file_id = f"f{next_file_id[0]}"
+        # InputFile exposes input_file_content with the bytes payload.
+        content = getattr(document, "input_file_content", None)
+        if content is None:
+            stream = getattr(document, "stream", None) or document
+            stream.seek(0)
+            content = stream.read()
+        files[file_id] = content
+        msg = SimpleNamespace(
+            message_id=next_msg_id[0],
+            chat_id=chat_id,
+            document=SimpleNamespace(file_id=file_id),
+        )
         sent.append(msg)
         return msg
 
+    async def get_file(file_id: str):
+        content = files[file_id]
+
+        async def download_to_memory(*, out) -> None:
+            out.write(content)
+
+        return SimpleNamespace(download_to_memory=download_to_memory)
+
+    bot = SimpleNamespace(
+        send_document=AsyncMock(side_effect=send_document),
+        delete_messages=AsyncMock(return_value=None),
+        get_file=AsyncMock(side_effect=get_file),
+    )
+
     handlers: list = []
 
-    def add_event_handler(handler, event_filter) -> None:
-        handlers.append((handler, event_filter))
+    def add_handler(handler) -> None:
+        handlers.append(handler)
 
     return SimpleNamespace(
-        send_message=AsyncMock(side_effect=send_message),
-        delete_messages=AsyncMock(return_value=None),
-        add_event_handler=add_event_handler,
+        bot=bot,
+        add_handler=add_handler,
         _sent=sent,
         _handlers=handlers,
+        _files=files,
+        _next_msg_id=next_msg_id,
+        _next_file_id=next_file_id,
     )
 
 
-def _make_event(text: str, msg_id: int = 9999) -> SimpleNamespace:
-    return SimpleNamespace(
-        message=SimpleNamespace(text=text, id=msg_id, document=None),
-    )
+async def _request_payload(app_mock: SimpleNamespace) -> str:
+    sent_msg = app_mock._sent[-1]
+    file_id = sent_msg.document.file_id
+    return app_mock._files[file_id].decode("utf-8")
 
 
-async def _fire_reply(client_mock, text: str, msg_id: int = 9999) -> None:
-    handler, _filter = client_mock._handlers[0]
-    await handler(_make_event(text, msg_id))
+async def _fire_reply(
+    rp: RemoteProcessorClient,
+    app_mock: SimpleNamespace,
+    payload: str,
+    msg_id: int = 9999,
+) -> None:
+    app_mock._next_file_id[0] += 1
+    file_id = f"reply_{app_mock._next_file_id[0]}"
+    app_mock._files[file_id] = payload.encode("utf-8")
+    document = SimpleNamespace(file_id=file_id)
+    message = SimpleNamespace(message_id=msg_id, document=document)
+    update = SimpleNamespace(effective_message=message)
+    context = SimpleNamespace(bot=app_mock.bot)
+    await rp._on_reply(update, context)
 
 
 @pytest.fixture
 def remote() -> tuple[RemoteProcessorClient, SimpleNamespace]:
-    client_mock = _make_client_mock()
+    app_mock = _make_app_mock()
     rp = RemoteProcessorClient(
-        telethon_client=client_mock,  # type: ignore[arg-type]
+        application=app_mock,  # type: ignore[arg-type]
         bus_group_id=-100123,
         processor_bot_user_id=42,
         timeout_seconds=2.0,
         min_send_interval_seconds=0.0,
     )
-    return rp, client_mock
+    return rp, app_mock
 
 
 async def test_summarize_round_trip(
     remote: tuple[RemoteProcessorClient, SimpleNamespace],
 ) -> None:
-    rp, client_mock = remote
-    await rp.start()
+    rp, app_mock = remote
+    rp.start()
 
     async def replier() -> None:
         await asyncio.sleep(0.01)
-        sent = client_mock._sent[-1]
-        req = json.loads(sent.text)
+        body = await _request_payload(app_mock)
+        req = json.loads(body)
         reply = encode_reply(SummarizeReply(
             id=req["id"], text="brief", input_tokens=10, output_tokens=3,
         ))
-        await _fire_reply(client_mock, reply)
+        await _fire_reply(rp, app_mock, reply)
 
     asyncio.create_task(replier())
     result = await rp.summarize("hello")
@@ -92,23 +134,23 @@ async def test_summarize_round_trip(
     assert result.output_tokens == 3
     # Wait briefly for fire-and-forget delete to run.
     await asyncio.sleep(0.01)
-    client_mock.delete_messages.assert_awaited()
+    app_mock.bot.delete_messages.assert_awaited()
 
 
 async def test_is_relevant_round_trip(
     remote: tuple[RemoteProcessorClient, SimpleNamespace],
 ) -> None:
-    rp, client_mock = remote
-    await rp.start()
+    rp, app_mock = remote
+    rp.start()
 
     async def replier() -> None:
         await asyncio.sleep(0.01)
-        sent = client_mock._sent[-1]
-        req = json.loads(sent.text)
+        body = await _request_payload(app_mock)
+        req = json.loads(body)
         reply = encode_reply(IsRelevantReply(
             id=req["id"], relevant=True, input_tokens=20, output_tokens=1,
         ))
-        await _fire_reply(client_mock, reply)
+        await _fire_reply(rp, app_mock, reply)
 
     asyncio.create_task(replier())
     result = await rp.is_relevant("post", "interest")
@@ -118,15 +160,15 @@ async def test_is_relevant_round_trip(
 
 
 async def test_summarize_timeout() -> None:
-    client_mock = _make_client_mock()
+    app_mock = _make_app_mock()
     rp = RemoteProcessorClient(
-        telethon_client=client_mock,  # type: ignore[arg-type]
+        application=app_mock,  # type: ignore[arg-type]
         bus_group_id=-100123,
         processor_bot_user_id=42,
         timeout_seconds=0.1,
         min_send_interval_seconds=0.0,
     )
-    await rp.start()
+    rp.start()
 
     with pytest.raises(RemoteProcessorTimeout):
         await rp.summarize("never replied")
@@ -135,15 +177,15 @@ async def test_summarize_timeout() -> None:
 async def test_error_reply_raises(
     remote: tuple[RemoteProcessorClient, SimpleNamespace],
 ) -> None:
-    rp, client_mock = remote
-    await rp.start()
+    rp, app_mock = remote
+    rp.start()
 
     async def replier() -> None:
         await asyncio.sleep(0.01)
-        sent = client_mock._sent[-1]
-        req = json.loads(sent.text)
+        body = await _request_payload(app_mock)
+        req = json.loads(body)
         reply = encode_reply(ErrorReply(id=req["id"], error="model crashed"))
-        await _fire_reply(client_mock, reply)
+        await _fire_reply(rp, app_mock, reply)
 
     asyncio.create_task(replier())
     with pytest.raises(RemoteProcessorError, match="model crashed"):
@@ -162,45 +204,30 @@ async def test_rate_limiter_spaces_sends() -> None:
 async def test_unknown_id_is_ignored(
     remote: tuple[RemoteProcessorClient, SimpleNamespace],
 ) -> None:
-    rp, client_mock = remote
-    await rp.start()
+    rp, app_mock = remote
+    rp.start()
 
     # Reply for an id we never sent — handler must not raise.
     stray = encode_reply(SummarizeReply(
         id="not-a-real-id", text="x", input_tokens=1, output_tokens=1,
     ))
-    await _fire_reply(client_mock, stray)
+    await _fire_reply(rp, app_mock, stray)
 
 
 async def test_embed_round_trip(
     remote: tuple[RemoteProcessorClient, SimpleNamespace],
 ) -> None:
-    rp, client_mock = remote
-    await rp.start()
+    rp, app_mock = remote
+    rp.start()
 
     async def replier() -> None:
         await asyncio.sleep(0.01)
-        sent = client_mock._sent[-1]
-        req = json.loads(sent.text)
+        body = await _request_payload(app_mock)
+        req = json.loads(body)
         payload = encode_reply(EmbedReply(
             id=req["id"], vector=[0.1, 0.2, 0.3], tokens=5,
         ))
-
-        async def download_media(file) -> None:
-            file.write(payload.encode("utf-8"))
-
-        # Embed reply arrives as a document with EMBED_REPLY_FILENAME.
-        from shared.protocol import EMBED_REPLY_FILENAME
-        from telethon.tl.types import DocumentAttributeFilename
-        document = SimpleNamespace(
-            attributes=[DocumentAttributeFilename(file_name=EMBED_REPLY_FILENAME)],
-        )
-        message = SimpleNamespace(
-            text=None, id=8888, document=document,
-            download_media=AsyncMock(side_effect=download_media),
-        )
-        handler, _filter = client_mock._handlers[0]
-        await handler(SimpleNamespace(message=message))
+        await _fire_reply(rp, app_mock, payload)
 
     asyncio.create_task(replier())
     result = await rp.embed("text")
@@ -209,16 +236,43 @@ async def test_embed_round_trip(
     assert result.tokens == 5
 
 
+async def test_request_is_sent_as_json_document(
+    remote: tuple[RemoteProcessorClient, SimpleNamespace],
+) -> None:
+    rp, app_mock = remote
+    rp.start()
+
+    async def replier() -> None:
+        await asyncio.sleep(0.01)
+        body = await _request_payload(app_mock)
+        req = json.loads(body)
+        reply = encode_reply(SummarizeReply(
+            id=req["id"], text="ok", input_tokens=1, output_tokens=1,
+        ))
+        await _fire_reply(rp, app_mock, reply)
+
+    asyncio.create_task(replier())
+    await rp.summarize("hi")
+
+    # The request was sent via send_document (not send_message); a payload
+    # file lookup must succeed and parse as JSON.
+    assert app_mock.bot.send_document.await_count == 1
+    body = await _request_payload(app_mock)
+    parsed = json.loads(body)
+    assert parsed["op"] == "summarize"
+    assert parsed["text"] == "hi"
+
+
 async def test_summarize_timeout_marks_unhealthy_and_calls_callback() -> None:
-    client_mock = _make_client_mock()
+    app_mock = _make_app_mock()
     rp = RemoteProcessorClient(
-        telethon_client=client_mock,  # type: ignore[arg-type]
+        application=app_mock,  # type: ignore[arg-type]
         bus_group_id=-100123,
         processor_bot_user_id=42,
         timeout_seconds=0.1,
         min_send_interval_seconds=0.0,
     )
-    await rp.start()
+    rp.start()
 
     states: list[bool] = []
 
@@ -238,40 +292,36 @@ async def test_summarize_timeout_marks_unhealthy_and_calls_callback() -> None:
 async def test_health_loop_ping_success_keeps_healthy() -> None:
     # Auto-reply harness: every send triggers an immediate matching PingReply,
     # so the loop sees consecutive successful pings until we set stop_event.
-    sent: list[SimpleNamespace] = []
-    handlers: list = []
-    next_msg_id = [1000]
+    from shared.protocol import PingReply
+
+    app_mock = _make_app_mock()
     pending_replies: list[asyncio.Task] = []
 
-    async def send_message(chat_id: int, text: str) -> SimpleNamespace:
-        next_msg_id[0] += 1
-        msg = SimpleNamespace(id=next_msg_id[0], text=text, chat_id=chat_id)
-        sent.append(msg)
-        from shared.protocol import PingReply
-        req_id = json.loads(text)["id"]
+    real_send_document = app_mock.bot.send_document.side_effect
+
+    async def auto_replier(*args, **kwargs):
+        msg = await real_send_document(*args, **kwargs)
+        body = app_mock._files[msg.document.file_id].decode("utf-8")
+        req_id = json.loads(body)["id"]
         reply_text = encode_reply(PingReply(id=req_id))
 
         async def fire() -> None:
             await asyncio.sleep(0)
-            handler, _ = handlers[0]
-            await handler(_make_event(reply_text))
+            await _fire_reply(rp, app_mock, reply_text)
 
         pending_replies.append(asyncio.create_task(fire()))
         return msg
 
-    client_mock = SimpleNamespace(
-        send_message=AsyncMock(side_effect=send_message),
-        delete_messages=AsyncMock(return_value=None),
-        add_event_handler=lambda h, f: handlers.append((h, f)),
-    )
+    app_mock.bot.send_document = AsyncMock(side_effect=auto_replier)
+
     rp = RemoteProcessorClient(
-        telethon_client=client_mock,  # type: ignore[arg-type]
+        application=app_mock,  # type: ignore[arg-type]
         bus_group_id=-100123,
         processor_bot_user_id=42,
         timeout_seconds=2.0,
         min_send_interval_seconds=0.0,
     )
-    await rp.start()
+    rp.start()
     states: list[bool] = []
 
     async def on_change(healthy: bool) -> None:
@@ -291,19 +341,19 @@ async def test_health_loop_ping_success_keeps_healthy() -> None:
     # No transitions: started healthy, stayed healthy.
     assert states == []
     # At least one ping was sent.
-    assert len(sent) >= 1
+    assert app_mock.bot.send_document.await_count >= 1
 
 
 async def test_health_loop_ping_failure_flips_state() -> None:
-    client_mock = _make_client_mock()
+    app_mock = _make_app_mock()
     rp = RemoteProcessorClient(
-        telethon_client=client_mock,  # type: ignore[arg-type]
+        application=app_mock,  # type: ignore[arg-type]
         bus_group_id=-100123,
         processor_bot_user_id=42,
         timeout_seconds=0.05,
         min_send_interval_seconds=0.0,
     )
-    await rp.start()
+    rp.start()
     states: list[bool] = []
 
     async def on_change(healthy: bool) -> None:
@@ -325,9 +375,9 @@ async def test_health_loop_ping_failure_flips_state() -> None:
 
 
 async def test_state_change_callback_fires_only_on_transitions() -> None:
-    client_mock = _make_client_mock()
+    app_mock = _make_app_mock()
     rp = RemoteProcessorClient(
-        telethon_client=client_mock,  # type: ignore[arg-type]
+        application=app_mock,  # type: ignore[arg-type]
         bus_group_id=-100123,
         processor_bot_user_id=42,
         timeout_seconds=2.0,
@@ -358,9 +408,9 @@ async def test_state_change_callback_fires_only_on_transitions() -> None:
 
 
 async def test_health_loop_exits_when_stop_event_set() -> None:
-    client_mock = _make_client_mock()
+    app_mock = _make_app_mock()
     rp = RemoteProcessorClient(
-        telethon_client=client_mock,  # type: ignore[arg-type]
+        application=app_mock,  # type: ignore[arg-type]
         bus_group_id=-100123,
         processor_bot_user_id=42,
         timeout_seconds=2.0,

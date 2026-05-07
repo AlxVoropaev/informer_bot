@@ -5,14 +5,14 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Any
 
-from telethon import TelegramClient, events
-from telethon.tl.types import DocumentAttributeFilename
+from telegram import InputFile, Update
+from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
 from informer_bot.summarizer import Embedding, RelevanceCheck, Summary
 from shared.protocol import (
-    EMBED_REPLY_FILENAME,
+    REPLY_FILENAME,
+    REQUEST_FILENAME,
     EmbedReply,
     EmbedRequest,
     ErrorReply,
@@ -67,13 +67,13 @@ class RemoteProcessorClient:
     def __init__(
         self,
         *,
-        telethon_client: TelegramClient,
+        application: Application,
         bus_group_id: int,
         processor_bot_user_id: int,
         timeout_seconds: float,
         min_send_interval_seconds: float = 1.0,
     ) -> None:
-        self._client = telethon_client
+        self._app = application
         self._bus_group_id = bus_group_id
         self._processor_bot_user_id = processor_bot_user_id
         self._timeout_seconds = timeout_seconds
@@ -124,13 +124,14 @@ class RemoteProcessorClient:
             else:
                 await self._set_healthy(True)
 
-    async def start(self) -> None:
-        self._client.add_event_handler(
-            self._on_reply,
-            events.NewMessage(
-                chats=[self._bus_group_id],
-                from_users=[self._processor_bot_user_id],
-            ),
+    def start(self) -> None:
+        self._app.add_handler(
+            MessageHandler(
+                filters.Chat(self._bus_group_id)
+                & filters.User(self._processor_bot_user_id)
+                & filters.Document.FileExtension("json"),
+                self._on_reply,
+            )
         )
 
     async def summarize(self, text: str) -> Summary:
@@ -189,10 +190,12 @@ class RemoteProcessorClient:
         self._pending[req.id] = pending
         try:
             await self._limiter.acquire()
-            req_msg = await self._client.send_message(
-                self._bus_group_id, encode_request(req)
+            payload = encode_request(req).encode("utf-8")
+            req_msg = await self._app.bot.send_document(
+                chat_id=self._bus_group_id,
+                document=InputFile(BytesIO(payload), filename=REQUEST_FILENAME),
             )
-            pending.request_msg_id = getattr(req_msg, "id", None)
+            pending.request_msg_id = getattr(req_msg, "message_id", None)
             try:
                 reply, reply_msg_id = await asyncio.wait_for(
                     future, timeout=self._timeout_seconds
@@ -219,65 +222,48 @@ class RemoteProcessorClient:
 
     async def _delete_messages(self, ids: list[int]) -> None:
         try:
-            await self._client.delete_messages(self._bus_group_id, ids)
+            await self._app.bot.delete_messages(
+                chat_id=self._bus_group_id, message_ids=ids
+            )
         except Exception as exc:
             log.warning("remote: delete_messages failed for %s: %s", ids, exc)
 
-    async def _on_reply(self, event: events.NewMessage.Event) -> None:
-        message = event.message
-        document = getattr(message, "document", None)
-        is_embed_file = False
-        if document is not None:
-            for attr in getattr(document, "attributes", None) or ():
-                if (
-                    isinstance(attr, DocumentAttributeFilename)
-                    and attr.file_name == EMBED_REPLY_FILENAME
-                ):
-                    is_embed_file = True
-                    break
+    async def _on_reply(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        message = update.effective_message
+        if message is None or message.document is None:
+            return
         try:
-            if is_embed_file:
-                await self._handle_embed_file(message)
-            else:
-                self._handle_text_reply(message)
+            tg_file = await context.bot.get_file(message.document.file_id)
+            buf = BytesIO()
+            await tg_file.download_to_memory(out=buf)
+            text = buf.getvalue().decode("utf-8")
         except Exception as exc:
-            log.warning("remote: failed to handle reply: %s", exc)
-
-    async def _handle_embed_file(self, message: Any) -> None:
-        buf = BytesIO()
-        await message.download_media(file=buf)
-        text = buf.getvalue().decode("utf-8")
-        reply_id = self._peek_id(text)
+            log.warning("remote: failed to download reply: %s", exc)
+            return
+        try:
+            reply_id = self._peek_id(text)
+        except ProtocolError as e:
+            log.warning("remote: bad reply payload: %s", e)
+            return
         pending = self._pending.get(reply_id)
         if pending is None:
-            log.warning("remote: embed reply for unknown id=%s", reply_id)
+            log.warning("remote: reply for unknown id=%s", reply_id)
             return
         try:
             reply = decode_reply(text, pending.op)
         except ProtocolError as e:
-            log.warning("remote: bad embed reply id=%s: %s", reply_id, e)
+            log.warning("remote: bad reply id=%s: %s", reply_id, e)
             return
-        self._resolve(pending, reply, getattr(message, "id", None))
-
-    def _handle_text_reply(self, message: Any) -> None:
-        text = message.text or ""
-        if not text:
-            return
-        reply_id = self._peek_id(text)
-        pending = self._pending.get(reply_id)
-        if pending is None:
-            log.warning("remote: text reply for unknown id=%s", reply_id)
-            return
-        try:
-            reply = decode_reply(text, pending.op)
-        except ProtocolError as e:
-            log.warning("remote: bad text reply id=%s: %s", reply_id, e)
-            return
-        self._resolve(pending, reply, getattr(message, "id", None))
+        self._resolve(pending, reply, message.message_id)
 
     @staticmethod
     def _peek_id(text: str) -> str:
-        data = json.loads(text)
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as e:
+            raise ProtocolError(f"malformed JSON: {e}") from e
         if not isinstance(data, dict) or "id" not in data:
             raise ProtocolError("reply missing 'id'")
         return str(data["id"])

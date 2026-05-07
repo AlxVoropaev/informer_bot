@@ -9,8 +9,7 @@ from telegram.ext import ContextTypes
 from processor_bot.config import Config
 from processor_bot.handlers import handle_request
 from shared.protocol import (
-    EMBED_REPLY_FILENAME,
-    EmbedReply,
+    REPLY_FILENAME,
     ErrorReply,
     ProtocolError,
     decode_request,
@@ -29,7 +28,13 @@ def make_handler_callback(
         update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
         message = update.effective_message
-        if message is None:
+        log.info(
+            "incoming: chat=%s user=%s msg=%s",
+            message.chat_id if message else None,
+            update.effective_user.id if update.effective_user else None,
+            message.message_id if message else None,
+        )
+        if message is None or message.document is None:
             return
         # Sender check is enforced by filters at registration; keep a defensive
         # log in case the handler is invoked outside the expected filter.
@@ -39,7 +44,14 @@ def make_handler_callback(
                 "drop: sender=%s not informer", sender.id if sender else None,
             )
             return
-        body = message.text or ""
+        try:
+            tg_file = await context.bot.get_file(message.document.file_id)
+            buf = BytesIO()
+            await tg_file.download_to_memory(out=buf)
+            body = buf.getvalue().decode("utf-8")
+        except Exception as e:
+            log.warning("download failed: %s", e)
+            return
         try:
             req = decode_request(body)
         except ProtocolError as e:
@@ -58,21 +70,14 @@ def make_handler_callback(
             reply = ErrorReply(id=req.id, error=str(e))
 
         encoded = encode_reply(reply)
-        if isinstance(reply, EmbedReply):
-            await context.bot.send_document(
-                chat_id=cfg.bus_group_id,
-                document=InputFile(
-                    BytesIO(encoded.encode("utf-8")),
-                    filename=EMBED_REPLY_FILENAME,
-                ),
-                reply_parameters=ReplyParameters(message_id=message.message_id),
-            )
-        else:
-            await context.bot.send_message(
-                chat_id=cfg.bus_group_id,
-                text=encoded,
-                reply_parameters=ReplyParameters(message_id=message.message_id),
-            )
+        await context.bot.send_document(
+            chat_id=cfg.bus_group_id,
+            document=InputFile(
+                BytesIO(encoded.encode("utf-8")),
+                filename=REPLY_FILENAME,
+            ),
+            reply_parameters=ReplyParameters(message_id=message.message_id),
+        )
         log.info("reply: op=%s id=%s", type(reply).__name__, reply.id)
 
     return _on_message
