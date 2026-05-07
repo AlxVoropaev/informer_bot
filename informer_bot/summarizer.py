@@ -23,6 +23,10 @@ FILTER_SYSTEM_PROMPT = (
 )
 FILTER_MAX_TOKENS = 4
 
+# Qwen3 directive: skip chain-of-thought reasoning. Without it the model can
+# spend its entire output budget on hidden thinking and return empty content.
+OLLAMA_NO_THINK = " /no_think"
+
 # Per-provider chat pricing in USD per 1M tokens (input, output).
 CHAT_PRICES_PER_MTOK: dict[str, tuple[float, float]] = {
     "anthropic": (1.00, 5.00),  # claude-haiku-4-5
@@ -165,7 +169,7 @@ async def summarize_ollama(
         max_tokens=MAX_TOKENS_OLLAMA,
         temperature=0,
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PROMPT + OLLAMA_NO_THINK},
             {"role": "user", "content": text},
         ],
     )
@@ -195,7 +199,7 @@ async def is_relevant_ollama(
         max_tokens=FILTER_MAX_TOKENS,
         temperature=0,
         messages=[
-            {"role": "system", "content": FILTER_SYSTEM_PROMPT},
+            {"role": "system", "content": FILTER_SYSTEM_PROMPT + OLLAMA_NO_THINK},
             {"role": "user", "content": user_content},
         ],
     )

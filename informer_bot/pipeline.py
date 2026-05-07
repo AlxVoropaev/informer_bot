@@ -118,6 +118,14 @@ async def handle_new_post(
         input_tokens=summary.input_tokens,
         output_tokens=summary.output_tokens,
     )
+    if not summary.text.strip():
+        log.warning(
+            "skip post %s/%s: empty summary (provider=%s in=%d out=%d) — "
+            "model produced no text",
+            channel_id, message_id, summary.provider,
+            summary.input_tokens, summary.output_tokens,
+        )
+        return
 
     emb: Embedding | None = None
     if embed_fn is not None:
