@@ -1,7 +1,15 @@
 import logging
 
 from openai import AsyncOpenAI
-from telegram.ext import AIORateLimiter, Application, MessageHandler, filters
+from telegram import Update
+from telegram.ext import (
+    AIORateLimiter,
+    Application,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 from processor_bot.bot import make_handler_callback
 from processor_bot.config import load_config
@@ -26,6 +34,13 @@ def main() -> None:
         )
         .build()
     )
+
+    async def _start(
+        update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        await update.effective_message.reply_text("Nobody home")
+
+    application.add_handler(CommandHandler("start", _start))
     callback = make_handler_callback(cfg=cfg, ollama_client=ollama_client)
     application.add_handler(
         MessageHandler(
