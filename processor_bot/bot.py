@@ -1,6 +1,7 @@
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from io import BytesIO
+from typing import Any
 
 from openai import APIConnectionError, AsyncOpenAI
 from telegram import InputFile, ReplyParameters, Update
@@ -25,7 +26,9 @@ from shared.protocol import (
 
 log = logging.getLogger(__name__)
 
-HandlerCallback = Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]
+HandlerCallback = Callable[
+    [Update, ContextTypes.DEFAULT_TYPE], Coroutine[Any, Any, None]
+]
 
 _LOG_TEXT_LIMIT = 500
 

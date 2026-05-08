@@ -38,7 +38,10 @@ def main() -> None:
     async def _start(
         update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
-        await update.effective_message.reply_text("Nobody home")
+        message = update.effective_message
+        if message is None:
+            return
+        await message.reply_text("Nobody home")
 
     application.add_handler(CommandHandler("start", _start))
     callback = make_handler_callback(cfg=cfg, ollama_client=ollama_client)
