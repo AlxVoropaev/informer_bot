@@ -1,3 +1,7 @@
+# TODO(security): pin to a sha256 digest for supply-chain integrity. Run:
+#   docker pull ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+#   docker inspect ghcr.io/astral-sh/uv:python3.12-bookworm-slim --format '{{.RepoDigests}}'
+# then replace the tag below with `...:python3.12-bookworm-slim@sha256:<digest>`.
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
 ARG UID

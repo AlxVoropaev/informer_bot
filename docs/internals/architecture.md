@@ -47,3 +47,17 @@ group"). See [processor-bot.md](../processor-bot.md).
   `docker-compose.yml`). Image is built as a non-root user matching host
   `HOST_UID`/`HOST_GID` so files written to `./data/` stay owned by you.
 - Tests: **pytest** + **pytest-asyncio**. TDD — failing test before code.
+
+## Operational notes
+
+- **SQLite journal mode.** The DB connection currently relies on the default
+  rollback journal (`DELETE`). With three async writers (pipeline, sweeper,
+  webapp) sharing one file, switching to `PRAGMA journal_mode=WAL` would
+  allow readers and writers to overlap. Not yet enabled — see
+  [todos.md](todos.md).
+- **Single event loop, two Telegram clients.** Telethon (user account,
+  ingest) and python-telegram-bot (bot account, DMs + Mini App) share one
+  asyncio loop. A burst of catch-up summaries can briefly delay bot command
+  handling. This is intentional: keeping one loop avoids cross-process
+  state and a second SQLite connection. Document the trade-off if scaling
+  past personal use.

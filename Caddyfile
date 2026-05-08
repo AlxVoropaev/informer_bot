@@ -1,3 +1,9 @@
 {$MINIAPP_DOMAIN}:9443 {
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Frame-Options "DENY"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "no-referrer"
+    }
     reverse_proxy bot:8085
 }

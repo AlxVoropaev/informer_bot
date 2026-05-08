@@ -65,17 +65,17 @@ need a domain pointing at this host's public IP and ports 80 + 443 open**
 2. **Add to `data/.env`:**
    ```
    MINIAPP_DOMAIN=informer-yourname.duckdns.org
-   MINIAPP_URL=https://informer-yourname.duckdns.org:8443
+   MINIAPP_URL=https://informer-yourname.duckdns.org:9443
    ```
-   The bundled compose.yaml serves HTTPS on **port 8443**, not 443, because
+   The bundled compose.yaml serves HTTPS on **port 9443**, not 443, because
    the host where this was first deployed already had MTProto VPN on 443.
    Telegram Mini Apps accept non-443 HTTPS URLs. If 443 is free on your
-   host, edit `Caddyfile` (drop the `:8443`) and `compose.yaml` (change
-   `8443:8443` to `443:443`), and remove the `:8443` from `MINIAPP_URL`.
+   host, edit `Caddyfile` (drop the `:9443`) and `compose.yaml` (change
+   `9443:9443` to `443:443`), and remove the `:9443` from `MINIAPP_URL`.
 
-3. **Open the firewall** for ports 80 and 8443:
+3. **Open the firewall** for ports 80 and 9443:
    ```sh
-   sudo ufw allow 80/tcp && sudo ufw allow 8443/tcp
+   sudo ufw allow 80/tcp && sudo ufw allow 9443/tcp
    ```
    (Plus your cloud provider's security group, if applicable.) Port 80 is
    still required for Let's Encrypt's HTTP-01 challenge.
