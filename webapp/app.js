@@ -402,7 +402,14 @@ function openSettings() {
   const promptSection = el("summary-prompt-section");
   if (state.isOwner) {
     promptSection.hidden = false;
-    el("summary-prompt-input").value = state.summaryPrompt == null ? "" : state.summaryPrompt;
+    const promptInput = el("summary-prompt-input");
+    if (state.summaryPrompt == null) {
+      promptInput.value = "";
+      promptInput.placeholder = state.summaryPromptDefault || "";
+    } else {
+      promptInput.value = state.summaryPrompt;
+      promptInput.placeholder = "";
+    }
   } else {
     promptSection.hidden = true;
   }
@@ -471,7 +478,14 @@ async function saveSummaryPrompt(prompt, resetDone) {
     });
     state.summaryPrompt = data.summary_prompt == null ? null : String(data.summary_prompt);
     state.summaryPromptDefault = data.summary_prompt_default == null ? null : String(data.summary_prompt_default);
-    el("summary-prompt-input").value = state.summaryPrompt == null ? "" : state.summaryPrompt;
+    const promptInput = el("summary-prompt-input");
+    if (state.summaryPrompt == null) {
+      promptInput.value = "";
+      promptInput.placeholder = state.summaryPromptDefault || "";
+    } else {
+      promptInput.value = state.summaryPrompt;
+      promptInput.placeholder = "";
+    }
     const dict = t();
     showToast(resetDone ? dict.summaryPromptResetDone : dict.summaryPromptSaved);
     if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
@@ -600,7 +614,7 @@ async function init() {
     saveSummaryPrompt(value || null, false);
   });
   el("summary-prompt-reset").addEventListener("click", () => {
-    el("summary-prompt-input").value = state.summaryPromptDefault == null ? "" : state.summaryPromptDefault;
+    el("summary-prompt-input").value = "";
     saveSummaryPrompt(null, true);
   });
 
