@@ -403,7 +403,7 @@ async def test_state_includes_summary_prompt_for_owner(
         "/api/state", headers={"X-Telegram-Init-Data": init_data}
     )
     body = await resp.json()
-    assert body["summary_prompt"] == SYSTEM_PROMPT
+    assert body["summary_prompt"] is None
     assert body["summary_prompt_default"] == SYSTEM_PROMPT
 
 
@@ -455,15 +455,14 @@ async def test_summary_prompt_set_then_reset(
     )
     assert resp.status == 200
     body = await resp.json()
-    assert body["summary_prompt"] == SYSTEM_PROMPT
+    assert body["summary_prompt"] is None
+    assert body["summary_prompt_default"] == SYSTEM_PROMPT
     assert db.get_meta("summary_prompt") == ""
 
 
 async def test_summary_prompt_empty_resets(
     client: TestClient, db: Database
 ) -> None:
-    from informer_bot.summarizer import SYSTEM_PROMPT
-
     db.set_meta("summary_prompt", "CUSTOM")
     headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
     resp = await client.post(
@@ -471,7 +470,7 @@ async def test_summary_prompt_empty_resets(
     )
     assert resp.status == 200
     body = await resp.json()
-    assert body["summary_prompt"] == SYSTEM_PROMPT
+    assert body["summary_prompt"] is None
     assert db.get_meta("summary_prompt") == ""
 
 
@@ -512,3 +511,70 @@ async def test_auto_delete_rejects_bad_values(
     resp = await client.post("/api/auto_delete", headers=headers, json={"hours": bad})
     assert resp.status == 400
     assert (await resp.json())["error"] == "bad_hours"
+
+
+async def test_summary_prompt_too_long_rejected(
+    client: TestClient, db: Database
+) -> None:
+    db.set_meta("summary_prompt", "PRIOR")
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+    resp = await client.post(
+        "/api/summary_prompt", headers=headers, json={"prompt": "x" * 5000}
+    )
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "prompt_too_long"
+    assert db.get_meta("summary_prompt") == "PRIOR"
+
+
+async def test_state_returns_null_summary_prompt_for_owner_when_unset(
+    client: TestClient, db: Database
+) -> None:
+    from informer_bot.summarizer import SYSTEM_PROMPT
+
+    init_data = _make_init_data(user_id=OWNER_ID)
+    resp = await client.get(
+        "/api/state", headers={"X-Telegram-Init-Data": init_data}
+    )
+    body = await resp.json()
+    assert body["summary_prompt"] is None
+    assert body["summary_prompt_default"] == SYSTEM_PROMPT
+
+
+async def test_summary_prompt_returns_null_after_reset(
+    client: TestClient, db: Database
+) -> None:
+    db.set_meta("summary_prompt", "CUSTOM")
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+    resp = await client.post(
+        "/api/summary_prompt", headers=headers, json={"prompt": None}
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["summary_prompt"] is None
+    assert db.get_meta("summary_prompt") == ""
+
+
+async def test_subscription_rejects_non_numeric_channel_id(
+    client: TestClient,
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)}
+    resp = await client.post(
+        "/api/subscription",
+        headers=headers,
+        json={"channel_id": "abc", "mode": "all"},
+    )
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "bad_channel_id"
+
+
+async def test_filter_rejects_non_numeric_channel_id(
+    client: TestClient,
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)}
+    resp = await client.post(
+        "/api/filter",
+        headers=headers,
+        json={"channel_id": "abc", "filter_prompt": "x"},
+    )
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "bad_channel_id"

@@ -27,6 +27,7 @@ from informer_bot.summarizer import (
 log = logging.getLogger(__name__)
 
 _INITDATA_MAX_AGE = 24 * 3600  # reject initData older than 24h
+_SUMMARY_PROMPT_MAX_LEN = 4096
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "webapp"
 
 # Per-user token bucket: 30 requests / 60s sliding window.
@@ -145,7 +146,7 @@ async def _state(request: web.Request) -> web.Response:
     }
     if user_id == owner_id:
         custom = db.get_meta("summary_prompt") or ""
-        payload["summary_prompt"] = custom or SYSTEM_PROMPT
+        payload["summary_prompt"] = custom or None
         payload["summary_prompt_default"] = SYSTEM_PROMPT
     return web.json_response(payload)
 
@@ -176,7 +177,10 @@ async def _subscription(request: web.Request) -> web.Response:
     db = request.app[DB_KEY]
     user_id: int = request["user_id"]
     body = await request.json()
-    channel_id = int(body["channel_id"])
+    try:
+        channel_id = int(body["channel_id"])
+    except (KeyError, TypeError, ValueError):
+        return web.json_response({"error": "bad_channel_id"}, status=400)
     mode = body["mode"]
     if mode not in ("off", "filtered", "debug", "all", "unsubscribe"):
         return web.json_response({"error": "bad_mode"}, status=400)
@@ -194,7 +198,10 @@ async def _filter(request: web.Request) -> web.Response:
     db = request.app[DB_KEY]
     user_id: int = request["user_id"]
     body = await request.json()
-    channel_id = int(body["channel_id"])
+    try:
+        channel_id = int(body["channel_id"])
+    except (KeyError, TypeError, ValueError):
+        return web.json_response({"error": "bad_channel_id"}, status=400)
     prompt = body.get("filter_prompt")
     if prompt is not None:
         prompt = str(prompt).strip() or None
@@ -320,6 +327,8 @@ async def _summary_prompt(request: web.Request) -> web.Response:
     body = await request.json()
     raw = body.get("prompt")
     prompt = (str(raw).strip() if raw is not None else "")
+    if len(prompt) > _SUMMARY_PROMPT_MAX_LEN:
+        return web.json_response({"error": "prompt_too_long"}, status=400)
     db.set_meta("summary_prompt", prompt)
     log.info(
         "miniapp: owner=%s summary_prompt %s",
@@ -327,7 +336,7 @@ async def _summary_prompt(request: web.Request) -> web.Response:
     )
     return web.json_response({
         "ok": True,
-        "summary_prompt": prompt or SYSTEM_PROMPT,
+        "summary_prompt": prompt or None,
         "summary_prompt_default": SYSTEM_PROMPT,
     })
 
@@ -345,7 +354,10 @@ async def _language(request: web.Request) -> web.Response:
 
 
 def build_app(*, db: Database, bot_token: str, owner_id: int) -> web.Application:
-    app = web.Application(middlewares=[_auth_middleware])
+    app = web.Application(
+        middlewares=[_auth_middleware],
+        client_max_size=128 * 1024,
+    )
     app[DB_KEY] = db
     app[BOT_TOKEN_KEY] = bot_token
     app[OWNER_ID_KEY] = owner_id

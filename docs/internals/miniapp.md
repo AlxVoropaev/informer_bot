@@ -17,14 +17,14 @@ checked against `users.status='approved'`.
 
 ## Endpoints
 
-- `GET /api/state` → `{user_id, language, is_owner, auto_delete_hours, dedup_debug, channels: [...]}` — owner payload also includes `summary_prompt` (currently effective) and `summary_prompt_default` (the hardcoded default).
+- `GET /api/state` → `{user_id, language, is_owner, auto_delete_hours, dedup_debug, channels: [...]}` — owner payload also includes `summary_prompt` (the saved custom override, or `null` when no override is active and the hardcoded default is in use) and `summary_prompt_default` (the hardcoded default).
 - `POST /api/subscription` `{channel_id, mode}` (`mode` ∈ `off|filtered|debug|all|unsubscribe`)
 - `POST /api/filter` `{channel_id, filter_prompt}` (null/empty clears)
 - `POST /api/language` `{language}`
 - `POST /api/auto_delete` `{hours}` — integer 1..720 enables, `null`/`0`/`""` disables
 - `POST /api/dedup_debug` `{enabled}` — user-level toggle for the dedup-debug delivery path (see [behaviour.md](behaviour.md) and [dedup.md](dedup.md))
 - `GET /api/usage` → `{is_owner, user: {input_tokens, output_tokens, cost_usd}}` — owner payload also includes `per_user[]`, `system`, `embeddings`.
-- `POST /api/summary_prompt` `{prompt}` — owner-only (non-owners get 403 `not_owner`). Saves a custom system prompt for post summarization. `null`/missing/empty/whitespace resets to the hardcoded default. Returns `{ok, summary_prompt, summary_prompt_default}`. The custom prompt is stored in the `meta` table under `summary_prompt` and applied to every summarize backend (Anthropic, Ollama, remote processor) via the `SummarizeRequest.system_prompt` field.
+- `POST /api/summary_prompt` `{prompt}` — owner-only (non-owners get 403 `not_owner`). Saves a custom system prompt for post summarization. `null`/missing/empty/whitespace resets to the hardcoded default. Prompts longer than 4096 characters are rejected with 400 `prompt_too_long`. Returns `{ok, summary_prompt, summary_prompt_default}` where `summary_prompt` is `null` when no override is active. The custom prompt is stored in the `meta` table under `summary_prompt` and applied to every summarize backend (Anthropic, Ollama, remote processor) via the `SummarizeRequest.system_prompt` field.
 
 ## Deep-linking
 
