@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from informer_bot.db import Database, format_user_label
+from informer_bot.modes import SubscriptionMode
 
 
 @pytest.fixture
@@ -51,28 +52,28 @@ def test_subscribe_is_idempotent(db: Database) -> None:
     db.subscribe(user_id=42, channel_id=1)
 
     assert db.is_subscribed(user_id=42, channel_id=1) is True
-    assert db.list_user_subscription_modes(user_id=42) == {1: "filtered"}
+    assert db.list_user_subscription_modes(user_id=42) == {1: SubscriptionMode.FILTERED}
 
 
 def test_subscribe_default_mode_is_filtered(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="A")
     db.subscribe(user_id=42, channel_id=1)
 
-    assert db.get_subscription_mode(user_id=42, channel_id=1) == "filtered"
+    assert db.get_subscription_mode(user_id=42, channel_id=1) == SubscriptionMode.FILTERED
 
 
 def test_subscribe_with_mode_all(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="A")
-    db.subscribe(user_id=42, channel_id=1, mode="all")
+    db.subscribe(user_id=42, channel_id=1, mode=SubscriptionMode.ALL)
 
-    assert db.get_subscription_mode(user_id=42, channel_id=1) == "all"
+    assert db.get_subscription_mode(user_id=42, channel_id=1) == SubscriptionMode.ALL
 
 
 def test_subscribe_with_mode_debug(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="A")
-    db.subscribe(user_id=42, channel_id=1, mode="debug")
+    db.subscribe(user_id=42, channel_id=1, mode=SubscriptionMode.DEBUG)
 
-    assert db.get_subscription_mode(user_id=42, channel_id=1) == "debug"
+    assert db.get_subscription_mode(user_id=42, channel_id=1) == SubscriptionMode.DEBUG
 
 
 def test_dedup_debug_default_false(db: Database) -> None:
@@ -96,10 +97,10 @@ def test_set_dedup_debug_toggles(db: Database) -> None:
 
 def test_subscribe_updates_existing_mode(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="A")
-    db.subscribe(user_id=42, channel_id=1, mode="filtered")
-    db.subscribe(user_id=42, channel_id=1, mode="all")
+    db.subscribe(user_id=42, channel_id=1, mode=SubscriptionMode.FILTERED)
+    db.subscribe(user_id=42, channel_id=1, mode=SubscriptionMode.ALL)
 
-    assert db.get_subscription_mode(user_id=42, channel_id=1) == "all"
+    assert db.get_subscription_mode(user_id=42, channel_id=1) == SubscriptionMode.ALL
 
 
 def test_get_subscription_mode_returns_none_when_not_subscribed(db: Database) -> None:
@@ -120,12 +121,15 @@ def test_unsubscribe(db: Database) -> None:
 def test_subscribers_for_channel_skips_blacklisted_channel(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="Open")
     db.upsert_channel(channel_id=2, title="Banned")
-    db.subscribe(user_id=10, channel_id=1, mode="all")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     db.subscribe(user_id=10, channel_id=2)
     db.subscribe(user_id=20, channel_id=1)
     db.set_blacklisted(channel_id=2, blacklisted=True)
 
-    assert sorted(db.subscribers_for_channel(channel_id=1)) == [(10, "all"), (20, "filtered")]
+    assert sorted(db.subscribers_for_channel(channel_id=1)) == [
+        (10, SubscriptionMode.ALL),
+        (20, SubscriptionMode.FILTERED),
+    ]
     assert db.subscribers_for_channel(channel_id=2) == []
 
 
@@ -159,9 +163,9 @@ def test_channels_with_active_subscribers_excludes_off_and_blacklisted(db: Datab
     db.upsert_channel(channel_id=2, title="Off")
     db.upsert_channel(channel_id=3, title="Banned")
     db.upsert_channel(channel_id=4, title="NoSubs")
-    db.subscribe(user_id=10, channel_id=1, mode="filtered")
-    db.subscribe(user_id=10, channel_id=2, mode="off")
-    db.subscribe(user_id=10, channel_id=3, mode="all")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.FILTERED)
+    db.subscribe(user_id=10, channel_id=2, mode=SubscriptionMode.OFF)
+    db.subscribe(user_id=10, channel_id=3, mode=SubscriptionMode.ALL)
     db.set_blacklisted(channel_id=3, blacklisted=True)
 
     assert db.channels_with_active_subscribers() == [1]
@@ -169,8 +173,8 @@ def test_channels_with_active_subscribers_excludes_off_and_blacklisted(db: Datab
 
 def test_channels_with_active_subscribers_dedupes_across_users(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="Shared")
-    db.subscribe(user_id=10, channel_id=1, mode="all")
-    db.subscribe(user_id=20, channel_id=1, mode="filtered")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
+    db.subscribe(user_id=20, channel_id=1, mode=SubscriptionMode.FILTERED)
 
     assert db.channels_with_active_subscribers() == [1]
 
@@ -210,7 +214,7 @@ def test_delete_channel_removes_channel_and_subscriptions(db: Database) -> None:
     db.delete_channel(channel_id=1)
 
     assert [c.id for c in db.list_channels(include_blacklisted=True)] == [2]
-    assert db.list_user_subscription_modes(user_id=10) == {2: "filtered"}
+    assert db.list_user_subscription_modes(user_id=10) == {2: SubscriptionMode.FILTERED}
     assert db.list_user_subscription_modes(user_id=20) == {}
 
 
@@ -370,15 +374,15 @@ def test_set_channel_filter_creates_off_subscription_if_missing(db: Database) ->
     db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="only AI")
 
     assert db.get_channel_filter(user_id=10, channel_id=1) == "only AI"
-    assert db.get_subscription_mode(user_id=10, channel_id=1) == "off"
+    assert db.get_subscription_mode(user_id=10, channel_id=1) == SubscriptionMode.OFF
 
 
 def test_set_channel_filter_preserves_existing_mode(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="A")
-    db.subscribe(user_id=10, channel_id=1, mode="all")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="x")
 
-    assert db.get_subscription_mode(user_id=10, channel_id=1) == "all"
+    assert db.get_subscription_mode(user_id=10, channel_id=1) == SubscriptionMode.ALL
 
 
 def test_filter_per_channel_is_isolated(db: Database) -> None:
@@ -395,23 +399,23 @@ def test_filter_per_channel_is_isolated(db: Database) -> None:
 
 def test_subscribers_for_channel_skips_off_mode(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="A")
-    db.subscribe(user_id=10, channel_id=1, mode="filtered")
-    db.subscribe(user_id=20, channel_id=1, mode="off")
-    db.subscribe(user_id=30, channel_id=1, mode="all")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.FILTERED)
+    db.subscribe(user_id=20, channel_id=1, mode=SubscriptionMode.OFF)
+    db.subscribe(user_id=30, channel_id=1, mode=SubscriptionMode.ALL)
 
     subs = sorted(db.subscribers_for_channel(channel_id=1))
-    assert subs == [(10, "filtered"), (30, "all")]
+    assert subs == [(10, SubscriptionMode.FILTERED), (30, SubscriptionMode.ALL)]
 
 
 def test_off_mode_preserves_filter_prompt(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="A")
-    db.subscribe(user_id=10, channel_id=1, mode="filtered")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.FILTERED)
     db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="keep me")
-    db.subscribe(user_id=10, channel_id=1, mode="off")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.OFF)
 
     assert db.get_channel_filter(user_id=10, channel_id=1) == "keep me"
 
-    db.subscribe(user_id=10, channel_id=1, mode="filtered")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.FILTERED)
     assert db.get_channel_filter(user_id=10, channel_id=1) == "keep me"
 
 

@@ -9,6 +9,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from informer_bot.modes import SubscriptionMode
+
 log = logging.getLogger(__name__)
 
 
@@ -364,7 +366,12 @@ class Database:
                 for r in self._conn.execute(sql)
             ]
 
-    def subscribe(self, user_id: int, channel_id: int, mode: str = "filtered") -> None:
+    def subscribe(
+        self,
+        user_id: int,
+        channel_id: int,
+        mode: SubscriptionMode | str = SubscriptionMode.FILTERED,
+    ) -> None:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO subscriptions (user_id, channel_id, mode) VALUES (?, ?, ?) "

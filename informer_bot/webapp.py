@@ -18,6 +18,7 @@ from aiohttp import web
 
 from informer_bot.db import Database, format_user_label
 from informer_bot.i18n import LANGUAGES
+from informer_bot.modes import SubscriptionMode
 from informer_bot.summarizer import (
     SYSTEM_PROMPT,
     estimate_cost_usd,
@@ -125,7 +126,7 @@ def _channel_payload(db: Database, user_id: int) -> list[dict]:
             "username": c.username,
             "about": c.about,
             "blacklisted": c.blacklisted,
-            "mode": modes.get(c.id) or "off",
+            "mode": modes.get(c.id) or SubscriptionMode.OFF,
             "filter_prompt": filters.get(c.id),
         }
         for c in db.list_channels(include_blacklisted=False)
@@ -182,14 +183,14 @@ async def _subscription(request: web.Request) -> web.Response:
     except (KeyError, TypeError, ValueError):
         return web.json_response({"error": "bad_channel_id"}, status=400)
     mode = body["mode"]
-    if mode not in ("off", "filtered", "debug", "all", "unsubscribe"):
+    if mode not in SubscriptionMode:
         return web.json_response({"error": "bad_mode"}, status=400)
     if db.get_channel(channel_id) is None:
         return web.json_response({"error": "no_channel"}, status=404)
-    if mode == "unsubscribe":
+    if mode == SubscriptionMode.UNSUBSCRIBE:
         db.unsubscribe(user_id, channel_id)
     else:
-        db.subscribe(user_id, channel_id, mode=mode)
+        db.subscribe(user_id, channel_id, mode=SubscriptionMode(mode))
     log.info("miniapp: user=%s channel=%s mode -> %s", user_id, channel_id, mode)
     return web.json_response({"ok": True, "channels": _channel_payload(db, user_id)})
 
@@ -209,8 +210,8 @@ async def _filter(request: web.Request) -> web.Response:
         return web.json_response({"error": "no_channel"}, status=404)
     current_mode = db.get_subscription_mode(user_id, channel_id)
     db.set_channel_filter(user_id=user_id, channel_id=channel_id, filter_prompt=prompt)
-    if prompt is not None and current_mode in (None, "off"):
-        db.subscribe(user_id, channel_id, mode="filtered")
+    if prompt is not None and current_mode in (None, SubscriptionMode.OFF):
+        db.subscribe(user_id, channel_id, mode=SubscriptionMode.FILTERED)
     log.info(
         "miniapp: user=%s channel=%s filter %s",
         user_id, channel_id, "set" if prompt else "cleared",

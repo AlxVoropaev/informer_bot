@@ -7,6 +7,7 @@ from typing import Protocol
 from informer_bot.db import Database
 from informer_bot.dedup import find_duplicate
 from informer_bot.i18n import t
+from informer_bot.modes import SubscriptionMode
 from informer_bot.remote_processor import RemoteProcessorError, RemoteProcessorTimeout
 from informer_bot.summarizer import Embedding, RelevanceCheck, Summary
 
@@ -133,7 +134,7 @@ async def handle_new_post(
 
     recipients: list[tuple[int, str, bool]] = []
     for user_id, mode in subscribers:
-        if mode == "all":
+        if mode == SubscriptionMode.ALL:
             recipients.append((user_id, mode, False))
             continue
         filter_prompt = db.get_channel_filter(user_id=user_id, channel_id=channel_id)
@@ -154,7 +155,7 @@ async def handle_new_post(
         )
         if check.relevant:
             recipients.append((user_id, mode, False))
-        elif mode == "debug":
+        elif mode == SubscriptionMode.DEBUG:
             recipients.append((user_id, mode, True))
         else:
             log.info("filter excluded user=%s for post %s/%s", user_id, channel_id, message_id)

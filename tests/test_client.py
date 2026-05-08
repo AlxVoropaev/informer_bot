@@ -13,6 +13,7 @@ from informer_bot.client import (
     register_new_post_handler,
 )
 from informer_bot.db import Database
+from informer_bot.modes import SubscriptionMode
 
 
 class _AsyncIter:
@@ -53,7 +54,7 @@ def db(tmp_path: Path) -> Database:
 
 async def test_catch_up_skips_channels_with_no_prior_seen(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="A")
-    db.subscribe(user_id=10, channel_id=1, mode="all")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     tg = MagicMock()
     tg.get_entity = AsyncMock()
     tg.iter_messages = MagicMock()
@@ -68,7 +69,7 @@ async def test_catch_up_skips_channels_with_no_prior_seen(db: Database) -> None:
 
 async def test_catch_up_replays_posts_newer_than_max_seen(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="A")
-    db.subscribe(user_id=10, channel_id=1, mode="all")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     db.mark_seen(channel_id=1, message_id=100)
     now = 1_000_000
     messages = [
@@ -96,7 +97,7 @@ async def test_catch_up_replays_posts_newer_than_max_seen(db: Database) -> None:
 
 async def test_catch_up_drops_posts_outside_window(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="A")
-    db.subscribe(user_id=10, channel_id=1, mode="all")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     db.mark_seen(channel_id=1, message_id=100)
     now = 1_000_000
     window = 48 * 3600
@@ -119,8 +120,8 @@ async def test_catch_up_drops_posts_outside_window(db: Database) -> None:
 async def test_catch_up_skips_off_and_blacklisted(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="Off")
     db.upsert_channel(channel_id=2, title="Banned")
-    db.subscribe(user_id=10, channel_id=1, mode="off")
-    db.subscribe(user_id=10, channel_id=2, mode="all")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.OFF)
+    db.subscribe(user_id=10, channel_id=2, mode=SubscriptionMode.ALL)
     db.set_blacklisted(channel_id=2, blacklisted=True)
     db.mark_seen(channel_id=1, message_id=50)
     db.mark_seen(channel_id=2, message_id=50)
@@ -139,8 +140,8 @@ async def test_catch_up_skips_off_and_blacklisted(db: Database) -> None:
 async def test_catch_up_continues_after_get_entity_raises(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="Bad")
     db.upsert_channel(channel_id=2, title="Good")
-    db.subscribe(user_id=10, channel_id=1, mode="all")
-    db.subscribe(user_id=10, channel_id=2, mode="all")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
+    db.subscribe(user_id=10, channel_id=2, mode=SubscriptionMode.ALL)
     db.mark_seen(channel_id=1, message_id=50)
     db.mark_seen(channel_id=2, message_id=50)
     now = 1_000_000
@@ -167,7 +168,7 @@ async def test_catch_up_continues_after_get_entity_raises(db: Database) -> None:
 
 async def test_catch_up_skips_non_broadcast_entity(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="A")
-    db.subscribe(user_id=10, channel_id=1, mode="all")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     db.mark_seen(channel_id=1, message_id=50)
 
     private = MagicMock(spec=Channel)
@@ -189,7 +190,7 @@ async def test_catch_up_skips_non_broadcast_entity(db: Database) -> None:
 
 async def test_catch_up_skips_entity_without_username(db: Database) -> None:
     db.upsert_channel(channel_id=1, title="A")
-    db.subscribe(user_id=10, channel_id=1, mode="all")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     db.mark_seen(channel_id=1, message_id=50)
 
     private = MagicMock(spec=Channel)

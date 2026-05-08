@@ -6,7 +6,8 @@
   are nullable; `upsert_channel` uses `COALESCE(excluded.x, channels.x)` so
   callers passing only `(id, title)` preserve any existing username/about.
 - `subscriptions(user_id, channel_id, mode, filter_prompt)` —
-  `mode IN ('off','filtered','debug','all')`. `'off'` rows are kept (instead
+  `mode IN ('off','filtered','debug','all')` (mirrored in code by the
+  `informer_bot.modes.SubscriptionMode` `StrEnum`). `'off'` rows are kept (instead
   of being deleted on toggle-off) so the per-channel `filter_prompt` survives
   a temporary disable. `'debug'` is the **filter-debug** mode: it delivers
   every post but prefixes a localized marker (i18n key

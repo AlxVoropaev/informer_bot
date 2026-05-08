@@ -18,6 +18,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from informer_bot import webapp
 from informer_bot.db import Database
+from informer_bot.modes import SubscriptionMode
 from informer_bot.webapp import build_app
 
 BOT_TOKEN = "123456:test-bot-token"
@@ -159,7 +160,7 @@ async def test_pending_user_blocked_on_every_endpoint(
     sub_resp = await client.post(
         "/api/subscription",
         headers=headers,
-        json={"channel_id": 1, "mode": "all"},
+        json={"channel_id": 1, "mode": SubscriptionMode.ALL},
     )
     assert sub_resp.status == 403
 
@@ -230,12 +231,12 @@ async def test_usage_for_non_owner_omits_admin_keys(
 async def test_subscription_unsubscribe_deletes_row(
     client: TestClient, db: Database
 ) -> None:
-    db.subscribe(user_id=USER_ID, channel_id=1, mode="all")
+    db.subscribe(user_id=USER_ID, channel_id=1, mode=SubscriptionMode.ALL)
     init_data = _make_init_data(user_id=USER_ID)
     resp = await client.post(
         "/api/subscription",
         headers={"X-Telegram-Init-Data": init_data},
-        json={"channel_id": 1, "mode": "unsubscribe"},
+        json={"channel_id": 1, "mode": SubscriptionMode.UNSUBSCRIBE},
     )
     assert resp.status == 200
     assert db.is_subscribed(user_id=USER_ID, channel_id=1) is False
@@ -247,7 +248,7 @@ async def test_subscription_unsubscribe_deletes_row(
 async def test_filter_null_clears_existing_prompt(
     client: TestClient, db: Database
 ) -> None:
-    db.subscribe(user_id=USER_ID, channel_id=1, mode="filtered")
+    db.subscribe(user_id=USER_ID, channel_id=1, mode=SubscriptionMode.FILTERED)
     db.set_channel_filter(
         user_id=USER_ID, channel_id=1, filter_prompt="only AI"
     )
@@ -260,7 +261,7 @@ async def test_filter_null_clears_existing_prompt(
     assert resp.status == 200
     assert db.get_channel_filter(user_id=USER_ID, channel_id=1) is None
     # mode must NOT auto-bump when clearing.
-    assert db.get_subscription_mode(user_id=USER_ID, channel_id=1) == "filtered"
+    assert db.get_subscription_mode(user_id=USER_ID, channel_id=1) == SubscriptionMode.FILTERED
 
 
 async def test_filter_on_off_row_auto_bumps_to_filtered(
@@ -275,14 +276,14 @@ async def test_filter_on_off_row_auto_bumps_to_filtered(
         json={"channel_id": 1, "filter_prompt": "only AI"},
     )
     assert resp.status == 200
-    assert db.get_subscription_mode(user_id=USER_ID, channel_id=1) == "filtered"
+    assert db.get_subscription_mode(user_id=USER_ID, channel_id=1) == SubscriptionMode.FILTERED
     assert db.get_channel_filter(user_id=USER_ID, channel_id=1) == "only AI"
 
 
 async def test_filter_on_off_explicit_row_auto_bumps_to_filtered(
     client: TestClient, db: Database
 ) -> None:
-    db.subscribe(user_id=USER_ID, channel_id=1, mode="off")
+    db.subscribe(user_id=USER_ID, channel_id=1, mode=SubscriptionMode.OFF)
     init_data = _make_init_data(user_id=USER_ID)
     resp = await client.post(
         "/api/filter",
@@ -290,7 +291,7 @@ async def test_filter_on_off_explicit_row_auto_bumps_to_filtered(
         json={"channel_id": 1, "filter_prompt": "only AI"},
     )
     assert resp.status == 200
-    assert db.get_subscription_mode(user_id=USER_ID, channel_id=1) == "filtered"
+    assert db.get_subscription_mode(user_id=USER_ID, channel_id=1) == SubscriptionMode.FILTERED
 
 
 # ---------- rate limit (S2) ----------
@@ -561,7 +562,7 @@ async def test_subscription_rejects_non_numeric_channel_id(
     resp = await client.post(
         "/api/subscription",
         headers=headers,
-        json={"channel_id": "abc", "mode": "all"},
+        json={"channel_id": "abc", "mode": SubscriptionMode.ALL},
     )
     assert resp.status == 400
     assert (await resp.json())["error"] == "bad_channel_id"
