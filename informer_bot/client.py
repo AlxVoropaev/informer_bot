@@ -7,6 +7,7 @@ from telethon.tl.types import Channel
 
 from informer_bot.album import AlbumBuffer
 from informer_bot.db import Database
+from informer_bot.throttle import cheap_limiter, expensive_limiter
 
 log = logging.getLogger(__name__)
 
@@ -19,7 +20,8 @@ async def fetch_subscribed_channels(
         entity = dialog.entity
         if isinstance(entity, Channel) and entity.broadcast and entity.username:
             try:
-                full = await tg(GetFullChannelRequest(entity))
+                async with expensive_limiter:
+                    full = await tg(GetFullChannelRequest(entity))
                 about = full.full_chat.about or None
             except Exception:
                 log.exception("fetch about failed for channel=%s", entity.id)
@@ -37,7 +39,8 @@ async def _download_photo(message) -> bytes | None:
     if not getattr(message, "photo", None):
         return None
     try:
-        return await message.download_media(file=bytes)
+        async with cheap_limiter:
+            return await message.download_media(file=bytes)
     except Exception:
         log.exception("photo download failed for msg=%s", getattr(message, "id", "?"))
         return None
@@ -67,7 +70,8 @@ async def catch_up(
             log.debug("catch_up: channel=%s has no prior seen history, skip", channel_id)
             continue
         try:
-            entity = await tg.get_entity(channel_id)
+            async with expensive_limiter:
+                entity = await tg.get_entity(channel_id)
         except Exception:
             log.exception("catch_up: get_entity failed for channel=%s", channel_id)
             continue
@@ -76,7 +80,10 @@ async def catch_up(
             continue
 
         n = 0
-        async for message in tg.iter_messages(entity, min_id=max_id, reverse=True):
+        # Acquire once before the paginating async generator starts.
+        async with cheap_limiter:
+            iterator = tg.iter_messages(entity, min_id=max_id, reverse=True)
+        async for message in iterator:
             if message.date is not None and message.date.timestamp() < cutoff_ts:
                 continue
             photo = await _download_photo(message)

@@ -10,6 +10,7 @@ from urllib.parse import quote
 from openai import AsyncOpenAI
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, WebAppInfo
 from telegram.ext import (
+    AIORateLimiter,
     Application,
     ApplicationBuilder,
     CallbackQueryHandler,
@@ -343,7 +344,7 @@ async def main() -> None:
         raise SystemExit("No Telethon session. Run: uv run python login.py")
     log.info("telethon authorized")
 
-    app = ApplicationBuilder().token(cfg.telegram_bot_token).build()
+    app = ApplicationBuilder().token(cfg.telegram_bot_token).rate_limiter(AIORateLimiter()).build()
     for handler in (
         CommandHandler("start", cmd_start),
         CommandHandler("help", cmd_help),
