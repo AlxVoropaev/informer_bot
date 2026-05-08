@@ -5,7 +5,11 @@ import pytest
 
 from informer_bot.db import Database
 from informer_bot.modes import SubscriptionMode
-from informer_bot.pipeline import handle_new_post, refresh_channels
+from informer_bot.pipeline import (
+    handle_new_post,
+    prune_orphan_channels,
+    refresh_channels,
+)
 from informer_bot.remote_processor import RemoteProcessorError
 from informer_bot.summarizer import Embedding, RelevanceCheck, Summary
 
@@ -828,6 +832,47 @@ async def test_refresh_union_visibility_across_providers(db: Database) -> None:
 
     visible_after = {c.id for c in db.list_visible_channels()}
     assert visible_after == {10, 20, 30}  # Y still visible (A has it)
+
+
+# ---------- prune_orphan_channels ----------
+
+
+async def test_prune_orphan_channels_deletes_orphans_and_dms_subscribers(
+    db: Database,
+) -> None:
+    _seed_provider(db, 1)
+    db.upsert_channel(channel_id=10, title="Kept")
+    db.upsert_channel(channel_id=20, title="Orphan")
+    db.set_provider_channels(provider_user_id=1, channel_ids={10})
+    db.subscribe(user_id=100, channel_id=20)
+    db.subscribe(user_id=200, channel_id=20)
+    send_dm = _send_dm()
+
+    removed, notified = await prune_orphan_channels(db=db, send_dm=send_dm)
+
+    assert (removed, notified) == (1, 2)
+    assert {c.id for c in db.list_channels(include_blacklisted=True)} == {10}
+    assert send_dm.await_count == 2
+    notified_users = {c.args[0] for c in send_dm.await_args_list}
+    assert notified_users == {100, 200}
+    for call in send_dm.await_args_list:
+        _user_id, text = call.args
+        assert "Orphan" in text and "no longer available" in text.lower()
+
+
+async def test_prune_orphan_channels_noop_when_all_have_providers(
+    db: Database,
+) -> None:
+    _seed_provider(db, 1)
+    db.upsert_channel(channel_id=10, title="Kept")
+    db.set_provider_channels(provider_user_id=1, channel_ids={10})
+    send_dm = _send_dm()
+
+    removed, notified = await prune_orphan_channels(db=db, send_dm=send_dm)
+
+    assert (removed, notified) == (0, 0)
+    send_dm.assert_not_called()
+    assert {c.id for c in db.list_channels(include_blacklisted=True)} == {10}
 
 
 # ---------- dedup ----------

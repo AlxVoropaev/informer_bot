@@ -1014,6 +1014,12 @@ async def test_revoke_provider_removes_provider_and_session_file(
     session_file.write_text("dummy")
     db.add_pending_provider(user_id=USER_ID, session_path=str(session_file))
     db.set_provider_status(user_id=USER_ID, status="approved")
+    # USER_ID is the SOLE provider of channel 100; revocation should orphan it.
+    db.upsert_channel(channel_id=100, title="OnlyVia42")
+    db.set_provider_channels(provider_user_id=USER_ID, channel_ids={100})
+    SUBSCRIBER_ID = 7777
+    db.set_user_status(user_id=SUBSCRIBER_ID, status="approved")
+    db.subscribe(user_id=SUBSCRIBER_ID, channel_id=100)
     ctx = _ctx(db)
     update = _msg_update(OWNER_ID, text=f"/revoke_provider {USER_ID}")
 
@@ -1026,6 +1032,13 @@ async def test_revoke_provider_removes_provider_and_session_file(
     update.message.reply_text.assert_awaited_once()
     owner_text = update.message.reply_text.await_args.args[0].lower()
     assert "revoked" in owner_text
+    # Orphan pruning kicked in: channel 100 is gone and the subscriber got DM'd.
+    assert db.get_channel(100) is None
+    state_send_dm = ctx.bot_data["state"].send_dm
+    state_send_dm.assert_awaited_once()
+    dm_user_id, dm_text = state_send_dm.await_args.args
+    assert dm_user_id == SUBSCRIBER_ID
+    assert "OnlyVia42" in dm_text and "no longer available" in dm_text.lower()
 
 
 async def test_revoke_provider_handles_missing_session_file(

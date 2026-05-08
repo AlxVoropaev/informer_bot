@@ -318,6 +318,30 @@ async def handle_new_post(
         )
 
 
+async def prune_orphan_channels(
+    *, db: Database, send_dm: SendDmFn,
+) -> tuple[int, int]:
+    """Delete channels with no remaining provider; DM their subscribers.
+
+    Returns ``(removed_count, notified_count)``.
+    """
+    orphan_ids = db.channels_with_no_provider()
+    removed = 0
+    notified = 0
+    for channel_id in orphan_ids:
+        title = db.get_channel_title(channel_id) or ""
+        subs = db.subscribers_for_channel(channel_id=channel_id)
+        for user_id, _mode in subs:
+            lang = db.get_language(user_id)
+            await send_dm(
+                user_id, t(lang, "channel_gone", title=title),
+            )
+        notified += len(subs)
+        db.delete_channel(channel_id=channel_id)
+        removed += 1
+    return removed, notified
+
+
 async def refresh_channels(
     *,
     fetch_fn_for: FetchChannelsForFn,
@@ -368,20 +392,7 @@ async def refresh_channels(
 
     # Orphans: channels left with no provider after every provider's set
     # was replaced.
-    orphan_ids = db.channels_with_no_provider()
-    removed = 0
-    notified = 0
-    for channel_id in orphan_ids:
-        title = db.get_channel_title(channel_id) or ""
-        subs = db.subscribers_for_channel(channel_id=channel_id)
-        for user_id, _mode in subs:
-            lang = db.get_language(user_id)
-            await send_dm(
-                user_id, t(lang, "channel_gone", title=title),
-            )
-        notified += len(subs)
-        db.delete_channel(channel_id=channel_id)
-        removed += 1
+    removed, notified = await prune_orphan_channels(db=db, send_dm=send_dm)
 
     announced = 0
     if announce_new_channel is not None and known_before_ids:

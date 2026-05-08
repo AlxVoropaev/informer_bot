@@ -20,6 +20,7 @@ from informer_bot.pipeline import (
     AnnounceNewChannelFn,
     FetchChannelsForFn,
     SendDmFn,
+    prune_orphan_channels,
     refresh_channels,
 )
 from informer_bot.summarizer import estimate_cost_usd, estimate_embedding_cost_usd
@@ -679,9 +680,7 @@ async def cmd_revoke_provider(
             provider.session_path, target_id,
         )
 
-    # TODO(integration): once Subagent B lands `pipeline.prune_orphan_channels`,
-    # call it here to drop channels that no remaining approved provider sees
-    # and to DM affected subscribers.
+    await prune_orphan_channels(db=db, send_dm=_state(context).send_dm)
 
     target_lang = db.get_language(target_id)
     try:
