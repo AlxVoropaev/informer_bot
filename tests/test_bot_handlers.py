@@ -7,8 +7,10 @@ import pytest
 from informer_bot.bot import (
     BotState,
     cmd_app,
+    cmd_become_provider,
     cmd_blacklist,
     cmd_help,
+    cmd_revoke_provider,
     cmd_start,
     cmd_update,
     cmd_usage,
@@ -18,6 +20,8 @@ from informer_bot.bot import (
     on_blacklist_page,
     on_deny,
     on_noop,
+    on_provider_approve,
+    on_provider_deny,
 )
 from informer_bot.db import Database
 
@@ -783,3 +787,258 @@ async def test_sweep_due_keeps_row_when_telegram_delete_fails(
     assert db.get_delivered_save_state(
         user_id=USER_ID, channel_id=1, message_id=201,
     ) is not None
+
+
+# ---------- /become_provider ----------
+
+async def test_become_provider_blocks_non_approved_user(db: Database) -> None:
+    new_user = 555
+    update = _msg_update(new_user)
+
+    await cmd_become_provider(update, _ctx(db))
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "not allowed" in text
+    assert db.get_provider(new_user) is None
+
+
+async def test_become_provider_owner_already_message(db: Database) -> None:
+    update = _msg_update(OWNER_ID)
+    ctx = _ctx(db)
+
+    await cmd_become_provider(update, ctx)
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "primary provider" in text or "already" in text
+    ctx.bot.send_message.assert_not_called()
+
+
+async def test_become_provider_creates_pending_and_dms_owner(db: Database) -> None:
+    ctx = _ctx(db)
+    update = _msg_update(USER_ID, username="bob")
+
+    await cmd_become_provider(update, ctx)
+
+    provider = db.get_provider(USER_ID)
+    assert provider is not None
+    assert provider.status == "pending"
+    assert provider.session_path == f"data/sessions/{USER_ID}.session"
+
+    ctx.bot.send_message.assert_awaited_once()
+    admin_call = ctx.bot.send_message.await_args
+    assert admin_call.kwargs["chat_id"] == OWNER_ID
+    rows = [
+        [(b.text, b.callback_data) for b in row]
+        for row in admin_call.kwargs["reply_markup"].inline_keyboard
+    ]
+    flat = [btn for row in rows for btn in row]
+    assert any(data == f"provider_approve:{USER_ID}" for _, data in flat)
+    assert any(data == f"provider_deny:{USER_ID}" for _, data in flat)
+
+    update.message.reply_text.assert_awaited_once()
+    user_text = update.message.reply_text.await_args.args[0].lower()
+    assert "submitted" in user_text or "request" in user_text
+
+
+async def test_become_provider_already_pending(db: Database) -> None:
+    db.add_pending_provider(user_id=USER_ID, session_path=f"data/sessions/{USER_ID}.session")
+    ctx = _ctx(db)
+    update = _msg_update(USER_ID)
+
+    await cmd_become_provider(update, ctx)
+
+    ctx.bot.send_message.assert_not_called()
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "pending" in text
+
+
+async def test_become_provider_already_approved(db: Database) -> None:
+    db.add_pending_provider(user_id=USER_ID, session_path=f"data/sessions/{USER_ID}.session")
+    db.set_provider_status(user_id=USER_ID, status="approved")
+    ctx = _ctx(db)
+    update = _msg_update(USER_ID)
+
+    await cmd_become_provider(update, ctx)
+
+    ctx.bot.send_message.assert_not_called()
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "approved" in text
+
+
+async def test_become_provider_previously_denied(db: Database) -> None:
+    db.add_pending_provider(user_id=USER_ID, session_path=f"data/sessions/{USER_ID}.session")
+    db.set_provider_status(user_id=USER_ID, status="denied")
+    ctx = _ctx(db)
+    update = _msg_update(USER_ID)
+
+    await cmd_become_provider(update, ctx)
+
+    ctx.bot.send_message.assert_not_called()
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "denied" in text
+    # Status must remain denied (no auto-resubmit).
+    assert db.get_provider(USER_ID).status == "denied"
+
+
+# ---------- provider approve / deny callbacks ----------
+
+async def test_on_provider_approve_sets_status_and_dms_target(db: Database) -> None:
+    db.add_pending_provider(
+        user_id=USER_ID, session_path=f"data/sessions/{USER_ID}.session",
+    )
+    ctx = _ctx(db)
+    upd = _cb_update(OWNER_ID, f"provider_approve:{USER_ID}")
+
+    await on_provider_approve(upd, ctx)
+
+    provider = db.get_provider(USER_ID)
+    assert provider is not None
+    assert provider.status == "approved"
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_text.assert_awaited()
+    ctx.bot.send_message.assert_awaited_once()
+    assert ctx.bot.send_message.await_args.kwargs["chat_id"] == USER_ID
+    text = ctx.bot.send_message.await_args.kwargs["text"].lower()
+    assert "login cli" in text or "approved" in text
+
+
+async def test_on_provider_deny_sets_status_and_dms_target(db: Database) -> None:
+    db.add_pending_provider(
+        user_id=USER_ID, session_path=f"data/sessions/{USER_ID}.session",
+    )
+    ctx = _ctx(db)
+    upd = _cb_update(OWNER_ID, f"provider_deny:{USER_ID}")
+
+    await on_provider_deny(upd, ctx)
+
+    provider = db.get_provider(USER_ID)
+    assert provider is not None
+    assert provider.status == "denied"
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_text.assert_awaited()
+    ctx.bot.send_message.assert_awaited_once()
+    assert ctx.bot.send_message.await_args.kwargs["chat_id"] == USER_ID
+
+
+async def test_on_provider_approve_denies_non_owner(db: Database) -> None:
+    db.add_pending_provider(
+        user_id=USER_ID, session_path=f"data/sessions/{USER_ID}.session",
+    )
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, f"provider_approve:{USER_ID}")
+
+    await on_provider_approve(upd, ctx)
+
+    assert db.get_provider(USER_ID).status == "pending"
+    ctx.bot.send_message.assert_not_called()
+    upd.callback_query.edit_message_text.assert_not_awaited()
+
+
+async def test_on_provider_deny_denies_non_owner(db: Database) -> None:
+    db.add_pending_provider(
+        user_id=USER_ID, session_path=f"data/sessions/{USER_ID}.session",
+    )
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, f"provider_deny:{USER_ID}")
+
+    await on_provider_deny(upd, ctx)
+
+    assert db.get_provider(USER_ID).status == "pending"
+    ctx.bot.send_message.assert_not_called()
+
+
+# ---------- /revoke_provider ----------
+
+async def test_revoke_provider_denies_non_owner(db: Database) -> None:
+    update = _msg_update(USER_ID, text=f"/revoke_provider {USER_ID}")
+    ctx = _ctx(db)
+
+    await cmd_revoke_provider(update, ctx)
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "not allowed" in text or "denied" in text
+    ctx.bot.send_message.assert_not_called()
+
+
+async def test_revoke_provider_invalid_id(db: Database) -> None:
+    update = _msg_update(OWNER_ID, text="/revoke_provider notanint")
+
+    await cmd_revoke_provider(update, _ctx(db))
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "usage" in text
+
+
+async def test_revoke_provider_no_arg(db: Database) -> None:
+    update = _msg_update(OWNER_ID, text="/revoke_provider")
+
+    await cmd_revoke_provider(update, _ctx(db))
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "usage" in text
+
+
+async def test_revoke_provider_refuses_owner(db: Database) -> None:
+    update = _msg_update(OWNER_ID, text=f"/revoke_provider {OWNER_ID}")
+
+    await cmd_revoke_provider(update, _ctx(db))
+
+    assert db.get_provider(OWNER_ID) is not None
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "primary" in text or "cannot" in text
+
+
+async def test_revoke_provider_unknown_user(db: Database) -> None:
+    update = _msg_update(OWNER_ID, text="/revoke_provider 12345")
+
+    await cmd_revoke_provider(update, _ctx(db))
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0].lower()
+    assert "not a provider" in text
+
+
+async def test_revoke_provider_removes_provider_and_session_file(
+    db: Database, tmp_path: Path,
+) -> None:
+    session_file = tmp_path / f"{USER_ID}.session"
+    session_file.write_text("dummy")
+    db.add_pending_provider(user_id=USER_ID, session_path=str(session_file))
+    db.set_provider_status(user_id=USER_ID, status="approved")
+    ctx = _ctx(db)
+    update = _msg_update(OWNER_ID, text=f"/revoke_provider {USER_ID}")
+
+    await cmd_revoke_provider(update, ctx)
+
+    assert db.get_provider(USER_ID) is None
+    assert not session_file.exists()
+    ctx.bot.send_message.assert_awaited_once()
+    assert ctx.bot.send_message.await_args.kwargs["chat_id"] == USER_ID
+    update.message.reply_text.assert_awaited_once()
+    owner_text = update.message.reply_text.await_args.args[0].lower()
+    assert "revoked" in owner_text
+
+
+async def test_revoke_provider_handles_missing_session_file(
+    db: Database, tmp_path: Path,
+) -> None:
+    missing = tmp_path / f"{USER_ID}.session"
+    db.add_pending_provider(user_id=USER_ID, session_path=str(missing))
+    db.set_provider_status(user_id=USER_ID, status="approved")
+    ctx = _ctx(db)
+    update = _msg_update(OWNER_ID, text=f"/revoke_provider {USER_ID}")
+
+    await cmd_revoke_provider(update, ctx)
+
+    assert db.get_provider(USER_ID) is None
+    ctx.bot.send_message.assert_awaited_once()
+    update.message.reply_text.assert_awaited_once()

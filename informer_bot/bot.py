@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 from dataclasses import dataclass
 
@@ -512,3 +513,185 @@ async def on_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "save toggle: edit failed user=%s msg=%s", user_id, bot_message_id,
         )
     await query.answer()
+
+
+# ---------- providers ----------
+
+async def cmd_become_provider(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    db = _db(context)
+    user_id = _user(update).id
+    message = _message(update)
+    lang = db.get_language(user_id)
+    log.debug("/become_provider from user=%s", user_id)
+
+    if db.get_user_status(user_id) != "approved":
+        await message.reply_text(t(lang, "denied"))
+        return
+
+    if user_id == _owner_id(context):
+        await message.reply_text(t(lang, "provider_owner_already"))
+        return
+
+    existing = db.get_provider(user_id)
+    if existing is not None:
+        if existing.status == "pending":
+            await message.reply_text(t(lang, "provider_already_pending"))
+            return
+        if existing.status == "approved":
+            await message.reply_text(t(lang, "provider_already_approved"))
+            return
+        if existing.status == "denied":
+            await message.reply_text(t(lang, "provider_request_denied"))
+            return
+
+    session_path = f"data/sessions/{user_id}.session"
+    db.add_pending_provider(user_id=user_id, session_path=session_path)
+    log.info("provider request from user=%s", user_id)
+
+    owner_id = _owner_id(context)
+    owner_lang = db.get_language(owner_id)
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            text=t(owner_lang, "provider_approve_button"),
+            callback_data=f"provider_approve:{user_id}",
+        ),
+        InlineKeyboardButton(
+            text=t(owner_lang, "provider_deny_button"),
+            callback_data=f"provider_deny:{user_id}",
+        ),
+    ]])
+    await context.bot.send_message(
+        chat_id=owner_id,
+        text=t(
+            owner_lang, "provider_request_admin",
+            user_label=db.get_user_label(user_id),
+        ),
+        reply_markup=keyboard,
+    )
+    await message.reply_text(t(lang, "provider_request_submitted"))
+
+
+async def on_provider_approve(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    db = _db(context)
+    actor_id = _user(update).id
+    query = _query(update)
+    actor_lang = db.get_language(actor_id)
+    if actor_id != _owner_id(context):
+        log.info("provider approve denied for user=%s", actor_id)
+        await query.answer(t(actor_lang, "denied"))
+        return
+
+    assert isinstance(query.data, str)
+    target_id = int(query.data.split(":", 1)[1])
+    db.set_provider_status(user_id=target_id, status="approved")
+    log.info("provider user=%s approved by owner", target_id)
+
+    await query.answer()
+    await query.edit_message_text(t(
+        actor_lang, "provider_approved_owner",
+        user_label=db.get_user_label(target_id),
+    ))
+    target_lang = db.get_language(target_id)
+    await context.bot.send_message(
+        chat_id=target_id, text=t(target_lang, "provider_approved_user"),
+    )
+
+
+async def on_provider_deny(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    db = _db(context)
+    actor_id = _user(update).id
+    query = _query(update)
+    actor_lang = db.get_language(actor_id)
+    if actor_id != _owner_id(context):
+        log.info("provider deny denied for user=%s", actor_id)
+        await query.answer(t(actor_lang, "denied"))
+        return
+
+    assert isinstance(query.data, str)
+    target_id = int(query.data.split(":", 1)[1])
+    db.set_provider_status(user_id=target_id, status="denied")
+    log.info("provider user=%s denied by owner", target_id)
+
+    await query.answer()
+    await query.edit_message_text(t(
+        actor_lang, "provider_denied_owner",
+        user_label=db.get_user_label(target_id),
+    ))
+    target_lang = db.get_language(target_id)
+    await context.bot.send_message(
+        chat_id=target_id, text=t(target_lang, "provider_denied_user"),
+    )
+
+
+async def cmd_revoke_provider(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    db = _db(context)
+    actor_id = _user(update).id
+    message = _message(update)
+    lang = db.get_language(actor_id)
+    if actor_id != _owner_id(context):
+        log.info("/revoke_provider denied for user=%s", actor_id)
+        await message.reply_text(t(lang, "denied"))
+        return
+
+    parts = (message.text or "").split()
+    if len(parts) != 2:
+        await message.reply_text(t(lang, "revoke_invalid_id"))
+        return
+    try:
+        target_id = int(parts[1])
+    except ValueError:
+        await message.reply_text(t(lang, "revoke_invalid_id"))
+        return
+
+    if target_id == _owner_id(context):
+        await message.reply_text(t(lang, "revoke_cannot_revoke_owner"))
+        return
+
+    provider = db.get_provider(target_id)
+    if provider is None:
+        await message.reply_text(t(lang, "revoke_not_a_provider"))
+        return
+
+    target_label = db.get_user_label(target_id)
+    db.delete_provider(target_id)
+    try:
+        os.unlink(provider.session_path)
+        log.info(
+            "revoked provider user=%s, removed session %s",
+            target_id, provider.session_path,
+        )
+    except FileNotFoundError:
+        log.info(
+            "revoked provider user=%s, session file %s was already gone",
+            target_id, provider.session_path,
+        )
+    except OSError:
+        log.exception(
+            "revoke_provider: failed to remove session %s for user=%s",
+            provider.session_path, target_id,
+        )
+
+    # TODO(integration): once Subagent B lands `pipeline.prune_orphan_channels`,
+    # call it here to drop channels that no remaining approved provider sees
+    # and to DM affected subscribers.
+
+    target_lang = db.get_language(target_id)
+    try:
+        await context.bot.send_message(
+            chat_id=target_id, text=t(target_lang, "provider_revoked_user"),
+        )
+    except Exception:
+        log.exception(
+            "revoke_provider: failed to DM revoked user=%s", target_id,
+        )
+    await message.reply_text(t(
+        lang, "provider_revoked_owner", user_label=target_label,
+    ))

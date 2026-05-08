@@ -23,8 +23,10 @@ from informer_bot.bot import (
     BotState,
     build_dm_keyboard,
     cmd_app,
+    cmd_become_provider,
     cmd_blacklist,
     cmd_help,
+    cmd_revoke_provider,
     cmd_start,
     cmd_update,
     cmd_usage,
@@ -34,6 +36,8 @@ from informer_bot.bot import (
     on_blacklist_page,
     on_deny,
     on_noop,
+    on_provider_approve,
+    on_provider_deny,
     on_save,
 )
 from informer_bot.client import (
@@ -353,6 +357,10 @@ async def main() -> None:
         CallbackQueryHandler(on_approve, pattern=r"^approve:"),
         CallbackQueryHandler(on_deny, pattern=r"^deny:"),
         CallbackQueryHandler(on_save, pattern=r"^save$"),
+        CommandHandler("become_provider", cmd_become_provider),
+        CommandHandler("revoke_provider", cmd_revoke_provider),
+        CallbackQueryHandler(on_provider_approve, pattern=r"^provider_approve:"),
+        CallbackQueryHandler(on_provider_deny, pattern=r"^provider_deny:"),
     ):
         app.add_handler(handler)
 
