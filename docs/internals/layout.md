@@ -12,7 +12,9 @@ informer_bot/
 │   ├── .env.example     # template — copy to data/.env and fill in
 │   ├── .env             # secrets (gitignored)
 │   ├── informer.db      # sqlite (created on first run)
-│   └── informer.session # telethon session (created by login.py, chmod 600)
+│   ├── informer.session # owner's telethon session (created by login.py, chmod 600)
+│   └── sessions/        # extra providers' sessions, dir chmod 700, files chmod 600
+│       └── <user_id>.session  # one per approved non-owner provider (created by cli_login)
 ├── informer_bot/
 │   ├── config.py            # loads .env, exposes typed settings
 │   ├── db.py                # sqlite schema + queries (sync, single-file)
@@ -20,6 +22,8 @@ informer_bot/
 │   ├── summarizer.py        # claude summarize/is_relevant + openai embed_summary + cost estimates
 │   ├── dedup.py             # cosine similarity + find_duplicate(per-user, time-windowed)
 │   ├── client.py            # telethon: list channels, NewMessage handler
+│   ├── provider_clients.py  # multi-session orchestrator: one TelegramClient per approved provider; injects the source-dedup claim into each NewMessage handler
+│   ├── cli_login.py         # interactive Telethon session bootstrap CLI for new providers (`uv run python -m informer_bot.cli_login --user-id <id>`)
 │   ├── album.py             # buffer-and-flush coalescer for multi-photo albums
 │   ├── pipeline.py          # handle_new_post + refresh_channels glue
 │   ├── bot.py               # ptb handlers: commands, inline keyboards, callbacks

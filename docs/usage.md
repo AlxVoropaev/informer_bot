@@ -6,6 +6,8 @@
 2. You pick which of those channels you want to follow.
 3. When a new post lands in a channel you follow, the bot DMs you a one-sentence summary in the post's original language. The channel's name is shown as a clickable link to the original post, and if the post had a photo (or for albums, the first photo) it's attached.
 
+Channel content can come from multiple providers; the admin approves new requests via an inline keyboard or the Mini App's pending list. The owner runs `python -m informer_bot.cli_login --user-id <id>` to bootstrap a new provider's Telethon session.
+
 ## Commands
 
 Channel selection, filters, and language all live in the **Mini App** —
@@ -30,14 +32,15 @@ Telegram commands (small surface — everything else is in the Mini App):
 - `/start` — request access. New users wait for the admin to approve.
 - `/app` — replies with a button that opens the Mini App.
 - `/usage` — your token usage and estimated cost (also in the Mini App).
+- `/become_provider` — request provider role so your subscribed channels feed the bot. The admin approves.
 - `/help` — list available commands.
 
 ### Admin commands
 
 If you're the bot's `OWNER_ID`, you also get:
 
-- `/blacklist` — toggle channels on/off the public list (channels you've subscribed to but don't want to expose to bot users).
 - `/update` — refresh the channel list from your Telegram subscriptions (run after subscribing to or leaving a channel).
+- `/revoke_provider <user_id>` — hard-remove a provider: deletes their Telethon session file and any channels no other provider supplies.
 - New `/start` requests come to you as an inline Allow / Deny prompt.
 
 ## What you'll receive

@@ -7,8 +7,8 @@ brief plus a link to the original.
 
 ## How it works
 
-1. The admin subscribes their account to public channels.
-2. You pick which of those channels you want to follow.
+1. One or more **providers** (the admin is provider #1; other Telegram users can request to become providers and the admin approves) subscribe their accounts to public channels.
+2. You pick which of those channels — the union of every approved provider's subscriptions, minus each provider's personal blacklist — you want to follow.
 3. When a new post lands in a channel you follow, the bot DMs you a one-sentence summary in the post's original language. The channel's name is shown as a clickable link to the original post, and if the post had a photo (or for albums, the first photo) it's attached.
 
 ## Commands
@@ -35,15 +35,16 @@ Telegram commands (small surface — everything else is in the Mini App):
 - `/start` — request access. New users wait for the admin to approve.
 - `/app` — replies with a button that opens the Mini App.
 - `/usage` — your token usage and estimated cost (also in the Mini App).
+- `/become_provider` — ask the admin to let you contribute channels from your own Telegram account. Same as the "Request to be a provider" pill in the Mini App. Approved providers can hide individual channels via the Mini App's per-channel blacklist toggle.
 - `/help` — list available commands.
 
 ### Admin commands
 
 If you're the bot's `OWNER_ID`, you also get:
 
-- `/blacklist` — toggle channels on/off the public list (channels you've subscribed to but don't want to expose to bot users).
-- `/update` — refresh the channel list from your Telegram subscriptions (run after subscribing to or leaving a channel).
-- New `/start` requests come to you as an inline Allow / Deny prompt.
+- `/update` — refresh the channel list from every approved provider's Telegram subscriptions (run after a provider subscribes to or leaves a channel).
+- `/revoke_provider <user_id>` — remove a provider; their session file and per-provider data are deleted, and any channel that no longer has a contributing provider is dropped.
+- New `/start` requests come to you as an inline Allow / Deny prompt; new `/become_provider` requests come the same way.
 
 ## What you'll receive
 
@@ -56,9 +57,9 @@ If you're the bot's `OWNER_ID`, you also get:
 
 ## Notes
 
-- If a channel disappears from the Mini App, the admin either unsubscribed from it or blacklisted it. You'll get a one-time DM saying it's no longer available.
-- When the admin adds a new channel, you'll get a DM with a button that opens the Mini App straight to that channel's details — pick a mode there.
-- Only the admin can add or remove channels from the list — there's no way to request new ones through the bot.
+- If a channel disappears from the Mini App, every contributing provider has either unsubscribed from it or blacklisted it. You'll get a one-time DM saying it's no longer available.
+- When a provider adds a new channel, you'll get a DM with a button that opens the Mini App straight to that channel's details — pick a mode there.
+- Only approved providers can add channels to the list. Anyone can apply via `/become_provider`; the admin decides.
 
 ## Documentation
 

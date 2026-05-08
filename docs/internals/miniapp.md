@@ -1,9 +1,11 @@
 # Mini App (primary user surface)
 
-The Mini App is the only place regular users manage subscriptions, filters, or
-language — there are no `/list` or `/language` Telegram commands. The bot
-keeps `/start`, `/app`, `/help`, `/usage` for users, plus admin `/blacklist`
-and `/update`. `/help` tells users to open the Mini App for everything else.
+The Mini App is the only place regular users manage subscriptions, filters,
+language, or (for approved providers) personal channel blacklists — there are
+no `/list`, `/language`, or `/blacklist` Telegram commands. The bot keeps
+`/start`, `/app`, `/help`, `/usage`, `/become_provider` for users, plus admin
+`/update` and `/revoke_provider`. `/help` tells users to open the Mini App for
+everything else.
 
 When `MINIAPP_URL` is set, `main.py` boots an **aiohttp** server alongside the
 PTB application (same asyncio loop, same SQLite, no separate process). The
@@ -17,12 +19,14 @@ checked against `users.status='approved'`.
 
 ## Endpoints
 
-- `GET /api/state` → `{user_id, language, is_owner, auto_delete_hours, dedup_debug, channels: [...]}` — owner payload also includes `summary_prompt` (the saved custom override, or `null` when no override is active and the hardcoded default is in use) and `summary_prompt_default` (the hardcoded default).
+- `GET /api/state` → `{user_id, language, is_owner, auto_delete_hours, dedup_debug, is_provider, provider_status, channels: [...]}` — owner payload also includes `summary_prompt` (the saved custom override, or `null` when no override is active and the hardcoded default is in use) and `summary_prompt_default` (the hardcoded default). Approved providers (owner included) additionally get `provider_blacklist` (array of channel ids the caller has personally blacklisted) and `provider_channels` (array of channel ids the caller's user-account is currently contributing). Each entry in `channels` no longer has a per-row `blacklisted` field — frontend cross-references the top-level `provider_blacklist` instead.
 - `POST /api/subscription` `{channel_id, mode}` (`mode` ∈ `off|filtered|debug|all|unsubscribe`)
 - `POST /api/filter` `{channel_id, filter_prompt}` (null/empty clears)
 - `POST /api/language` `{language}`
 - `POST /api/auto_delete` `{hours}` — integer 1..720 enables, `null`/`0`/`""` disables
 - `POST /api/dedup_debug` `{enabled}` — user-level toggle for the dedup-debug delivery path (see [behaviour.md](behaviour.md) and [dedup.md](dedup.md))
+- `POST /api/become_provider` `{}` → `{ok, status}` on success or `{ok: false, reason}`. `reason` ∈ `owner` (caller is already the owner), `already_pending`, `already_approved`, `denied`. Mirrors the `/become_provider` Telegram command and DMs the owner an Allow/Deny inline keyboard for fresh requests.
+- `POST /api/blacklist` `{channel_id, blacklisted}` → caller-as-provider blacklist toggle. `{ok, blacklist}` (200) on success; `{error: "not_provider"}` (403) when the caller isn't an approved provider; `{error: "channel_not_owned_by_provider"}` (400) when the channel isn't in the caller's `provider_channels`. `prune_orphan_channels` is invoked defensively after a successful toggle.
 - `GET /api/usage` → `{is_owner, user: {input_tokens, output_tokens, cost_usd}}` — owner payload also includes `per_user[]`, `system`, `embeddings`.
 - `POST /api/summary_prompt` `{prompt}` — owner-only (non-owners get 403 `not_owner`). Saves a custom system prompt for post summarization. `null`/missing/empty/whitespace resets to the hardcoded default. Prompts longer than 4096 characters are rejected with 400 `prompt_too_long`. Returns `{ok, summary_prompt, summary_prompt_default}` where `summary_prompt` is `null` when no override is active. The custom prompt is stored in the `meta` table under `summary_prompt` and applied to every summarize backend (Anthropic, Ollama, remote processor) via the `SummarizeRequest.system_prompt` field.
 

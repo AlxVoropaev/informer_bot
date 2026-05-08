@@ -2,13 +2,16 @@
 
 ## What this is
 
-Telegram news aggregator. A Telethon **user-account client** (the admin's account) reads
-posts from public channels the admin is subscribed to. A python-telegram-bot **bot**
-exposes those channels to bot users; when a bot user has a channel enabled and a new
-post lands, Claude summarises it and the bot DMs the user a 1–2-sentence brief plus a
-link to the original.
+Telegram news aggregator. One Telethon **user-account client per approved provider**
+(the admin is provider #1) reads posts from public channels each provider is subscribed
+to. A python-telegram-bot **bot** exposes the union of those channels to bot users;
+when a bot user has a channel enabled and a new post lands, Claude summarises it and
+the bot DMs the user a 1–2-sentence brief plus a link to the original.
 
-One Python process runs both the client and the bot inside a single asyncio loop.
+Multiple providers each contribute their own subscribed channels; bot users see the
+union (minus each provider's personal blacklist).
+
+One Python process runs every provider client plus the bot inside a single asyncio loop.
 
 A second process (`processor_bot`) is optional: when running local Ollama on a
 private GPU machine that the informer host cannot reach over the network, set
@@ -18,10 +21,13 @@ group"). See [processor-bot.md](../processor-bot.md).
 
 ## Roles
 
-- **Admin** (single, hard-coded `OWNER_ID`): owns the user-account session, owns the
-  source-of-truth channel list, can blacklist channels.
-- **Bot users** (many): subscribe via the bot, toggle channels on/off from the admin's
-  (post-blacklist) list, receive DMs.
+- **Admin / Owner** (single, hard-coded `OWNER_ID`): approves provider requests, runs
+  `/update` and `/revoke_provider`, runs the `informer-bot-login` CLI to bootstrap each
+  new provider's session.
+- **Providers** (≥1, owner is provider #1): each contributes channels from their own
+  Telegram user-account; each has a personal blacklist edited via the Mini App.
+- **Bot users** (many): subscribe via the bot, toggle channels in the Mini App, receive
+  DMs.
 
 ## Stack
 
@@ -38,9 +44,11 @@ group"). See [processor-bot.md](../processor-bot.md).
   (paid) or **Ollama** (`qwen3-embedding:4b` @ 1024 dims, local, no API cost)
   when `EMBEDDING_PROVIDER=ollama`. `EMBEDDING_PROVIDER=remote` routes through
   `processor_bot` with `EMBEDDING_PROVIDER_FALLBACK` as the safety net.
-- Storage: **SQLite** (single file, `data/informer.db`) + Telethon
-  `data/informer.session` file. The `data/` directory holds all mutable state
-  and is bind-mounted into the Docker container.
+- Storage: **SQLite** (single file, `data/informer.db`) + Telethon session files
+  (`data/informer.session` for the owner; `data/sessions/<user_id>.session` for each
+  additional approved provider, bootstrapped via the `informer-bot-login` CLI). The
+  `data/` directory holds all mutable state and is bind-mounted into the Docker
+  container.
 - Config: **`.env`** (lives in `data/.env`) loaded via `python-dotenv`. Never
   commit `.env` or `*.session`.
 - Container: **Dockerfile** + **compose.yaml** (`compose.yaml` not the legacy

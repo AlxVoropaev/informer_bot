@@ -39,3 +39,13 @@ INFORMER_BOT_USER_ID=...   # numeric Telegram user id of the informer bot (sende
 processor_bot uses the Telegram Bot HTTP API only — it does **not**
 need `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` (those remain required
 for the informer's Telethon client).
+
+## Runtime filesystem under `data/`
+
+- `data/informer.db` — SQLite database.
+- `data/informer.session` — owner's Telethon session (mode `0o600`,
+  created by `login.py`).
+- `data/sessions/` — per-provider Telethon sessions for additional approved
+  providers (directory mode `0o700`; each `<user_id>.session` file mode
+  `0o600`). Created and permissions-pinned by
+  `uv run python -m informer_bot.cli_login --user-id <id>`.
