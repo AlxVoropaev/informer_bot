@@ -122,6 +122,13 @@ CREATE TABLE IF NOT EXISTS channel_blacklist (
     FOREIGN KEY (provider_user_id) REFERENCES providers(user_id) ON DELETE CASCADE,
     FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS provider_channels (
+    provider_user_id INTEGER NOT NULL,
+    channel_id       INTEGER NOT NULL,
+    PRIMARY KEY (provider_user_id, channel_id),
+    FOREIGN KEY (provider_user_id) REFERENCES providers(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
+);
 """
 
 
@@ -213,6 +220,11 @@ _MIGRATIONS: list[str] = [
     # _migrate(); this migration needs runtime values (env, epoch) so it
     # cannot be a static string.
     "__PROGRAMMATIC_MULTI_PROVIDER__",
+    # 12 -> 13: provider_channels — explicit provider→channel mapping. The
+    # `_SCHEMA` block above creates the table via IF NOT EXISTS, so this
+    # migration only needs to seed it: every existing `channels` row was
+    # owner-contributed under the old single-provider model.
+    "__PROGRAMMATIC_PROVIDER_CHANNELS_SEED__",
 ]
 
 
@@ -322,6 +334,23 @@ class Database:
         # `channel_blacklist` always exist here because `_SCHEMA` ran first
         # via `IF NOT EXISTS`, so they're not a useful probe.)
         if "blacklisted" in channels:
+            return len(_MIGRATIONS) - 2
+        # Version 12 had the multi-provider tables but no `provider_channels`.
+        # Probe legacy DBs by checking whether `provider_channels` had any
+        # rows seeded for the owner — fresh DBs won't get here because
+        # `meta.schema_version` is set explicitly.
+        pc_seeded = self._conn.execute(
+            "SELECT 1 FROM provider_channels LIMIT 1"
+        ).fetchone()
+        owner_row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = 'owner_id'"
+        ).fetchone()
+        chan_row = self._conn.execute(
+            "SELECT 1 FROM channels LIMIT 1"
+        ).fetchone()
+        # If we have channels and an owner but provider_channels is empty,
+        # the seed migration hasn't run.
+        if owner_row is not None and chan_row is not None and pc_seeded is None:
             return len(_MIGRATIONS) - 1
         return len(_MIGRATIONS)
 
@@ -335,6 +364,8 @@ class Database:
             sql = _MIGRATIONS[i]
             if sql == "__PROGRAMMATIC_MULTI_PROVIDER__":
                 self._migrate_multi_provider()
+            elif sql == "__PROGRAMMATIC_PROVIDER_CHANNELS_SEED__":
+                self._migrate_provider_channels_seed()
             else:
                 self._conn.executescript(sql)
         if version < len(_MIGRATIONS) or row is None:
@@ -414,6 +445,28 @@ class Database:
             (str(owner_id),),
         )
         self._owner_id_cached = owner_id
+
+    def _migrate_provider_channels_seed(self) -> None:
+        """Migration 12 -> 13.
+
+        Seed `provider_channels` with `(owner_id, channel_id)` for every
+        existing channel — under the legacy single-provider model the owner
+        was the source of every channel in `channels`. The table itself is
+        created by `_SCHEMA` (with IF NOT EXISTS).
+        """
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = 'owner_id'"
+        ).fetchone()
+        if row is None:
+            # No owner means there's nothing to seed (e.g. fresh DB before
+            # the multi-provider migration ran). Skip silently.
+            return
+        owner_id = int(row[0])
+        self._conn.execute(
+            "INSERT OR IGNORE INTO provider_channels (provider_user_id, channel_id) "
+            "SELECT ?, id FROM channels",
+            (owner_id,),
+        )
 
     def _owner_id(self) -> int | None:
         """Return the legacy 'owner' provider id from `meta.owner_id` or None.
@@ -1232,25 +1285,23 @@ class Database:
 
     def list_visible_channels(self) -> list[Channel]:
         """Return channels visible to bot users — i.e. channels that at least
-        one approved provider has NOT blacklisted. Returns an empty list when
-        no providers are approved (no source = nothing visible).
-
-        TODO(subagent B): once `provider_channels` exists, join on it so we
-        only consider providers that actually subscribe to each channel.
+        one approved provider subscribes to and has NOT blacklisted. Returns
+        an empty list when no providers contribute the channel.
         """
         with self._lock:
-            approved = self._conn.execute(
-                "SELECT 1 FROM providers WHERE status = 'approved' LIMIT 1"
-            ).fetchone()
-            if approved is None:
-                return []
             rows = self._conn.execute(
                 "SELECT c.id, c.title, c.username, c.about FROM channels c "
-                "WHERE EXISTS (SELECT 1 FROM providers p "
-                "              WHERE p.status = 'approved' "
-                "                AND NOT EXISTS (SELECT 1 FROM channel_blacklist b "
-                "                                WHERE b.provider_user_id = p.user_id "
-                "                                  AND b.channel_id = c.id)) "
+                "WHERE EXISTS ("
+                "  SELECT 1 FROM provider_channels pc "
+                "  JOIN providers p ON p.user_id = pc.provider_user_id "
+                "  WHERE pc.channel_id = c.id "
+                "    AND p.status = 'approved' "
+                "    AND NOT EXISTS ("
+                "      SELECT 1 FROM channel_blacklist b "
+                "      WHERE b.provider_user_id = pc.provider_user_id "
+                "        AND b.channel_id = c.id"
+                "    )"
+                ") "
                 "ORDER BY c.title"
             ).fetchall()
         owner_id = self._owner_id()
@@ -1278,17 +1329,84 @@ class Database:
 
     def is_visible_channel(self, channel_id: int) -> bool:
         with self._lock:
-            approved = self._conn.execute(
-                "SELECT 1 FROM providers WHERE status = 'approved' LIMIT 1"
-            ).fetchone()
-            if approved is None:
-                return False
             row = self._conn.execute(
                 "SELECT 1 FROM channels c WHERE c.id = ? AND EXISTS ("
-                "  SELECT 1 FROM providers p WHERE p.status = 'approved' "
-                "    AND NOT EXISTS (SELECT 1 FROM channel_blacklist b "
-                "                    WHERE b.provider_user_id = p.user_id "
-                "                      AND b.channel_id = c.id))",
+                "  SELECT 1 FROM provider_channels pc "
+                "  JOIN providers p ON p.user_id = pc.provider_user_id "
+                "  WHERE pc.channel_id = c.id "
+                "    AND p.status = 'approved' "
+                "    AND NOT EXISTS ("
+                "      SELECT 1 FROM channel_blacklist b "
+                "      WHERE b.provider_user_id = pc.provider_user_id "
+                "        AND b.channel_id = c.id"
+                "    )"
+                ")",
                 (channel_id,),
             ).fetchone()
         return row is not None
+
+    # ---------- provider_channels ----------
+
+    def set_provider_channels(
+        self, provider_user_id: int, channel_ids: set[int],
+    ) -> None:
+        """Replace this provider's channel set with `channel_ids` atomically."""
+        with self._lock, self.transaction():
+            self._conn.execute(
+                "DELETE FROM provider_channels WHERE provider_user_id = ?",
+                (provider_user_id,),
+            )
+            self._conn.executemany(
+                "INSERT INTO provider_channels (provider_user_id, channel_id) "
+                "VALUES (?, ?)",
+                [(provider_user_id, cid) for cid in channel_ids],
+            )
+
+    def add_provider_channel(
+        self, provider_user_id: int, channel_id: int,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO provider_channels "
+                "(provider_user_id, channel_id) VALUES (?, ?)",
+                (provider_user_id, channel_id),
+            )
+            self._commit()
+
+    def remove_provider_channel(
+        self, provider_user_id: int, channel_id: int,
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM provider_channels "
+                "WHERE provider_user_id = ? AND channel_id = ?",
+                (provider_user_id, channel_id),
+            )
+            self._commit()
+
+    def list_provider_channels(self, provider_user_id: int) -> set[int]:
+        with self._lock:
+            return {
+                r[0]
+                for r in self._conn.execute(
+                    "SELECT channel_id FROM provider_channels "
+                    "WHERE provider_user_id = ?",
+                    (provider_user_id,),
+                )
+            }
+
+    def channels_with_no_provider(self) -> list[int]:
+        """Return channel ids in `channels` that have no row in
+        `provider_channels`. Used to detect orphans after a refresh."""
+        with self._lock:
+            return [
+                r[0]
+                for r in self._conn.execute(
+                    "SELECT c.id FROM channels c "
+                    "WHERE NOT EXISTS ("
+                    "  SELECT 1 FROM provider_channels pc "
+                    "  WHERE pc.channel_id = c.id"
+                    ") "
+                    "ORDER BY c.id"
+                )
+            ]

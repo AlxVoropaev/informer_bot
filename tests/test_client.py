@@ -343,3 +343,37 @@ async def test_register_new_post_handler_forwards_broadcast_with_username() -> N
     assert kwargs["channel_id"] == 7
     assert kwargs["channel_username"] == "newschan"
     assert kwargs["text"] == "hello"
+
+
+async def test_source_dedup_drops_second_arrival_across_clients() -> None:
+    """Two clients sharing the same `claim` callable: only the first to
+    receive (channel_id, message_id) reaches the buffer."""
+    from informer_bot.provider_clients import make_source_dedup_claim
+
+    inflight: set[tuple[int, int]] = set()
+    claim = make_source_dedup_claim(inflight)
+
+    tg_a = MagicMock()
+    tg_b = MagicMock()
+    captured_a = _capture_handler(tg_a)
+    captured_b = _capture_handler(tg_b)
+    buffer = MagicMock()
+    buffer.add = AsyncMock()
+
+    register_new_post_handler(tg_a, buffer, claim=claim)
+    register_new_post_handler(tg_b, buffer, claim=claim)
+    handler_a = captured_a[0]
+    handler_b = captured_b[0]
+
+    chat = _entity(7, "newschan")
+    event = SimpleNamespace(
+        get_chat=AsyncMock(return_value=chat),
+        message=SimpleNamespace(
+            id=42, message="hi", grouped_id=None, photo=None
+        ),
+    )
+
+    await handler_a(event)
+    await handler_b(event)  # second client: same (channel, msg) -> dropped.
+
+    assert buffer.add.await_count == 1

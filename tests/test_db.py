@@ -1220,6 +1220,7 @@ def test_list_visible_channels_owner_only_unblacklisted(db: Database) -> None:
     _seed_owner(db, owner_id=1)
     db.upsert_channel(channel_id=1, title="Visible")
     db.upsert_channel(channel_id=2, title="Hidden")
+    db.set_provider_channels(provider_user_id=1, channel_ids={1, 2})
     db.set_provider_channel_blacklisted(provider_user_id=1, channel_id=2, blacklisted=True)
 
     visible_ids = [c.id for c in db.list_visible_channels()]
@@ -1234,6 +1235,8 @@ def test_list_visible_channels_two_providers_one_blacklists(db: Database) -> Non
     db.add_pending_provider(user_id=2, session_path="b.session")
     db.set_provider_status(user_id=2, status="approved")
     db.upsert_channel(channel_id=10, title="Shared")
+    db.set_provider_channels(provider_user_id=1, channel_ids={10})
+    db.set_provider_channels(provider_user_id=2, channel_ids={10})
     # Owner blacklists; provider 2 does not -> still visible.
     db.set_provider_channel_blacklisted(provider_user_id=1, channel_id=10, blacklisted=True)
 
@@ -1247,6 +1250,8 @@ def test_list_visible_channels_hidden_when_all_providers_blacklist(db: Database)
     db.add_pending_provider(user_id=2, session_path="b.session")
     db.set_provider_status(user_id=2, status="approved")
     db.upsert_channel(channel_id=10, title="Shared")
+    db.set_provider_channels(provider_user_id=1, channel_ids={10})
+    db.set_provider_channels(provider_user_id=2, channel_ids={10})
     db.set_provider_channel_blacklisted(provider_user_id=1, channel_id=10, blacklisted=True)
     db.set_provider_channel_blacklisted(provider_user_id=2, channel_id=10, blacklisted=True)
 

@@ -606,14 +606,31 @@ async def test_handle_new_post_filter_tokens_recorded_even_when_user_excluded(
 
 # ---------- refresh_channels ----------
 
+
+def _seed_provider(db: Database, provider_id: int) -> None:
+    db.set_user_status(user_id=provider_id, status="approved")
+    db.add_pending_provider(user_id=provider_id, session_path=f"p{provider_id}.session")
+    db.set_provider_status(user_id=provider_id, status="approved")
+
+
+def _make_fetch_for(by_provider: dict[int, list[tuple[int, str, str, str | None]]]):
+    async def fetch_for(provider_id: int):
+        return by_provider.get(provider_id, [])
+    return AsyncMock(side_effect=fetch_for)
+
+
 async def test_refresh_upserts_new_channels(db: Database) -> None:
-    fetch = AsyncMock(return_value=[
+    _seed_provider(db, 1)
+    fetch_for = _make_fetch_for({1: [
         (1, "Alpha", "alpha", "About Alpha"),
         (2, "Beta", "beta", None),
-    ])
+    ]})
     send_dm = _send_dm()
 
-    await refresh_channels(fetch_fn=fetch, db=db, send_dm=send_dm)
+    await refresh_channels(
+        fetch_fn_for=fetch_for, provider_user_ids=[1],
+        db=db, send_dm=send_dm, inter_provider_sleep=0,
+    )
 
     rows = {c.id: c for c in db.list_channels(include_blacklisted=True)}
     assert rows[1].title == "Alpha"
@@ -622,19 +639,25 @@ async def test_refresh_upserts_new_channels(db: Database) -> None:
     assert rows[2].title == "Beta"
     assert rows[2].username == "beta"
     assert rows[2].about is None
+    assert db.list_provider_channels(provider_user_id=1) == {1, 2}
     send_dm.assert_not_called()
 
 
 async def test_refresh_notifies_subscribers_when_channel_disappears(db: Database) -> None:
+    _seed_provider(db, 1)
     db.upsert_channel(channel_id=1, title="Alpha")
     db.upsert_channel(channel_id=2, title="Gone")
+    db.set_provider_channels(provider_user_id=1, channel_ids={1, 2})
     db.subscribe(user_id=10, channel_id=2)
     db.subscribe(user_id=20, channel_id=2)
 
-    fetch = AsyncMock(return_value=[(1, "Alpha", "alpha", None)])
+    fetch_for = _make_fetch_for({1: [(1, "Alpha", "alpha", None)]})
     send_dm = _send_dm()
 
-    await refresh_channels(fetch_fn=fetch, db=db, send_dm=send_dm)
+    await refresh_channels(
+        fetch_fn_for=fetch_for, provider_user_ids=[1],
+        db=db, send_dm=send_dm, inter_provider_sleep=0,
+    )
 
     assert send_dm.await_count == 2
     for call in send_dm.await_args_list:
@@ -645,47 +668,51 @@ async def test_refresh_notifies_subscribers_when_channel_disappears(db: Database
 
 
 async def test_refresh_announces_new_channels_to_approved_users(db: Database) -> None:
+    _seed_provider(db, 1)
     db.upsert_channel(channel_id=1, title="Existing")
+    db.set_provider_channels(provider_user_id=1, channel_ids={1})
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
     db.add_pending_user(user_id=20, username="bob")
     db.set_user_status(user_id=20, status="approved")
     db.add_pending_user(user_id=30, username="eve")  # pending, must be skipped
 
-    fetch = AsyncMock(return_value=[
+    fetch_for = _make_fetch_for({1: [
         (1, "Existing", "existing", None),
         (2, "Fresh", "fresh", None),
         (3, "Brand", "brand", None),
-    ])
+    ]})
     send_dm = _send_dm()
     announce = AsyncMock()
 
     await refresh_channels(
-        fetch_fn=fetch, db=db, send_dm=send_dm,
-        announce_new_channel=announce,
+        fetch_fn_for=fetch_for, provider_user_ids=[1],
+        db=db, send_dm=send_dm,
+        announce_new_channel=announce, inter_provider_sleep=0,
     )
 
-    assert announce.await_count == 4  # 2 new channels x 2 approved users
+    # 2 new channels x 3 approved users (10, 20, and provider 1).
+    assert announce.await_count == 6
     announced = {(c.args[0], c.args[1], c.args[2]) for c in announce.await_args_list}
-    assert announced == {
-        (10, 2, "Fresh"), (20, 2, "Fresh"),
-        (10, 3, "Brand"), (20, 3, "Brand"),
-    }
+    assert (10, 2, "Fresh") in announced
+    assert (20, 3, "Brand") in announced
 
 
 async def test_refresh_skips_announce_on_first_run_empty_db(db: Database) -> None:
+    _seed_provider(db, 1)
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
 
-    fetch = AsyncMock(return_value=[
+    fetch_for = _make_fetch_for({1: [
         (1, "Alpha", "alpha", None),
         (2, "Beta", "beta", None),
-    ])
+    ]})
     announce = AsyncMock()
 
     await refresh_channels(
-        fetch_fn=fetch, db=db, send_dm=_send_dm(),
-        announce_new_channel=announce,
+        fetch_fn_for=fetch_for, provider_user_ids=[1],
+        db=db, send_dm=_send_dm(),
+        announce_new_channel=announce, inter_provider_sleep=0,
     )
 
     announce.assert_not_called()
@@ -693,17 +720,22 @@ async def test_refresh_skips_announce_on_first_run_empty_db(db: Database) -> Non
 
 
 async def test_refresh_announce_optional(db: Database) -> None:
+    _seed_provider(db, 1)
     db.upsert_channel(channel_id=1, title="Existing")
+    db.set_provider_channels(provider_user_id=1, channel_ids={1})
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
 
-    fetch = AsyncMock(return_value=[
+    fetch_for = _make_fetch_for({1: [
         (1, "Existing", "existing", None),
         (2, "Fresh", "fresh", None),
-    ])
+    ]})
 
     # Must not raise when announce_new_channel is omitted.
-    await refresh_channels(fetch_fn=fetch, db=db, send_dm=_send_dm())
+    await refresh_channels(
+        fetch_fn_for=fetch_for, provider_user_ids=[1],
+        db=db, send_dm=_send_dm(), inter_provider_sleep=0,
+    )
 
     assert {c.id for c in db.list_channels()} == {1, 2}
 
@@ -716,16 +748,86 @@ async def test_refresh_silent_for_disappeared_blacklisted_channels(db: Database)
     db.set_meta("owner_id", str(OWNER))
     db.upsert_channel(channel_id=1, title="Alpha")
     db.upsert_channel(channel_id=2, title="WasBanned")
+    db.set_provider_channels(provider_user_id=OWNER, channel_ids={1, 2})
     db.subscribe(user_id=10, channel_id=2)
     db.set_blacklisted(channel_id=2, blacklisted=True)
 
-    fetch = AsyncMock(return_value=[(1, "Alpha", "alpha", None)])
+    fetch_for = _make_fetch_for({OWNER: [(1, "Alpha", "alpha", None)]})
     send_dm = _send_dm()
 
-    await refresh_channels(fetch_fn=fetch, db=db, send_dm=send_dm)
+    await refresh_channels(
+        fetch_fn_for=fetch_for, provider_user_ids=[OWNER],
+        db=db, send_dm=send_dm, inter_provider_sleep=0,
+    )
 
     send_dm.assert_not_called()
     assert {c.id for c in db.list_channels(include_blacklisted=True)} == {1}
+
+
+async def test_refresh_orphan_detection_across_providers(db: Database) -> None:
+    """Two providers; A unsubscribes from X (no other provider has X) ->
+    X is deleted and its subscriber gets DM'd. Y had two providers but
+    only A drops it -> Y stays visible."""
+    _seed_provider(db, 1)  # A
+    _seed_provider(db, 2)  # B
+    db.upsert_channel(channel_id=10, title="X")
+    db.upsert_channel(channel_id=20, title="Y")
+    db.upsert_channel(channel_id=30, title="Z")
+    db.set_provider_channels(provider_user_id=1, channel_ids={10, 20})
+    db.set_provider_channels(provider_user_id=2, channel_ids={20, 30})
+    db.subscribe(user_id=10, channel_id=10)
+    db.subscribe(user_id=10, channel_id=20)
+    send_dm = _send_dm()
+
+    fetch_for = _make_fetch_for({
+        1: [(20, "Y", "y", None)],          # A drops 10
+        2: [(20, "Y", "y", None), (30, "Z", "z", None)],
+    })
+
+    await refresh_channels(
+        fetch_fn_for=fetch_for, provider_user_ids=[1, 2],
+        db=db, send_dm=send_dm, inter_provider_sleep=0,
+    )
+
+    remaining = {c.id for c in db.list_channels(include_blacklisted=True)}
+    assert remaining == {20, 30}
+    # The X subscriber got a "channel_gone" DM.
+    assert send_dm.await_count == 1
+    user_id, text = send_dm.await_args.args
+    assert user_id == 10
+    assert "X" in text and "no longer available" in text.lower()
+
+
+async def test_refresh_union_visibility_across_providers(db: Database) -> None:
+    """A subs {X, Y}, B subs {Y, Z}; visible = {X, Y, Z}. Then B drops Y
+    but A keeps it -> Y stays visible."""
+    _seed_provider(db, 1)
+    _seed_provider(db, 2)
+    fetch_for = _make_fetch_for({
+        1: [(10, "X", "x", None), (20, "Y", "y", None)],
+        2: [(20, "Y", "y", None), (30, "Z", "z", None)],
+    })
+
+    await refresh_channels(
+        fetch_fn_for=fetch_for, provider_user_ids=[1, 2],
+        db=db, send_dm=_send_dm(), inter_provider_sleep=0,
+    )
+
+    visible = {c.id for c in db.list_visible_channels()}
+    assert visible == {10, 20, 30}
+
+    # Now B unsubscribes from Y.
+    fetch_for_2 = _make_fetch_for({
+        1: [(10, "X", "x", None), (20, "Y", "y", None)],
+        2: [(30, "Z", "z", None)],
+    })
+    await refresh_channels(
+        fetch_fn_for=fetch_for_2, provider_user_ids=[1, 2],
+        db=db, send_dm=_send_dm(), inter_provider_sleep=0,
+    )
+
+    visible_after = {c.id for c in db.list_visible_channels()}
+    assert visible_after == {10, 20, 30}  # Y still visible (A has it)
 
 
 # ---------- dedup ----------

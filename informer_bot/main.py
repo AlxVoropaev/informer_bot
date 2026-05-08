@@ -39,7 +39,6 @@ from informer_bot.bot import (
 from informer_bot.client import (
     catch_up,
     fetch_subscribed_channels,
-    register_new_post_handler,
 )
 from informer_bot.config import Config, load_config
 from informer_bot.db import Database
@@ -49,12 +48,13 @@ from informer_bot.pipeline import (
     AnnounceNewChannelFn,
     EditDmFn,
     EmbedFn,
-    FetchChannelsFn,
+    FetchChannelsForFn,
     IsRelevantFn,
     SendDmFn,
     SummarizeFn,
     handle_new_post,
 )
+from informer_bot.provider_clients import ProviderClient, start_all, stop_all
 from informer_bot.remote_processor import RemoteProcessorClient
 from informer_bot.summarizer import (
     EMBED_DIMENSIONS,
@@ -338,12 +338,6 @@ async def main() -> None:
 
     miniapp_url = cfg.miniapp_url
 
-    tg = TelegramClient(cfg.session_path, cfg.telegram_api_id, cfg.telegram_api_hash)
-    await tg.connect()
-    if not await tg.is_user_authorized():
-        raise SystemExit("No Telethon session. Run: uv run python login.py")
-    log.info("telethon authorized")
-
     app = ApplicationBuilder().token(cfg.telegram_bot_token).rate_limiter(AIORateLimiter()).build()
     for handler in (
         CommandHandler("start", cmd_start),
@@ -459,17 +453,40 @@ async def main() -> None:
         )
 
     buffer = AlbumBuffer(on_flush=on_post, delay=1.5)
-    register_new_post_handler(tg, buffer)
 
-    async def fetch() -> list[tuple[int, str, str, str | None]]:
-        return await fetch_subscribed_channels(tg)
+    inflight: set[tuple[int, int]] = set()
+    provider_clients: list[ProviderClient] = await start_all(
+        db=db,
+        api_id=cfg.telegram_api_id,
+        api_hash=cfg.telegram_api_hash,
+        buffer=buffer,
+        inflight=inflight,
+    )
+    if not provider_clients:
+        raise SystemExit(
+            "No usable Telethon sessions found for any approved provider. "
+            "Run: uv run python login.py"
+        )
+    log.info("started %d telethon provider client(s)", len(provider_clients))
 
-    fetch_channels: FetchChannelsFn = fetch
+    def _client_for(provider_id: int) -> TelegramClient:
+        for pc in provider_clients:
+            if pc.user_id == provider_id:
+                return pc.tg
+        raise KeyError(f"no live client for provider={provider_id}")
+
+    async def fetch_for(
+        provider_id: int,
+    ) -> list[tuple[int, str, str, str | None]]:
+        return await fetch_subscribed_channels(_client_for(provider_id))
+
+    fetch_channels_for: FetchChannelsForFn = fetch_for
     app.bot_data["state"] = BotState(
         db=db,
         owner_id=cfg.owner_id,
         miniapp_url=miniapp_url,
-        fetch_channels=fetch_channels,
+        fetch_channels_for=fetch_channels_for,
+        provider_user_ids=[pc.user_id for pc in provider_clients],
         send_dm=send_dm,
         announce_new_channel=announce_new_channel,
     )
@@ -503,9 +520,11 @@ async def main() -> None:
             cfg.webapp_port,
         )
 
-    await catch_up(
-        tg, db, buffer, max_age_seconds=cfg.catch_up_window_hours * 3600,
-    )
+    for pc in provider_clients:
+        await catch_up(
+            pc.tg, db, buffer,
+            max_age_seconds=cfg.catch_up_window_hours * 3600,
+        )
 
     for user_id in db.list_user_ids():
         try:
@@ -534,11 +553,14 @@ async def main() -> None:
             loop.add_signal_handler(sig, stop_event.set)
 
     log.info("informer_bot is running. Ctrl+C to stop.")
-    disconnect_task = asyncio.create_task(tg.run_until_disconnected())
+    disconnect_tasks = [
+        asyncio.create_task(pc.tg.run_until_disconnected())
+        for pc in provider_clients
+    ]
     stop_task = asyncio.create_task(stop_event.wait())
     sweeper_task = asyncio.create_task(sweep_due_deletions(app, db))
     background_tasks: list[asyncio.Task[Any]] = [
-        disconnect_task, stop_task, sweeper_task,
+        *disconnect_tasks, stop_task, sweeper_task,
     ]
     if remote is not None:
         remote.set_state_change_callback(
@@ -552,12 +574,13 @@ async def main() -> None:
         background_tasks.append(health_task)
     try:
         await asyncio.wait(
-            {disconnect_task, stop_task},
+            {*disconnect_tasks, stop_task},
             return_when=asyncio.FIRST_COMPLETED,
         )
     finally:
         await graceful_shutdown(
-            app=app, tg=tg, db=db, cfg=cfg, send_dm=send_dm,
+            app=app, provider_clients=provider_clients, db=db, cfg=cfg,
+            send_dm=send_dm,
             tasks=tuple(background_tasks),
             webapp_runner=webapp_runner,
         )
@@ -566,7 +589,7 @@ async def main() -> None:
 async def graceful_shutdown(
     *,
     app: Application,
-    tg: TelegramClient,
+    provider_clients: list[ProviderClient],
     db: Database,
     cfg: Config,
     send_dm: SendDmFn,
@@ -589,7 +612,7 @@ async def graceful_shutdown(
     await app.shutdown()
     if webapp_runner is not None:
         await webapp_runner.cleanup()
-    await tg.disconnect()
+    await stop_all(provider_clients)
     log.info("shutdown complete")
 
 

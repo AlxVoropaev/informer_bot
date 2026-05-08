@@ -17,7 +17,7 @@ from informer_bot.db import Database, format_user_label
 from informer_bot.i18n import t
 from informer_bot.pipeline import (
     AnnounceNewChannelFn,
-    FetchChannelsFn,
+    FetchChannelsForFn,
     SendDmFn,
     refresh_channels,
 )
@@ -54,7 +54,8 @@ class BotState:
     db: Database
     owner_id: int
     miniapp_url: str | None
-    fetch_channels: FetchChannelsFn
+    fetch_channels_for: FetchChannelsForFn
+    provider_user_ids: list[int]
     send_dm: SendDmFn
     announce_new_channel: AnnounceNewChannelFn | None
 
@@ -291,7 +292,8 @@ async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     state = _state(context)
     try:
         await refresh_channels(
-            fetch_fn=state.fetch_channels,
+            fetch_fn_for=state.fetch_channels_for,
+            provider_user_ids=state.provider_user_ids,
             db=state.db,
             send_dm=state.send_dm,
             announce_new_channel=state.announce_new_channel,

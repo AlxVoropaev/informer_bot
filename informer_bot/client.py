@@ -1,5 +1,6 @@
 import logging
 import time
+from collections.abc import Callable
 
 from telethon import TelegramClient, events
 from telethon.tl.functions.channels import GetFullChannelRequest
@@ -107,7 +108,21 @@ async def catch_up(
     )
 
 
-def register_new_post_handler(tg: TelegramClient, buffer: AlbumBuffer) -> None:
+def register_new_post_handler(
+    tg: TelegramClient,
+    buffer: AlbumBuffer,
+    *,
+    claim: Callable[[int, int], bool] | None = None,
+) -> None:
+    """Register the live-post handler on `tg`.
+
+    `claim` is an optional source-side dedup hook used when multiple
+    Telethon clients are subscribed to the same channel: it returns True
+    for the first client to see (channel_id, message_id) and False for
+    every subsequent one. The losers drop the post before it enters the
+    pipeline.
+    """
+
     @tg.on(events.NewMessage())
     async def _handler(event: events.NewMessage.Event) -> None:
         chat = await event.get_chat()
@@ -118,6 +133,12 @@ def register_new_post_handler(tg: TelegramClient, buffer: AlbumBuffer) -> None:
                 type(chat).__name__,
                 getattr(chat, "broadcast", None),
                 getattr(chat, "username", None),
+            )
+            return
+        if claim is not None and not claim(chat.id, event.message.id):
+            log.debug(
+                "source dedup: dropped channel=%s msg=%s (already claimed)",
+                chat.id, event.message.id,
             )
             return
         log.info(

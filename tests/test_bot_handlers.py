@@ -47,7 +47,8 @@ def _ctx(db: Database, miniapp_url: str | None = None) -> SimpleNamespace:
         db=db,
         owner_id=OWNER_ID,
         miniapp_url=miniapp_url,
-        fetch_channels=AsyncMock(),
+        fetch_channels_for=AsyncMock(),
+        provider_user_ids=[OWNER_ID],
         send_dm=AsyncMock(),
         announce_new_channel=None,
     )
@@ -574,7 +575,8 @@ async def test_update_for_owner_calls_refresh_channels_with_state_deps(
 
     refresh.assert_awaited_once()
     kwargs = refresh.await_args.kwargs
-    assert kwargs["fetch_fn"] is state.fetch_channels
+    assert kwargs["fetch_fn_for"] is state.fetch_channels_for
+    assert kwargs["provider_user_ids"] is state.provider_user_ids
     assert kwargs["db"] is state.db
     assert kwargs["send_dm"] is state.send_dm
     assert kwargs["announce_new_channel"] is state.announce_new_channel

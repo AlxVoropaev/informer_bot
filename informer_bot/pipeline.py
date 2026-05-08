@@ -1,3 +1,4 @@
+import asyncio
 import html
 import logging
 import time
@@ -25,6 +26,9 @@ SendDmFn = Callable[..., Awaitable[int | None]]
 EditDmFn = Callable[..., Awaitable[None]]
 EmbedFn = Callable[[str], Awaitable[Embedding]]
 FetchChannelsFn = Callable[[], Awaitable[list[tuple[int, str, str, str | None]]]]
+FetchChannelsForFn = Callable[
+    [int], Awaitable[list[tuple[int, str, str, str | None]]]
+]
 AnnounceNewChannelFn = Callable[[int, int, str], Awaitable[None]]
 
 
@@ -316,55 +320,82 @@ async def handle_new_post(
 
 async def refresh_channels(
     *,
-    fetch_fn: FetchChannelsFn,
+    fetch_fn_for: FetchChannelsForFn,
+    provider_user_ids: list[int],
     db: Database,
     send_dm: SendDmFn,
     announce_new_channel: AnnounceNewChannelFn | None = None,
+    inter_provider_sleep: float = 2.0,
 ) -> None:
-    fresh = await fetch_fn()
-    fresh_ids = {tup[0] for tup in fresh}
-    log.debug("refresh: %d fresh channel(s) from telethon", len(fresh))
+    """Refresh the multi-provider channel index.
 
+    For each approved provider:
+      - fetch their subscribed channels via `fetch_fn_for(provider_id)`,
+      - upsert each into `channels` (titles/usernames stay fresh),
+      - replace `provider_channels(provider_id, *)` with the fetched ids.
+
+    Then any channel left without a provider is deleted as an orphan (its
+    subscribers are DM'd `channel_gone`). New channels — those that didn't
+    exist on entry — are announced to all approved bot users via
+    `announce_new_channel`. A short sleep between providers caps total RPS
+    against Telegram from amplified flood-waits.
+    """
     known_before_ids = {c.id for c in db.list_channels(include_blacklisted=True)}
-    new_channels: list[tuple[int, str]] = (
-        [(tup[0], tup[1]) for tup in fresh if tup[0] not in known_before_ids]
-        if known_before_ids
-        else []
-    )
+    seen_titles: dict[int, str] = {}
 
-    for channel_id, title, username, about in fresh:
-        db.upsert_channel(
-            channel_id=channel_id, title=title, username=username, about=about,
+    for idx, provider_id in enumerate(provider_user_ids):
+        if idx > 0 and inter_provider_sleep > 0:
+            await asyncio.sleep(inter_provider_sleep)
+        try:
+            fresh = await fetch_fn_for(provider_id)
+        except Exception:
+            log.exception(
+                "refresh: fetch failed for provider=%s, skipping", provider_id,
+            )
+            continue
+        log.debug(
+            "refresh: provider=%s reported %d channel(s)", provider_id, len(fresh),
+        )
+        for channel_id, title, username, about in fresh:
+            db.upsert_channel(
+                channel_id=channel_id, title=title, username=username, about=about,
+            )
+            seen_titles[channel_id] = title
+        db.set_provider_channels(
+            provider_user_id=provider_id,
+            channel_ids={tup[0] for tup in fresh},
         )
 
+    # Orphans: channels left with no provider after every provider's set
+    # was replaced.
+    orphan_ids = db.channels_with_no_provider()
     removed = 0
     notified = 0
-    known = db.list_channels(include_blacklisted=True)
-    for channel in known:
-        if channel.id in fresh_ids:
-            continue
-        if not channel.blacklisted:
-            subs = db.subscribers_for_channel(channel_id=channel.id)
-            for user_id, _mode in subs:
-                lang = db.get_language(user_id)
-                await send_dm(
-                    user_id,
-                    t(lang, "channel_gone", title=channel.title),
-                )
-            notified += len(subs)
-        db.delete_channel(channel_id=channel.id)
+    for channel_id in orphan_ids:
+        title = db.get_channel_title(channel_id) or ""
+        subs = db.subscribers_for_channel(channel_id=channel_id)
+        for user_id, _mode in subs:
+            lang = db.get_language(user_id)
+            await send_dm(
+                user_id, t(lang, "channel_gone", title=title),
+            )
+        notified += len(subs)
+        db.delete_channel(channel_id=channel_id)
         removed += 1
 
     announced = 0
-    if announce_new_channel is not None and new_channels:
-        approved = db.list_approved_user_ids()
-        for channel_id, title in new_channels:
-            for user_id in approved:
-                await announce_new_channel(user_id, channel_id, title)
-                announced += 1
+    if announce_new_channel is not None and known_before_ids:
+        new_ids = sorted(set(seen_titles) - known_before_ids)
+        if new_ids:
+            approved = db.list_approved_user_ids()
+            for channel_id in new_ids:
+                title = seen_titles[channel_id]
+                for user_id in approved:
+                    await announce_new_channel(user_id, channel_id, title)
+                    announced += 1
 
     log.info(
-        "refresh done: %d known, %d removed, %d subscriber(s) notified, "
-        "%d new channel(s), %d announcement(s) sent",
-        len(fresh), removed, notified, len(new_channels), announced,
+        "refresh done: %d provider(s), %d removed, %d subscriber(s) notified, "
+        "%d announcement(s) sent",
+        len(provider_user_ids), removed, notified, announced,
     )
