@@ -12,6 +12,13 @@ dependencies = [
     "aiohttp>=3.10",
 ]
 
+[project.scripts]
+# Canonical invocation is `uv run python -m informer_bot.cli_login --user-id <id>`
+# because `[tool.uv] package = false` keeps uv from installing console scripts.
+# This entry is declared anyway so packaging tools (and any future `uv sync`
+# that builds the project) will expose it.
+informer-bot-login = "informer_bot.cli_login:main"
+
 [dependency-groups]
 dev = [
     "bandit>=1.9.4",
