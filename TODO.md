@@ -1,7 +1,9 @@
 
-- Respect telegram's API rate limits. Prevent flood wait like:
-  bot-1  | 2026-05-07 19:00:15,850 INFO telethon.client.users: Sleeping for 27s (0:00:27) on GetFullChannelRequest flood wait
-
-- Multiple user's to provide channels content (now only one - admin)
-
 - Session-file encryption (sops/age) — currently `chmod 600` only.
+
+- Cursor problem in mini-app
+
+- bug with filter
+
+- [08.05.2026 19:40] News Informer Bot: ⚠️ Processor unreachable, fail-safe enabled (Claude/OpenAI).
+[08.05.2026 19:41] News Informer Bot: ✅ Processor recovered, back on local models.
