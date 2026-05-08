@@ -175,15 +175,30 @@ async def summarize_ollama(
         ],
         extra_body={"think": False},
     )
-    summary = response.choices[0].message.content.strip()
+    content = response.choices[0].message.content
+    usage = response.usage
+    prompt_tokens = usage.prompt_tokens if usage is not None else 0
+    completion_tokens = usage.completion_tokens if usage is not None else 0
+    if content is None:
+        log.warning(
+            "summarize_ollama: model returned no content (in=%d out=%d)",
+            prompt_tokens, completion_tokens,
+        )
+        return Summary(
+            text="",
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+            provider="ollama",
+        )
+    summary = content.strip()
     log.debug(
         "summarize_ollama: got %d chars back (in=%d out=%d)",
-        len(summary), response.usage.prompt_tokens, response.usage.completion_tokens,
+        len(summary), prompt_tokens, completion_tokens,
     )
     return Summary(
         text=summary,
-        input_tokens=response.usage.prompt_tokens,
-        output_tokens=response.usage.completion_tokens,
+        input_tokens=prompt_tokens,
+        output_tokens=completion_tokens,
         provider="ollama",
     )
 
@@ -206,15 +221,30 @@ async def is_relevant_ollama(
         ],
         extra_body={"think": False},
     )
-    answer = response.choices[0].message.content.strip().upper()
+    content = response.choices[0].message.content
+    usage = response.usage
+    prompt_tokens = usage.prompt_tokens if usage is not None else 0
+    completion_tokens = usage.completion_tokens if usage is not None else 0
+    if content is None:
+        log.warning(
+            "is_relevant_ollama: model returned no content (in=%d out=%d)",
+            prompt_tokens, completion_tokens,
+        )
+        return RelevanceCheck(
+            relevant=False,
+            input_tokens=prompt_tokens,
+            output_tokens=completion_tokens,
+            provider="ollama",
+        )
+    answer = content.strip().upper()
     relevant = answer.startswith("YES")
     log.debug(
         "is_relevant_ollama: answer=%r relevant=%s (in=%d out=%d)",
-        answer, relevant, response.usage.prompt_tokens, response.usage.completion_tokens,
+        answer, relevant, prompt_tokens, completion_tokens,
     )
     return RelevanceCheck(
         relevant=relevant,
-        input_tokens=response.usage.prompt_tokens,
-        output_tokens=response.usage.completion_tokens,
+        input_tokens=prompt_tokens,
+        output_tokens=completion_tokens,
         provider="ollama",
     )

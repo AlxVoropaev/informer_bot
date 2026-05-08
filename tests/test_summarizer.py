@@ -242,6 +242,59 @@ async def test_summarize_ollama_default_system_prompt_when_none() -> None:
     assert "one or two sentences" in kwargs["messages"][0]["content"].lower()
 
 
+async def test_summarize_ollama_returns_empty_on_none_content() -> None:
+    from informer_bot.summarizer import summarize_ollama
+
+    client = AsyncMock()
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=None))],
+        usage=SimpleNamespace(prompt_tokens=15, completion_tokens=0),
+    )
+    client.chat.completions.create = AsyncMock(return_value=response)
+
+    result = await summarize_ollama("Body", client=client, model="m")
+
+    assert result.text == ""
+    assert result.input_tokens == 15
+    assert result.output_tokens == 0
+    assert result.provider == "ollama"
+
+
+async def test_summarize_ollama_handles_none_usage() -> None:
+    from informer_bot.summarizer import summarize_ollama
+
+    client = AsyncMock()
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="brief"))],
+        usage=None,
+    )
+    client.chat.completions.create = AsyncMock(return_value=response)
+
+    result = await summarize_ollama("Body", client=client, model="m")
+
+    assert result.text == "brief"
+    assert result.input_tokens == 0
+    assert result.output_tokens == 0
+
+
+async def test_is_relevant_ollama_returns_not_relevant_on_none_content() -> None:
+    from informer_bot.summarizer import is_relevant_ollama
+
+    client = AsyncMock()
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=None))],
+        usage=SimpleNamespace(prompt_tokens=20, completion_tokens=0),
+    )
+    client.chat.completions.create = AsyncMock(return_value=response)
+
+    result = await is_relevant_ollama("Post", "filter", client=client, model="m")
+
+    assert result.relevant is False
+    assert result.input_tokens == 20
+    assert result.output_tokens == 0
+    assert result.provider == "ollama"
+
+
 async def test_is_relevant_ollama_yes_and_no() -> None:
     from informer_bot.summarizer import is_relevant_ollama
 
