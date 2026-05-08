@@ -2,6 +2,7 @@ import html
 import logging
 import time
 from collections.abc import Awaitable, Callable
+from typing import Protocol
 
 from informer_bot.db import Database
 from informer_bot.dedup import find_duplicate
@@ -11,7 +12,13 @@ from informer_bot.summarizer import Embedding, RelevanceCheck, Summary
 
 log = logging.getLogger(__name__)
 
-SummarizeFn = Callable[[str], Awaitable[Summary]]
+
+class SummarizeFn(Protocol):
+    async def __call__(
+        self, text: str, *, system_prompt: str | None = None,
+    ) -> Summary: ...
+
+
 IsRelevantFn = Callable[[str, str], Awaitable[RelevanceCheck]]
 SendDmFn = Callable[..., Awaitable[int | None]]
 EditDmFn = Callable[..., Awaitable[None]]
@@ -58,6 +65,41 @@ def _channel_settings_url(deeplink: str | None, channel_id: int) -> str | None:
         return None
     sep = "&" if "?" in deeplink else "?"
     return f"{deeplink}{sep}startapp=channel_{channel_id}"
+
+
+async def _send_and_record(
+    *,
+    db: Database,
+    send_dm: SendDmFn,
+    user_id: int,
+    channel_id: int,
+    message_id: int,
+    body: str,
+    photo: bytes | None,
+    summary: Summary,
+    delete_at: int | None,
+    now_ts: int,
+    send_kwargs: dict,
+) -> None:
+    bot_msg_id = await send_dm(user_id, body, photo, **send_kwargs)
+    with db.transaction():
+        if bot_msg_id is not None:
+            db.record_delivered(
+                user_id=user_id,
+                channel_id=channel_id,
+                message_id=message_id,
+                bot_message_id=bot_msg_id,
+                is_photo=photo is not None,
+                body=body,
+                now=now_ts,
+                delete_at=delete_at,
+            )
+        db.add_usage(
+            user_id=user_id,
+            provider=summary.provider,
+            input_tokens=summary.input_tokens,
+            output_tokens=summary.output_tokens,
+        )
 
 
 async def handle_new_post(
@@ -202,25 +244,13 @@ async def handle_new_post(
                 channel_title, summary.text, link, dup_marker, tail=tail_html,
                 settings_url=settings_url, settings_label=settings_label,
             )
-            bot_msg_id = await send_dm(user_id, body, photo, **send_kwargs)
-            with db.transaction():
-                if bot_msg_id is not None:
-                    db.record_delivered(
-                        user_id=user_id,
-                        channel_id=channel_id,
-                        message_id=message_id,
-                        bot_message_id=bot_msg_id,
-                        is_photo=photo is not None,
-                        body=body,
-                        now=now_ts,
-                        delete_at=send_delete_at,
-                    )
-                db.add_usage(
-                    user_id=user_id,
-                    provider=summary.provider,
-                    input_tokens=summary.input_tokens,
-                    output_tokens=summary.output_tokens,
-                )
+            await _send_and_record(
+                db=db, send_dm=send_dm, user_id=user_id,
+                channel_id=channel_id, message_id=message_id,
+                body=body, photo=photo, summary=summary,
+                delete_at=send_delete_at, now_ts=now_ts,
+                send_kwargs=send_kwargs,
+            )
         elif duplicate is not None and edit_dm is not None:
             new_dup_links = duplicate.dup_links + [(channel_title, link)]
             prev_state = db.get_delivered_save_state(
@@ -264,25 +294,13 @@ async def handle_new_post(
                     output_tokens=summary.output_tokens,
                 )
         else:
-            bot_msg_id = await send_dm(user_id, body, photo, **send_kwargs)
-            with db.transaction():
-                if bot_msg_id is not None:
-                    db.record_delivered(
-                        user_id=user_id,
-                        channel_id=channel_id,
-                        message_id=message_id,
-                        bot_message_id=bot_msg_id,
-                        is_photo=photo is not None,
-                        body=body,
-                        now=now_ts,
-                        delete_at=send_delete_at,
-                    )
-                db.add_usage(
-                    user_id=user_id,
-                    provider=summary.provider,
-                    input_tokens=summary.input_tokens,
-                    output_tokens=summary.output_tokens,
-                )
+            await _send_and_record(
+                db=db, send_dm=send_dm, user_id=user_id,
+                channel_id=channel_id, message_id=message_id,
+                body=body, photo=photo, summary=summary,
+                delete_at=send_delete_at, now_ts=now_ts,
+                send_kwargs=send_kwargs,
+            )
 
     if emb is not None:
         db.store_post_embedding(

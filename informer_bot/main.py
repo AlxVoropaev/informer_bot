@@ -58,6 +58,7 @@ from informer_bot.remote_processor import RemoteProcessorClient
 from informer_bot.summarizer import (
     EMBED_DIMENSIONS,
     EMBED_MODEL,
+    Summary,
     embed_summary,
     is_relevant,
     is_relevant_ollama,
@@ -164,7 +165,7 @@ def _build_ollama_embed_fn(cfg: Config, ollama_client: AsyncOpenAI) -> EmbedFn:
 def _wrap_summarize_with_custom_prompt(
     summarize_fn: SummarizeFn, db: Database
 ) -> SummarizeFn:
-    async def wrapped(text: str):
+    async def wrapped(text: str, *, system_prompt: str | None = None) -> Summary:
         custom = db.get_meta("summary_prompt")
         return await summarize_fn(text, system_prompt=custom or None)
     return wrapped
