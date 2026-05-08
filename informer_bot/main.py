@@ -282,6 +282,7 @@ async def sweep_due_deletions(app: Application, db: Database) -> None:
                         "auto-delete: telegram delete failed user=%s msg=%s: %s",
                         user_id, bot_msg_id, exc,
                     )
+                    continue
                 db.delete_delivered_row(
                     user_id=user_id, channel_id=channel_id, message_id=message_id,
                 )

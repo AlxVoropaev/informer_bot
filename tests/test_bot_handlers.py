@@ -741,3 +741,38 @@ async def test_sweep_due_deletions_deletes_due_rows_and_skips_saved(
     assert db.get_delivered_save_state(
         user_id=USER_ID, channel_id=1, message_id=102,
     ) == (True, None)
+
+
+async def test_sweep_due_keeps_row_when_telegram_delete_fails(
+    db: Database, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    from informer_bot.main import sweep_due_deletions
+
+    db.record_delivered(
+        user_id=USER_ID, channel_id=1, message_id=200, bot_message_id=10,
+        is_photo=False, body="b", now=1, delete_at=1,
+    )
+    db.record_delivered(
+        user_id=USER_ID, channel_id=1, message_id=201, bot_message_id=11,
+        is_photo=False, body="b", now=1, delete_at=1,
+    )
+
+    bot = SimpleNamespace(
+        delete_message=AsyncMock(side_effect=[None, RuntimeError("boom")]),
+    )
+    app = SimpleNamespace(bot=bot)
+
+    async def fake_sleep(_: float) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("informer_bot.main.asyncio.sleep", fake_sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await sweep_due_deletions(app, db)
+
+    assert db.get_delivered_save_state(
+        user_id=USER_ID, channel_id=1, message_id=200,
+    ) is None
+    assert db.get_delivered_save_state(
+        user_id=USER_ID, channel_id=1, message_id=201,
+    ) is not None
