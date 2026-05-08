@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import sqlite3
 import struct
 import threading
@@ -23,11 +24,19 @@ class Channel:
     about: str | None = None
 
 
+@dataclass(frozen=True)
+class Provider:
+    user_id: int
+    status: str
+    session_path: str
+    requested_at: int
+    approved_at: int | None
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS channels (
     id          INTEGER PRIMARY KEY,
     title       TEXT NOT NULL,
-    blacklisted INTEGER NOT NULL DEFAULT 0,
     username    TEXT,
     about       TEXT
 );
@@ -97,6 +106,21 @@ CREATE TABLE IF NOT EXISTS embedding_usage (
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS providers (
+    user_id      INTEGER PRIMARY KEY,
+    status       TEXT NOT NULL CHECK(status IN ('pending','approved','denied')),
+    session_path TEXT NOT NULL,
+    requested_at INTEGER NOT NULL,
+    approved_at  INTEGER,
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+CREATE TABLE IF NOT EXISTS channel_blacklist (
+    provider_user_id INTEGER NOT NULL,
+    channel_id       INTEGER NOT NULL,
+    PRIMARY KEY (provider_user_id, channel_id),
+    FOREIGN KEY (provider_user_id) REFERENCES providers(user_id) ON DELETE CASCADE,
+    FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );
 """
 
@@ -182,6 +206,13 @@ _MIGRATIONS: list[str] = [
     DROP TABLE embedding_usage;
     ALTER TABLE embedding_usage_new RENAME TO embedding_usage;
     """,
+    # 11 -> 12: multi-provider — providers table, per-provider blacklist,
+    # drop channels.blacklisted (legacy global blacklist becomes the
+    # owner's personal blacklist). Owner is read from OWNER_ID env.
+    # The sentinel value is replaced at runtime with the actual SQL by
+    # _migrate(); this migration needs runtime values (env, epoch) so it
+    # cannot be a static string.
+    "__PROGRAMMATIC_MULTI_PROVIDER__",
 ]
 
 
@@ -211,6 +242,7 @@ class Database:
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._in_transaction = False
+        self._owner_id_cached: int | None = None
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
         self._migrate()
@@ -284,6 +316,13 @@ class Database:
             return 8
         if "dedup_debug" not in users:
             return 9
+        # Versions 10/11 still have `channels.blacklisted`; fresh DBs created
+        # via `_SCHEMA` (post-12) do not. If the column is still present we
+        # have not yet applied the multi-provider migration. (`providers` and
+        # `channel_blacklist` always exist here because `_SCHEMA` ran first
+        # via `IF NOT EXISTS`, so they're not a useful probe.)
+        if "blacklisted" in channels:
+            return len(_MIGRATIONS) - 1
         return len(_MIGRATIONS)
 
     def _migrate(self) -> None:
@@ -293,13 +332,105 @@ class Database:
         version = int(row[0]) if row else self._bootstrap_schema_version()
         for i in range(version, len(_MIGRATIONS)):
             log.info("applying schema migration %d -> %d", i, i + 1)
-            self._conn.executescript(_MIGRATIONS[i])
+            sql = _MIGRATIONS[i]
+            if sql == "__PROGRAMMATIC_MULTI_PROVIDER__":
+                self._migrate_multi_provider()
+            else:
+                self._conn.executescript(sql)
         if version < len(_MIGRATIONS) or row is None:
             self._conn.execute(
                 "INSERT INTO meta (key, value) VALUES ('schema_version', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (str(len(_MIGRATIONS)),),
             )
+
+    def _migrate_multi_provider(self) -> None:
+        """Migration 11 -> 12.
+
+        Seeds the OWNER_ID env user as the first approved provider, copies
+        legacy `channels.blacklisted` rows into the owner's blacklist, and
+        drops the `channels.blacklisted` column via table-rebuild.
+
+        The `providers` and `channel_blacklist` tables themselves are created
+        by `_SCHEMA` (with IF NOT EXISTS) which runs before `_migrate()` —
+        so this routine only needs to populate them.
+        """
+        owner_raw = os.environ.get("OWNER_ID")
+        if not owner_raw:
+            raise RuntimeError(
+                "OWNER_ID env var required to migrate to multi-provider schema"
+            )
+        owner_id = int(owner_raw)
+        now = int(time.time())
+
+        c = self._conn
+        # Owner's users row may not exist on legacy DBs; seed it.
+        c.execute(
+            "INSERT OR IGNORE INTO users (user_id, status) VALUES (?, 'approved')",
+            (owner_id,),
+        )
+        c.execute(
+            "INSERT INTO providers "
+            "(user_id, status, session_path, requested_at, approved_at) "
+            "VALUES (?, 'approved', 'data/informer.session', ?, ?)",
+            (owner_id, now, now),
+        )
+        # Copy legacy global blacklist into owner's per-provider blacklist.
+        c.execute(
+            "INSERT INTO channel_blacklist (provider_user_id, channel_id) "
+            "SELECT ?, id FROM channels WHERE blacklisted = 1",
+            (owner_id,),
+        )
+        # Rebuild `channels` without the `blacklisted` column.
+        # SQLite recommends turning FK off during a column-removing rebuild
+        # because subscriptions(channel_id) FKs reference channels(id). We
+        # execute a fresh PRAGMA pair around the rebuild; PRAGMA foreign_keys
+        # is allowed inside executescript() because executescript COMMITs any
+        # pending transaction first.
+        self._conn.executescript(
+            """
+            PRAGMA foreign_keys = OFF;
+            CREATE TABLE channels_new (
+                id INTEGER PRIMARY KEY,
+                title TEXT NOT NULL,
+                username TEXT,
+                about TEXT
+            );
+            INSERT INTO channels_new (id, title, username, about)
+                SELECT id, title, username, about FROM channels;
+            DROP TABLE channels;
+            ALTER TABLE channels_new RENAME TO channels;
+            PRAGMA foreign_keys = ON;
+            """
+        )
+        bad = self._conn.execute("PRAGMA foreign_key_check").fetchall()
+        if bad:
+            raise RuntimeError(
+                f"foreign_key_check failed during multi-provider migration: {bad!r}"
+            )
+        c.execute(
+            "INSERT INTO meta (key, value) VALUES ('owner_id', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (str(owner_id),),
+        )
+        self._owner_id_cached = owner_id
+
+    def _owner_id(self) -> int | None:
+        """Return the legacy 'owner' provider id from `meta.owner_id` or None.
+
+        Used by the legacy single-blacklist shims. Cached on first access;
+        a new migration that writes `meta.owner_id` invalidates the cache
+        directly.
+        """
+        if self._owner_id_cached is not None:
+            return self._owner_id_cached
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = 'owner_id'"
+        ).fetchone()
+        if row is None:
+            return None
+        self._owner_id_cached = int(row[0])
+        return self._owner_id_cached
 
     def upsert_channel(
         self,
@@ -324,12 +455,17 @@ class Database:
         )
 
     def set_blacklisted(self, channel_id: int, blacklisted: bool) -> None:
-        with self._lock:
-            self._conn.execute(
-                "UPDATE channels SET blacklisted = ? WHERE id = ?",
-                (1 if blacklisted else 0, channel_id),
+        """Legacy single-blacklist shim — routes through the owner provider's
+        per-provider blacklist. Subagent C will replace callers with
+        `set_provider_channel_blacklisted` directly."""
+        owner_id = self._owner_id()
+        if owner_id is None:
+            raise RuntimeError(
+                "owner_id not set; cannot use legacy set_blacklisted shim"
             )
-            self._commit()
+        self.set_provider_channel_blacklisted(
+            provider_user_id=owner_id, channel_id=channel_id, blacklisted=blacklisted,
+        )
         log.debug("set_blacklisted id=%s blacklisted=%s", channel_id, blacklisted)
 
     def get_channel_title(self, channel_id: int) -> str | None:
@@ -340,30 +476,47 @@ class Database:
         return row[0] if row else None
 
     def get_channel(self, channel_id: int) -> Channel | None:
+        owner_id = self._owner_id()
         with self._lock:
             row = self._conn.execute(
-                "SELECT id, title, blacklisted, username, about FROM channels WHERE id = ?",
-                (channel_id,),
+                "SELECT c.id, c.title, c.username, c.about, "
+                "       EXISTS (SELECT 1 FROM channel_blacklist b "
+                "               WHERE b.provider_user_id = ? AND b.channel_id = c.id) "
+                "FROM channels c WHERE c.id = ?",
+                (owner_id if owner_id is not None else -1, channel_id),
             ).fetchone()
         if row is None:
             return None
         return Channel(
-            id=row[0], title=row[1], blacklisted=bool(row[2]),
-            username=row[3], about=row[4],
+            id=row[0], title=row[1], username=row[2], about=row[3],
+            blacklisted=bool(row[4]),
         )
 
     def list_channels(self, include_blacklisted: bool = False) -> list[Channel]:
-        sql = "SELECT id, title, blacklisted, username, about FROM channels"
+        owner_id = self._owner_id()
+        owner_param = owner_id if owner_id is not None else -1
+        sql = (
+            "SELECT c.id, c.title, c.username, c.about, "
+            "       EXISTS (SELECT 1 FROM channel_blacklist b "
+            "               WHERE b.provider_user_id = ? AND b.channel_id = c.id) "
+            "FROM channels c"
+        )
+        params: list[object] = [owner_param]
         if not include_blacklisted:
-            sql += " WHERE blacklisted = 0"
-        sql += " ORDER BY title"
+            sql += (
+                " WHERE NOT EXISTS (SELECT 1 FROM channel_blacklist b2 "
+                "                   WHERE b2.provider_user_id = ? "
+                "                     AND b2.channel_id = c.id)"
+            )
+            params.append(owner_param)
+        sql += " ORDER BY c.title"
         with self._lock:
             return [
                 Channel(
-                    id=r[0], title=r[1], blacklisted=bool(r[2]),
-                    username=r[3], about=r[4],
+                    id=r[0], title=r[1], username=r[2], about=r[3],
+                    blacklisted=bool(r[4]),
                 )
-                for r in self._conn.execute(sql)
+                for r in self._conn.execute(sql, params)
             ]
 
     def subscribe(
@@ -415,14 +568,19 @@ class Database:
             }
 
     def subscribers_for_channel(self, channel_id: int) -> list[tuple[int, str]]:
+        owner_id = self._owner_id()
+        owner_param = owner_id if owner_id is not None else -1
         with self._lock:
             return [
                 (r[0], r[1])
                 for r in self._conn.execute(
                     "SELECT s.user_id, s.mode FROM subscriptions s "
                     "JOIN channels c ON c.id = s.channel_id "
-                    "WHERE s.channel_id = ? AND c.blacklisted = 0 AND s.mode != 'off'",
-                    (channel_id,),
+                    "WHERE s.channel_id = ? AND s.mode != 'off' "
+                    "  AND NOT EXISTS (SELECT 1 FROM channel_blacklist b "
+                    "                  WHERE b.provider_user_id = ? "
+                    "                    AND b.channel_id = c.id)",
+                    (channel_id, owner_param),
                 )
             ]
 
@@ -679,13 +837,19 @@ class Database:
         return row[0] if row and row[0] is not None else None
 
     def channels_with_active_subscribers(self) -> list[int]:
+        owner_id = self._owner_id()
+        owner_param = owner_id if owner_id is not None else -1
         with self._lock:
             return [
                 r[0]
                 for r in self._conn.execute(
                     "SELECT DISTINCT s.channel_id FROM subscriptions s "
                     "JOIN channels c ON c.id = s.channel_id "
-                    "WHERE c.blacklisted = 0 AND s.mode != 'off'"
+                    "WHERE s.mode != 'off' "
+                    "  AND NOT EXISTS (SELECT 1 FROM channel_blacklist b "
+                    "                  WHERE b.provider_user_id = ? "
+                    "                    AND b.channel_id = c.id)",
+                    (owner_param,),
                 )
             ]
 
@@ -907,6 +1071,8 @@ class Database:
                 (key, value),
             )
             self._commit()
+        if key == "owner_id":
+            self._owner_id_cached = int(value)
 
     def add_embedding_usage(self, provider: str, tokens: int) -> None:
         with self._lock:
@@ -924,3 +1090,205 @@ class Database:
                 "SELECT provider, tokens FROM embedding_usage ORDER BY provider"
             ).fetchall()
         return [(p, t) for p, t in rows]
+
+    # ---------- providers ----------
+
+    def add_pending_provider(
+        self, user_id: int, session_path: str, now: int | None = None,
+    ) -> None:
+        ts = int(time.time()) if now is None else now
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO providers "
+                "(user_id, status, session_path, requested_at, approved_at) "
+                "VALUES (?, 'pending', ?, ?, NULL) "
+                "ON CONFLICT(user_id) DO UPDATE SET "
+                "status = 'pending', "
+                "session_path = excluded.session_path, "
+                "requested_at = excluded.requested_at, "
+                "approved_at = NULL",
+                (user_id, session_path, ts),
+            )
+            self._commit()
+        log.debug(
+            "add_pending_provider user=%s session_path=%r", user_id, session_path,
+        )
+
+    def set_provider_status(
+        self, user_id: int, status: str, now: int | None = None,
+    ) -> None:
+        if status not in ("pending", "approved", "denied"):
+            raise ValueError(f"invalid provider status: {status!r}")
+        ts = int(time.time()) if now is None else now
+        with self._lock:
+            if status == "approved":
+                self._conn.execute(
+                    "UPDATE providers SET status = ?, approved_at = ? "
+                    "WHERE user_id = ?",
+                    (status, ts, user_id),
+                )
+            else:
+                # Leave approved_at intact when denying so the historical
+                # approval record survives.
+                self._conn.execute(
+                    "UPDATE providers SET status = ? WHERE user_id = ?",
+                    (status, user_id),
+                )
+            self._commit()
+        log.debug("set_provider_status user=%s status=%s", user_id, status)
+
+    def get_provider(self, user_id: int) -> Provider | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT user_id, status, session_path, requested_at, approved_at "
+                "FROM providers WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return Provider(
+            user_id=row[0], status=row[1], session_path=row[2],
+            requested_at=row[3], approved_at=row[4],
+        )
+
+    def list_providers(self, status: str | None = None) -> list[Provider]:
+        with self._lock:
+            if status is None:
+                rows = self._conn.execute(
+                    "SELECT user_id, status, session_path, requested_at, approved_at "
+                    "FROM providers ORDER BY user_id"
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT user_id, status, session_path, requested_at, approved_at "
+                    "FROM providers WHERE status = ? ORDER BY user_id",
+                    (status,),
+                ).fetchall()
+        return [
+            Provider(
+                user_id=r[0], status=r[1], session_path=r[2],
+                requested_at=r[3], approved_at=r[4],
+            )
+            for r in rows
+        ]
+
+    def list_approved_provider_ids(self) -> list[int]:
+        with self._lock:
+            return [
+                r[0]
+                for r in self._conn.execute(
+                    "SELECT user_id FROM providers WHERE status = 'approved' "
+                    "ORDER BY user_id"
+                )
+            ]
+
+    def delete_provider(self, user_id: int) -> None:
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM providers WHERE user_id = ?", (user_id,)
+            )
+            self._commit()
+        log.debug("delete_provider user=%s", user_id)
+
+    # ---------- per-provider blacklist ----------
+
+    def is_blacklisted(self, provider_user_id: int, channel_id: int) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM channel_blacklist "
+                "WHERE provider_user_id = ? AND channel_id = ?",
+                (provider_user_id, channel_id),
+            ).fetchone()
+        return row is not None
+
+    def set_provider_channel_blacklisted(
+        self, provider_user_id: int, channel_id: int, blacklisted: bool,
+    ) -> None:
+        with self._lock:
+            if blacklisted:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO channel_blacklist "
+                    "(provider_user_id, channel_id) VALUES (?, ?)",
+                    (provider_user_id, channel_id),
+                )
+            else:
+                self._conn.execute(
+                    "DELETE FROM channel_blacklist "
+                    "WHERE provider_user_id = ? AND channel_id = ?",
+                    (provider_user_id, channel_id),
+                )
+            self._commit()
+
+    def list_provider_blacklist(self, provider_user_id: int) -> set[int]:
+        with self._lock:
+            return {
+                r[0]
+                for r in self._conn.execute(
+                    "SELECT channel_id FROM channel_blacklist "
+                    "WHERE provider_user_id = ?",
+                    (provider_user_id,),
+                )
+            }
+
+    def list_visible_channels(self) -> list[Channel]:
+        """Return channels visible to bot users — i.e. channels that at least
+        one approved provider has NOT blacklisted. Returns an empty list when
+        no providers are approved (no source = nothing visible).
+
+        TODO(subagent B): once `provider_channels` exists, join on it so we
+        only consider providers that actually subscribe to each channel.
+        """
+        with self._lock:
+            approved = self._conn.execute(
+                "SELECT 1 FROM providers WHERE status = 'approved' LIMIT 1"
+            ).fetchone()
+            if approved is None:
+                return []
+            rows = self._conn.execute(
+                "SELECT c.id, c.title, c.username, c.about FROM channels c "
+                "WHERE EXISTS (SELECT 1 FROM providers p "
+                "              WHERE p.status = 'approved' "
+                "                AND NOT EXISTS (SELECT 1 FROM channel_blacklist b "
+                "                                WHERE b.provider_user_id = p.user_id "
+                "                                  AND b.channel_id = c.id)) "
+                "ORDER BY c.title"
+            ).fetchall()
+        owner_id = self._owner_id()
+        owner_param = owner_id if owner_id is not None else -1
+        # `Channel.blacklisted` is the legacy owner-centric flag for back-compat
+        # rendering; `list_visible_channels` is multi-provider, so a channel
+        # may be visible (some other provider has it) yet still be blacklisted
+        # by the owner.
+        with self._lock:
+            owner_bl = {
+                r[0]
+                for r in self._conn.execute(
+                    "SELECT channel_id FROM channel_blacklist "
+                    "WHERE provider_user_id = ?",
+                    (owner_param,),
+                )
+            }
+        return [
+            Channel(
+                id=r[0], title=r[1], username=r[2], about=r[3],
+                blacklisted=r[0] in owner_bl,
+            )
+            for r in rows
+        ]
+
+    def is_visible_channel(self, channel_id: int) -> bool:
+        with self._lock:
+            approved = self._conn.execute(
+                "SELECT 1 FROM providers WHERE status = 'approved' LIMIT 1"
+            ).fetchone()
+            if approved is None:
+                return False
+            row = self._conn.execute(
+                "SELECT 1 FROM channels c WHERE c.id = ? AND EXISTS ("
+                "  SELECT 1 FROM providers p WHERE p.status = 'approved' "
+                "    AND NOT EXISTS (SELECT 1 FROM channel_blacklist b "
+                "                    WHERE b.provider_user_id = p.user_id "
+                "                      AND b.channel_id = c.id))",
+                (channel_id,),
+            ).fetchone()
+        return row is not None

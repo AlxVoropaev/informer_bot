@@ -12,6 +12,17 @@ def db(tmp_path: Path) -> Database:
     return Database(tmp_path / "test.db")
 
 
+def _seed_owner(db: Database, owner_id: int = 1) -> None:
+    """Set up the legacy 'owner' provider so `set_blacklisted` & friends
+    can route through `channel_blacklist(owner_id, ...)`. The multi-provider
+    schema removed `channels.blacklisted`; tests that exercise the legacy
+    blacklist API need an owner to write against."""
+    db.set_user_status(user_id=owner_id, status="approved")
+    db.add_pending_provider(user_id=owner_id, session_path="data/informer.session")
+    db.set_provider_status(user_id=owner_id, status="approved")
+    db.set_meta("owner_id", str(owner_id))
+
+
 def test_upsert_channel_inserts_then_updates_title(db: Database) -> None:
     db.upsert_channel(channel_id=100, title="Old")
     db.upsert_channel(channel_id=100, title="New")
@@ -25,6 +36,11 @@ def test_upsert_channel_inserts_then_updates_title(db: Database) -> None:
 
 
 def test_upsert_channel_preserves_blacklisted_flag(db: Database) -> None:
+    # Multi-provider schema moved blacklisted out of `channels` into
+    # `channel_blacklist`; upsert_channel never touched the new table so the
+    # flag survives an upsert trivially. Test still exercises the original
+    # intent: an upsert mustn't clear a prior blacklist.
+    _seed_owner(db)
     db.upsert_channel(channel_id=100, title="Foo")
     db.set_blacklisted(channel_id=100, blacklisted=True)
     db.upsert_channel(channel_id=100, title="Foo renamed")
@@ -34,6 +50,7 @@ def test_upsert_channel_preserves_blacklisted_flag(db: Database) -> None:
 
 
 def test_list_channels_excludes_blacklisted_by_default(db: Database) -> None:
+    _seed_owner(db)
     db.upsert_channel(channel_id=1, title="Visible")
     db.upsert_channel(channel_id=2, title="Hidden")
     db.set_blacklisted(channel_id=2, blacklisted=True)
@@ -119,6 +136,7 @@ def test_unsubscribe(db: Database) -> None:
 
 
 def test_subscribers_for_channel_skips_blacklisted_channel(db: Database) -> None:
+    _seed_owner(db)
     db.upsert_channel(channel_id=1, title="Open")
     db.upsert_channel(channel_id=2, title="Banned")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
@@ -159,6 +177,7 @@ def test_max_seen_message_id_returns_highest(db: Database) -> None:
 
 
 def test_channels_with_active_subscribers_excludes_off_and_blacklisted(db: Database) -> None:
+    _seed_owner(db)
     db.upsert_channel(channel_id=1, title="On")
     db.upsert_channel(channel_id=2, title="Off")
     db.upsert_channel(channel_id=3, title="Banned")
@@ -593,7 +612,7 @@ def test_add_embedding_usage_separate_providers(db: Database) -> None:
 
 
 def test_migration_v10_to_v11_preserves_old_usage_under_unknown(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Pre-populate a v10-shape DB with the old singleton-row usage tables,
     then open it through Database and confirm the rows survive under
@@ -668,6 +687,9 @@ def test_migration_v10_to_v11_preserves_old_usage_under_unknown(
     conn.commit()
     conn.close()
 
+    # Migration 11 -> 12 needs OWNER_ID; this v10 test now also walks through
+    # the multi-provider migration, so seed the env.
+    monkeypatch.setenv("OWNER_ID", "1")
     db = Database(db_path)
 
     assert db.get_usage(user_id=10) == [("unknown", 123, 45)]
@@ -882,3 +904,351 @@ def test_transaction_nested_flat(db: Database) -> None:
 
     assert db.get_usage(user_id=1) == [("anthropic", 3, 1)]
     assert db.get_system_usage() == [("anthropic", 3, 1)]
+
+
+# ---------- multi-provider migration & schema ----------
+
+
+def _make_legacy_v11_db(path: Path) -> None:
+    """Materialize a v11-shape DB on disk: schema BEFORE the multi-provider
+    migration. Mirrors the pre-12 layout: `channels.blacklisted` lives on
+    the row, `providers` and `channel_blacklist` don't exist."""
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE channels (
+            id INTEGER PRIMARY KEY, title TEXT NOT NULL,
+            blacklisted INTEGER NOT NULL DEFAULT 0,
+            username TEXT, about TEXT
+        );
+        CREATE TABLE subscriptions (
+            user_id INTEGER NOT NULL, channel_id INTEGER NOT NULL,
+            mode TEXT NOT NULL DEFAULT 'filtered'
+                CHECK(mode IN ('off','filtered','debug','all')),
+            filter_prompt TEXT,
+            PRIMARY KEY (user_id, channel_id),
+            FOREIGN KEY (channel_id) REFERENCES channels(id)
+        );
+        CREATE TABLE seen (
+            channel_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
+            PRIMARY KEY (channel_id, message_id)
+        );
+        CREATE TABLE users (
+            user_id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL CHECK(status IN ('pending','approved','denied')),
+            username TEXT, first_name TEXT,
+            language TEXT NOT NULL DEFAULT 'en' CHECK(language IN ('en','ru')),
+            auto_delete_hours INTEGER,
+            dedup_debug INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE usage (
+            user_id INTEGER NOT NULL, provider TEXT NOT NULL,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, provider)
+        );
+        CREATE TABLE system_usage (
+            provider TEXT PRIMARY KEY,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE post_embeddings (
+            channel_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
+            created_at INTEGER NOT NULL, embedding BLOB NOT NULL,
+            summary TEXT NOT NULL, link TEXT NOT NULL,
+            PRIMARY KEY (channel_id, message_id)
+        );
+        CREATE TABLE delivered (
+            user_id INTEGER NOT NULL, channel_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL, bot_message_id INTEGER NOT NULL,
+            is_photo INTEGER NOT NULL, body TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            dup_links_json TEXT NOT NULL DEFAULT '[]',
+            saved INTEGER NOT NULL DEFAULT 0,
+            delete_at INTEGER,
+            PRIMARY KEY (user_id, channel_id, message_id)
+        );
+        CREATE TABLE embedding_usage (
+            provider TEXT PRIMARY KEY,
+            tokens INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        INSERT INTO meta (key, value) VALUES ('schema_version', '11');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_multi_provider_migration_seeds_owner_and_copies_blacklist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "legacy.db"
+    _make_legacy_v11_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        INSERT INTO channels (id, title, blacklisted) VALUES
+            (1, 'Open', 0),
+            (2, 'Banned', 1),
+            (3, 'AlsoBanned', 1);
+        INSERT INTO subscriptions (user_id, channel_id, mode) VALUES (10, 2, 'all');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setenv("OWNER_ID", "777")
+    db = Database(db_path)
+
+    # Column dropped
+    cols = {r[1] for r in db._conn.execute("PRAGMA table_info(channels)")}
+    assert cols == {"id", "title", "username", "about"}
+
+    # Owner provider seeded
+    owner = db.get_provider(user_id=777)
+    assert owner is not None
+    assert owner.status == "approved"
+    assert owner.session_path == "data/informer.session"
+    assert owner.approved_at is not None
+
+    # Owner's user row was inserted (FK requirement)
+    assert db.get_user_status(user_id=777) == "approved"
+
+    # Legacy blacklist copied into channel_blacklist for the owner
+    assert db.list_provider_blacklist(provider_user_id=777) == {2, 3}
+
+    # meta.owner_id is set so the legacy shims can find the owner
+    assert db.get_meta("owner_id") == "777"
+
+    # FKs intact: subscriptions(channel_id) still resolves
+    bad = db._conn.execute("PRAGMA foreign_key_check").fetchall()
+    assert bad == []
+
+
+def test_multi_provider_migration_requires_owner_id_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "legacy.db"
+    _make_legacy_v11_db(db_path)
+
+    monkeypatch.delenv("OWNER_ID", raising=False)
+    with pytest.raises(RuntimeError, match="OWNER_ID"):
+        Database(db_path)
+
+
+def test_legacy_set_blacklisted_writes_into_owner_blacklist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "legacy.db"
+    _make_legacy_v11_db(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        "INSERT INTO channels (id, title, blacklisted) VALUES (1, 'A', 0);"
+    )
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setenv("OWNER_ID", "555")
+    db = Database(db_path)
+
+    # Compat shim: set_blacklisted routes through the new table for the owner.
+    db.set_blacklisted(channel_id=1, blacklisted=True)
+    assert db.list_provider_blacklist(provider_user_id=555) == {1}
+
+    # And Channel.blacklisted reflects it via list_channels.
+    [ch] = [c for c in db.list_channels(include_blacklisted=True) if c.id == 1]
+    assert ch.blacklisted is True
+
+    # Default list_channels (include_blacklisted=False) excludes it.
+    assert db.list_channels() == []
+
+    # Toggling off removes the row.
+    db.set_blacklisted(channel_id=1, blacklisted=False)
+    assert db.list_provider_blacklist(provider_user_id=555) == set()
+
+
+def test_set_blacklisted_raises_when_owner_id_unset(db: Database) -> None:
+    """Fresh DB has no owner provider; the legacy shim must fail loudly
+    rather than silently no-op so callers know to seed the owner first."""
+    db.upsert_channel(channel_id=1, title="A")
+    with pytest.raises(RuntimeError, match="owner_id"):
+        db.set_blacklisted(channel_id=1, blacklisted=True)
+
+
+def test_list_channels_treats_unblacklisted_when_owner_unset(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.upsert_channel(channel_id=2, title="B")
+    [a, b] = db.list_channels()
+    assert a.blacklisted is False
+    assert b.blacklisted is False
+
+
+# ---------- providers API ----------
+
+
+def test_add_pending_provider_inserts_pending_row(db: Database) -> None:
+    db.set_user_status(user_id=10, status="approved")
+    db.add_pending_provider(user_id=10, session_path="data/p10.session", now=1000)
+
+    p = db.get_provider(user_id=10)
+    assert p is not None
+    assert p.user_id == 10
+    assert p.status == "pending"
+    assert p.session_path == "data/p10.session"
+    assert p.requested_at == 1000
+    assert p.approved_at is None
+
+
+def test_add_pending_provider_resets_status_to_pending(db: Database) -> None:
+    db.set_user_status(user_id=10, status="approved")
+    db.add_pending_provider(user_id=10, session_path="old", now=100)
+    db.set_provider_status(user_id=10, status="approved", now=200)
+    db.add_pending_provider(user_id=10, session_path="new", now=300)
+
+    p = db.get_provider(user_id=10)
+    assert p is not None
+    assert p.status == "pending"
+    assert p.session_path == "new"
+    assert p.requested_at == 300
+    assert p.approved_at is None
+
+
+def test_set_provider_status_approved_stamps_approved_at(db: Database) -> None:
+    db.set_user_status(user_id=10, status="approved")
+    db.add_pending_provider(user_id=10, session_path="s", now=100)
+    db.set_provider_status(user_id=10, status="approved", now=500)
+
+    p = db.get_provider(user_id=10)
+    assert p is not None
+    assert p.status == "approved"
+    assert p.approved_at == 500
+
+
+def test_set_provider_status_denied_keeps_approved_at(db: Database) -> None:
+    db.set_user_status(user_id=10, status="approved")
+    db.add_pending_provider(user_id=10, session_path="s", now=100)
+    db.set_provider_status(user_id=10, status="approved", now=500)
+    db.set_provider_status(user_id=10, status="denied", now=600)
+
+    p = db.get_provider(user_id=10)
+    assert p is not None
+    assert p.status == "denied"
+    # approved_at preserved as historical record
+    assert p.approved_at == 500
+
+
+def test_set_provider_status_rejects_invalid(db: Database) -> None:
+    db.set_user_status(user_id=10, status="approved")
+    db.add_pending_provider(user_id=10, session_path="s")
+    with pytest.raises(ValueError):
+        db.set_provider_status(user_id=10, status="bogus")
+
+
+def test_list_providers_filter_by_status(db: Database) -> None:
+    for uid in (10, 20, 30):
+        db.set_user_status(user_id=uid, status="approved")
+        db.add_pending_provider(user_id=uid, session_path=f"s{uid}")
+    db.set_provider_status(user_id=20, status="approved")
+    db.set_provider_status(user_id=30, status="denied")
+
+    pending = db.list_providers(status="pending")
+    approved = db.list_providers(status="approved")
+    all_ = db.list_providers()
+
+    assert [p.user_id for p in pending] == [10]
+    assert [p.user_id for p in approved] == [20]
+    assert [p.user_id for p in all_] == [10, 20, 30]
+
+
+def test_list_approved_provider_ids(db: Database) -> None:
+    for uid in (10, 20, 30):
+        db.set_user_status(user_id=uid, status="approved")
+        db.add_pending_provider(user_id=uid, session_path="s")
+    db.set_provider_status(user_id=10, status="approved")
+    db.set_provider_status(user_id=30, status="approved")
+    assert db.list_approved_provider_ids() == [10, 30]
+
+
+def test_delete_provider_cascades_blacklist(db: Database) -> None:
+    db.set_user_status(user_id=10, status="approved")
+    db.add_pending_provider(user_id=10, session_path="s")
+    db.upsert_channel(channel_id=1, title="A")
+    db.upsert_channel(channel_id=2, title="B")
+    db.set_provider_channel_blacklisted(provider_user_id=10, channel_id=1, blacklisted=True)
+    db.set_provider_channel_blacklisted(provider_user_id=10, channel_id=2, blacklisted=True)
+    assert db.list_provider_blacklist(provider_user_id=10) == {1, 2}
+
+    db.delete_provider(user_id=10)
+
+    assert db.get_provider(user_id=10) is None
+    assert db.list_provider_blacklist(provider_user_id=10) == set()
+
+
+# ---------- per-provider blacklist ----------
+
+
+def test_set_provider_channel_blacklisted_idempotent(db: Database) -> None:
+    db.set_user_status(user_id=10, status="approved")
+    db.add_pending_provider(user_id=10, session_path="s")
+    db.upsert_channel(channel_id=1, title="A")
+
+    db.set_provider_channel_blacklisted(provider_user_id=10, channel_id=1, blacklisted=True)
+    db.set_provider_channel_blacklisted(provider_user_id=10, channel_id=1, blacklisted=True)
+    assert db.is_blacklisted(provider_user_id=10, channel_id=1) is True
+    assert db.list_provider_blacklist(provider_user_id=10) == {1}
+
+    db.set_provider_channel_blacklisted(provider_user_id=10, channel_id=1, blacklisted=False)
+    assert db.is_blacklisted(provider_user_id=10, channel_id=1) is False
+    assert db.list_provider_blacklist(provider_user_id=10) == set()
+
+
+# ---------- list_visible_channels ----------
+
+
+def test_list_visible_channels_empty_when_no_approved_providers(db: Database) -> None:
+    db.upsert_channel(channel_id=1, title="A")
+    db.upsert_channel(channel_id=2, title="B")
+    # Pending providers don't count.
+    db.set_user_status(user_id=10, status="approved")
+    db.add_pending_provider(user_id=10, session_path="s")
+    assert db.list_visible_channels() == []
+    assert db.is_visible_channel(1) is False
+
+
+def test_list_visible_channels_owner_only_unblacklisted(db: Database) -> None:
+    _seed_owner(db, owner_id=1)
+    db.upsert_channel(channel_id=1, title="Visible")
+    db.upsert_channel(channel_id=2, title="Hidden")
+    db.set_provider_channel_blacklisted(provider_user_id=1, channel_id=2, blacklisted=True)
+
+    visible_ids = [c.id for c in db.list_visible_channels()]
+    assert visible_ids == [1]
+    assert db.is_visible_channel(1) is True
+    assert db.is_visible_channel(2) is False
+
+
+def test_list_visible_channels_two_providers_one_blacklists(db: Database) -> None:
+    _seed_owner(db, owner_id=1)
+    db.set_user_status(user_id=2, status="approved")
+    db.add_pending_provider(user_id=2, session_path="b.session")
+    db.set_provider_status(user_id=2, status="approved")
+    db.upsert_channel(channel_id=10, title="Shared")
+    # Owner blacklists; provider 2 does not -> still visible.
+    db.set_provider_channel_blacklisted(provider_user_id=1, channel_id=10, blacklisted=True)
+
+    assert [c.id for c in db.list_visible_channels()] == [10]
+    assert db.is_visible_channel(10) is True
+
+
+def test_list_visible_channels_hidden_when_all_providers_blacklist(db: Database) -> None:
+    _seed_owner(db, owner_id=1)
+    db.set_user_status(user_id=2, status="approved")
+    db.add_pending_provider(user_id=2, session_path="b.session")
+    db.set_provider_status(user_id=2, status="approved")
+    db.upsert_channel(channel_id=10, title="Shared")
+    db.set_provider_channel_blacklisted(provider_user_id=1, channel_id=10, blacklisted=True)
+    db.set_provider_channel_blacklisted(provider_user_id=2, channel_id=10, blacklisted=True)
+
+    assert db.list_visible_channels() == []
+    assert db.is_visible_channel(10) is False

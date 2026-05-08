@@ -118,6 +118,13 @@ async def test_catch_up_drops_posts_outside_window(db: Database) -> None:
 
 
 async def test_catch_up_skips_off_and_blacklisted(db: Database) -> None:
+    # Seed an owner provider so the legacy `set_blacklisted` shim has a
+    # destination; subscribers_for_channel routes through the same owner.
+    OWNER = 999
+    db.set_user_status(user_id=OWNER, status="approved")
+    db.add_pending_provider(user_id=OWNER, session_path="data/informer.session")
+    db.set_provider_status(user_id=OWNER, status="approved")
+    db.set_meta("owner_id", str(OWNER))
     db.upsert_channel(channel_id=1, title="Off")
     db.upsert_channel(channel_id=2, title="Banned")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.OFF)

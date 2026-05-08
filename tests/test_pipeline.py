@@ -248,6 +248,11 @@ async def test_handle_new_post_is_idempotent_per_message(db: Database) -> None:
 
 
 async def test_handle_new_post_silent_when_channel_blacklisted(db: Database) -> None:
+    OWNER = 999
+    db.set_user_status(user_id=OWNER, status="approved")
+    db.add_pending_provider(user_id=OWNER, session_path="data/informer.session")
+    db.set_provider_status(user_id=OWNER, status="approved")
+    db.set_meta("owner_id", str(OWNER))
     db.upsert_channel(channel_id=1, title="A")
     db.subscribe(user_id=10, channel_id=1)
     db.set_blacklisted(channel_id=1, blacklisted=True)
@@ -704,6 +709,11 @@ async def test_refresh_announce_optional(db: Database) -> None:
 
 
 async def test_refresh_silent_for_disappeared_blacklisted_channels(db: Database) -> None:
+    OWNER = 999
+    db.set_user_status(user_id=OWNER, status="approved")
+    db.add_pending_provider(user_id=OWNER, session_path="data/informer.session")
+    db.set_provider_status(user_id=OWNER, status="approved")
+    db.set_meta("owner_id", str(OWNER))
     db.upsert_channel(channel_id=1, title="Alpha")
     db.upsert_channel(channel_id=2, title="WasBanned")
     db.subscribe(user_id=10, channel_id=2)

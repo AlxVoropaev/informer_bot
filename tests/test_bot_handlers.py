@@ -28,12 +28,17 @@ USER_ID = 42
 @pytest.fixture
 def db(tmp_path: Path) -> Database:
     db = Database(tmp_path / "bot.db")
+    # Owner needs to exist as a provider for the legacy blacklist shim to
+    # route through `channel_blacklist(owner_id, ...)`.
+    db.set_user_status(user_id=OWNER_ID, status="approved")
+    db.add_pending_provider(user_id=OWNER_ID, session_path="data/informer.session")
+    db.set_provider_status(user_id=OWNER_ID, status="approved")
+    db.set_meta("owner_id", str(OWNER_ID))
     db.upsert_channel(channel_id=1, title="Alpha")
     db.upsert_channel(channel_id=2, title="Beta")
     db.upsert_channel(channel_id=3, title="BannedChan")
     db.set_blacklisted(channel_id=3, blacklisted=True)
     db.set_user_status(user_id=USER_ID, status="approved")
-    db.set_user_status(user_id=OWNER_ID, status="approved")
     return db
 
 
