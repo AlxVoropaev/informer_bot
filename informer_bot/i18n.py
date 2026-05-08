@@ -26,13 +26,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
         "owner_help_extra": (
             "\n\nAdmin:\n"
-            "/blacklist — toggle channel blacklist\n"
             "/update — refresh the channel list from your Telegram account"
         ),
-        "done_button": "Done",
-        "channel_unavailable": "Channel unavailable.",
-        "admin_pick_blacklist": "Admin: tap to toggle blacklist.",
-        "blacklist_closed": "Blacklist closed.",
         "refreshing": "Refreshing channel list...",
         "refresh_failed": "Refresh failed. Check logs.",
         "refresh_done": "Channel list refreshed.",
@@ -48,7 +43,6 @@ _STRINGS: dict[str, dict[str, str]] = {
         "deny_button": "⛔ Deny",
         "user_allowed": "Allowed user {target}.",
         "user_denied_msg": "Denied user {target}.",
-        "channel_blocked": "Admin blocked channel '{title}', you will not get updates anymore.",
         "channel_gone": "Channel '{title}' is no longer available.",
         "channel_new": "📢 New channel available: {title}\nOpen the Mini App to subscribe.",
         "channel_new_open_button": "🪟 Open in Mini App",
@@ -106,13 +100,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         ),
         "owner_help_extra": (
             "\n\nАдмин:\n"
-            "/blacklist — переключить чёрный список каналов\n"
             "/update — обновить список каналов из твоего Telegram-аккаунта"
         ),
-        "done_button": "Готово",
-        "channel_unavailable": "Канал недоступен.",
-        "admin_pick_blacklist": "Админ: нажми, чтобы переключить блокировку.",
-        "blacklist_closed": "Чёрный список закрыт.",
         "refreshing": "Обновляю список каналов...",
         "refresh_failed": "Обновление не удалось. Смотри логи.",
         "refresh_done": "Список каналов обновлён.",
@@ -128,7 +117,6 @@ _STRINGS: dict[str, dict[str, str]] = {
         "deny_button": "⛔ Отклонить",
         "user_allowed": "Пользователь {target} разрешён.",
         "user_denied_msg": "Пользователь {target} отклонён.",
-        "channel_blocked": "Админ заблокировал канал '{title}', ты больше не будешь получать обновления.",
         "channel_gone": "Канал '{title}' больше недоступен.",
         "channel_new": "📢 Новый канал доступен: {title}\nОткрой Mini App, чтобы подписаться.",
         "channel_new_open_button": "🪟 Открыть в Mini App",

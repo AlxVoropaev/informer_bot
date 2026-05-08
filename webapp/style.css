@@ -324,6 +324,59 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   white-space: pre-wrap;
 }
 
+.provider-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 12px 0;
+}
+
+.provider-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--hint);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+.provider-tag.approved { background: rgba(36, 129, 204, 0.12); color: var(--link); }
+.provider-tag.pending { background: rgba(36, 129, 204, 0.08); color: var(--link); }
+.provider-tag.denied { background: rgba(229, 72, 77, 0.12); color: var(--danger); }
+
+button.provider-request {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--separator);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+button.provider-request:hover { background: var(--separator); }
+button.provider-request:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.provider-blacklist-section {
+  margin: 0 0 16px 0;
+}
+.provider-blacklist-section .filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px 0;
+}
+.provider-blacklist-section .filter > span {
+  margin: 0;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 14px;
+  color: var(--text);
+}
+
 .toast {
   position: fixed;
   left: 50%;

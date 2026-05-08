@@ -78,48 +78,6 @@ def _lang(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> str:
     return _db(context).get_language(user_id)
 
 
-_PAGE_SIZE = 15
-
-
-def _paginate(items: list, page: int) -> tuple[list, int, int]:
-    total_pages = max(1, (len(items) + _PAGE_SIZE - 1) // _PAGE_SIZE)
-    page = max(0, min(page, total_pages - 1))
-    start = page * _PAGE_SIZE
-    return items[start:start + _PAGE_SIZE], page, total_pages
-
-
-def _nav_row(page: int, total_pages: int, prefix: str) -> list[InlineKeyboardButton] | None:
-    if total_pages <= 1:
-        return None
-    row: list[InlineKeyboardButton] = []
-    if page > 0:
-        row.append(InlineKeyboardButton(text="◀", callback_data=f"{prefix}:{page - 1}"))
-    row.append(InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop"))
-    if page < total_pages - 1:
-        row.append(InlineKeyboardButton(text="▶", callback_data=f"{prefix}:{page + 1}"))
-    return row
-
-
-def _admin_keyboard(
-    db: Database, lang: str, page: int = 0
-) -> InlineKeyboardMarkup:
-    page_items, _page, total_pages = _paginate(
-        db.list_channels(include_blacklisted=True), page
-    )
-    rows: list[list[InlineKeyboardButton]] = [
-        [InlineKeyboardButton(
-            text=f"{'⛔' if c.blacklisted else '✅'} {c.title}",
-            callback_data=f"bl:{c.id}",
-        )]
-        for c in page_items
-    ]
-    nav = _nav_row(_page, total_pages, "blpage")
-    if nav:
-        rows.append(nav)
-    rows.append([InlineKeyboardButton(text=t(lang, "done_button"), callback_data="bl_done")])
-    return InlineKeyboardMarkup(rows)
-
-
 def _user_label(user: User) -> str:
     if user.username:
         return f"@{user.username}"
@@ -307,54 +265,6 @@ async def cmd_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await message.reply_text(t(lang, "refresh_done"))
 
 
-async def cmd_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = _user(update).id
-    message = _message(update)
-    lang = _lang(context, user_id)
-    if user_id != _owner_id(context):
-        log.info("/blacklist denied for user=%s", user_id)
-        await message.reply_text(t(lang, "denied"))
-        return
-    log.debug("/blacklist from owner=%s", user_id)
-    assert context.user_data is not None
-    context.user_data["bl_page"] = 0
-    await message.reply_text(
-        t(lang, "admin_pick_blacklist"),
-        reply_markup=_admin_keyboard(_db(context), lang, page=0),
-    )
-
-
-async def on_blacklist_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = _user(update).id
-    query = _query(update)
-    lang = _lang(context, user_id)
-    if user_id != _owner_id(context):
-        log.info("blacklist done denied for user=%s", user_id)
-        await query.answer(t(lang, "denied"))
-        return
-    log.debug("/blacklist done by owner=%s", user_id)
-    await query.answer()
-    await query.edit_message_text(t(lang, "blacklist_closed"))
-
-
-async def on_blacklist_page(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db = _db(context)
-    user_id = _user(update).id
-    query = _query(update)
-    lang = db.get_language(user_id)
-    if user_id != _owner_id(context):
-        await query.answer(t(lang, "denied"))
-        return
-    assert isinstance(query.data, str)
-    page = int(query.data.split(":", 1)[1])
-    assert context.user_data is not None
-    context.user_data["bl_page"] = page
-    await query.answer()
-    await query.edit_message_reply_markup(
-        reply_markup=_admin_keyboard(db, lang, page=page),
-    )
-
-
 async def on_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     db = _db(context)
     actor_id = _user(update).id
@@ -403,53 +313,6 @@ async def on_deny(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await context.bot.send_message(
         chat_id=target_id, text=t(target_lang, "access_denied")
     )
-
-
-async def on_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    db = _db(context)
-    actor_id = _user(update).id
-    query = _query(update)
-    actor_lang = db.get_language(actor_id)
-    if actor_id != _owner_id(context):
-        log.info("blacklist toggle denied for user=%s", actor_id)
-        await query.answer(t(actor_lang, "denied"))
-        return
-
-    assert isinstance(query.data, str)
-    channel_id = int(query.data.split(":", 1)[1])
-    channel = db.get_channel(channel_id)
-    if channel is None:
-        await query.answer(t(actor_lang, "channel_unavailable"))
-        return
-    will_blacklist = not channel.blacklisted
-
-    if will_blacklist:
-        subs = db.subscribers_for_channel(channel_id=channel_id)
-        for user_id, _mode in subs:
-            sub_lang = db.get_language(user_id)
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=t(sub_lang, "channel_blocked", title=channel.title),
-            )
-        log.info(
-            "blacklisting channel=%s '%s' (%d subscriber(s) notified)",
-            channel_id, channel.title, len(subs),
-        )
-    else:
-        log.info("un-blacklisting channel=%s '%s'", channel_id, channel.title)
-
-    db.set_blacklisted(channel_id=channel_id, blacklisted=will_blacklist)
-
-    await query.answer()
-    page = (context.user_data or {}).get("bl_page", 0)
-    await query.edit_message_text(
-        t(actor_lang, "admin_pick_blacklist"),
-        reply_markup=_admin_keyboard(db, actor_lang, page=page),
-    )
-
-
-async def on_noop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _query(update).answer()
 
 
 def build_dm_keyboard(
@@ -518,6 +381,35 @@ async def on_save(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 # ---------- providers ----------
 
+async def notify_owner_provider_request(
+    bot, db: Database, requester_id: int, owner_id: int,
+) -> None:
+    """DM the owner an Approve/Deny inline keyboard for `requester_id`.
+
+    Shared by `/become_provider` (Telegram) and `POST /api/become_provider`
+    (Mini App). `bot` is a PTB `Bot` (i.e. `application.bot`).
+    """
+    owner_lang = db.get_language(owner_id)
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            text=t(owner_lang, "provider_approve_button"),
+            callback_data=f"provider_approve:{requester_id}",
+        ),
+        InlineKeyboardButton(
+            text=t(owner_lang, "provider_deny_button"),
+            callback_data=f"provider_deny:{requester_id}",
+        ),
+    ]])
+    await bot.send_message(
+        chat_id=owner_id,
+        text=t(
+            owner_lang, "provider_request_admin",
+            user_label=db.get_user_label(requester_id),
+        ),
+        reply_markup=keyboard,
+    )
+
+
 async def cmd_become_provider(
     update: Update, context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
@@ -551,25 +443,8 @@ async def cmd_become_provider(
     db.add_pending_provider(user_id=user_id, session_path=session_path)
     log.info("provider request from user=%s", user_id)
 
-    owner_id = _owner_id(context)
-    owner_lang = db.get_language(owner_id)
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            text=t(owner_lang, "provider_approve_button"),
-            callback_data=f"provider_approve:{user_id}",
-        ),
-        InlineKeyboardButton(
-            text=t(owner_lang, "provider_deny_button"),
-            callback_data=f"provider_deny:{user_id}",
-        ),
-    ]])
-    await context.bot.send_message(
-        chat_id=owner_id,
-        text=t(
-            owner_lang, "provider_request_admin",
-            user_label=db.get_user_label(user_id),
-        ),
-        reply_markup=keyboard,
+    await notify_owner_provider_request(
+        context.bot, db, requester_id=user_id, owner_id=_owner_id(context),
     )
     await message.reply_text(t(lang, "provider_request_submitted"))
 

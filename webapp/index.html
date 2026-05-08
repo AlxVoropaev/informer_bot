@@ -15,6 +15,8 @@
     <select id="lang"></select>
   </header>
 
+  <div id="provider-banner" class="provider-banner" hidden></div>
+
   <main id="list" class="list" aria-busy="true">
     <div class="empty" id="loading">Loading…</div>
   </main>
@@ -78,6 +80,14 @@
       <label><input type="radio" name="mode" value="debug" /><span>🐞 Debug</span></label>
       <label><input type="radio" name="mode" value="all" /><span>✅ All</span></label>
     </fieldset>
+
+    <div id="provider-blacklist-section" class="provider-blacklist-section" hidden>
+      <label class="filter">
+        <input id="provider-blacklist-input" type="checkbox" />
+        <span id="provider-blacklist-label">⛔ Blacklist for my contribution</span>
+      </label>
+      <p id="provider-blacklist-hint" class="tips"></p>
+    </div>
 
     <label class="filter">
       <span>Filter prompt</span>

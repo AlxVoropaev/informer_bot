@@ -59,6 +59,15 @@ const I18N = {
     summaryPromptReset: "Reset",
     summaryPromptSaved: "System prompt saved.",
     summaryPromptResetDone: "System prompt reset to default.",
+    providerRequest: "Request to be a provider",
+    providerPending: "Provider request pending",
+    providerDenied: "Provider request denied",
+    providerApproved: "✅ Provider",
+    providerRequestSent: "Request submitted.",
+    providerBlacklistLabel: "⛔ Blacklist for my contribution",
+    providerBlacklistHint: "When checked, this channel is hidden from bot users via your contribution. Other providers' contributions are unaffected.",
+    providerBlacklistOn: "Channel blacklisted.",
+    providerBlacklistOff: "Channel un-blacklisted.",
   },
   ru: {
     search: "Поиск каналов…",
@@ -116,6 +125,15 @@ const I18N = {
     summaryPromptReset: "Сбросить",
     summaryPromptSaved: "Системный промпт сохранён.",
     summaryPromptResetDone: "Системный промпт сброшен к значению по умолчанию.",
+    providerRequest: "Стать провайдером",
+    providerPending: "Запрос на провайдера в обработке",
+    providerDenied: "Запрос на провайдера отклонён",
+    providerApproved: "✅ Провайдер",
+    providerRequestSent: "Запрос отправлен.",
+    providerBlacklistLabel: "⛔ Заблокировать для моего вклада",
+    providerBlacklistHint: "Когда отмечено, этот канал скрыт от пользователей бота через ваш вклад. Вклады других провайдеров не затрагиваются.",
+    providerBlacklistOn: "Канал заблокирован.",
+    providerBlacklistOff: "Канал разблокирован.",
   },
 };
 
@@ -130,6 +148,10 @@ const state = {
   dedupDebug: false,
   summaryPrompt: null,
   summaryPromptDefault: null,
+  isProvider: false,
+  providerStatus: null,
+  providerBlacklist: [],
+  providerChannels: [],
 };
 
 function t() { return I18N[state.language] || I18N.en; }
@@ -184,10 +206,105 @@ function applyLanguage() {
   el("summary-prompt-hint").textContent = dict.summaryPromptHint;
   el("summary-prompt-save").textContent = dict.summaryPromptSave;
   el("summary-prompt-reset").textContent = dict.summaryPromptReset;
+  el("provider-blacklist-label").textContent = dict.providerBlacklistLabel;
+  el("provider-blacklist-hint").textContent = dict.providerBlacklistHint;
   document.querySelectorAll('input[name="mode"]').forEach((input) => {
     const labelSpan = input.nextElementSibling;
     labelSpan.textContent = dict.modes[input.value];
   });
+  renderProviderBanner();
+}
+
+
+function renderProviderBanner() {
+  const banner = el("provider-banner");
+  const dict = t();
+  banner.replaceChildren();
+  if (state.isOwner || state.isProvider) {
+    if (state.isProvider) {
+      const tag = document.createElement("span");
+      tag.className = "provider-tag approved";
+      tag.textContent = dict.providerApproved;
+      banner.appendChild(tag);
+      banner.hidden = false;
+      return;
+    }
+  }
+  if (state.providerStatus === "pending") {
+    const tag = document.createElement("span");
+    tag.className = "provider-tag pending";
+    tag.textContent = dict.providerPending;
+    banner.appendChild(tag);
+    banner.hidden = false;
+    return;
+  }
+  if (state.providerStatus === "denied") {
+    const tag = document.createElement("span");
+    tag.className = "provider-tag denied";
+    tag.textContent = dict.providerDenied;
+    banner.appendChild(tag);
+    banner.hidden = false;
+    return;
+  }
+  if (!state.isOwner && state.providerStatus === null) {
+    const btn = document.createElement("button");
+    btn.id = "provider-request-btn";
+    btn.type = "button";
+    btn.className = "provider-request";
+    btn.textContent = dict.providerRequest;
+    btn.addEventListener("click", requestProvider);
+    banner.appendChild(btn);
+    banner.hidden = false;
+    return;
+  }
+  banner.hidden = true;
+}
+
+
+async function requestProvider() {
+  const btn = el("provider-request-btn");
+  if (btn) btn.disabled = true;
+  try {
+    const data = await api("/api/become_provider", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    if (data.ok) {
+      state.providerStatus = "pending";
+      state.isProvider = false;
+      showToast(t().providerRequestSent);
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+    } else if (data.reason === "already_pending") {
+      state.providerStatus = "pending";
+    } else if (data.reason === "already_approved") {
+      state.providerStatus = "approved";
+      state.isProvider = true;
+    } else if (data.reason === "denied") {
+      state.providerStatus = "denied";
+    }
+    renderProviderBanner();
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    showToast(e.message || t().network_error);
+  }
+}
+
+
+async function toggleProviderBlacklist(channelId, blacklisted) {
+  try {
+    const data = await api("/api/blacklist", {
+      method: "POST",
+      body: JSON.stringify({ channel_id: channelId, blacklisted }),
+    });
+    state.providerBlacklist = data.blacklist || [];
+    const dict = t();
+    showToast(blacklisted ? dict.providerBlacklistOn : dict.providerBlacklistOff);
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+    renderList();
+  } catch (e) {
+    el("provider-blacklist-input").checked = (state.providerBlacklist || []).includes(channelId);
+    showToast(e.message || t().network_error);
+  }
 }
 
 function rebuildLangSelect() {
@@ -215,6 +332,7 @@ function renderList() {
     return;
   }
 
+  const blSet = new Set(state.providerBlacklist || []);
   const frag = document.createDocumentFragment();
   for (const c of items) {
     const row = document.createElement("div");
@@ -229,7 +347,7 @@ function renderList() {
     titleBlock.className = "title-block";
     const title = document.createElement("div");
     title.className = "title";
-    title.textContent = c.title;
+    title.textContent = (state.isProvider && blSet.has(c.id) ? "⛔ " : "") + c.title;
     titleBlock.appendChild(title);
 
     const meta = document.createElement("div");
@@ -285,6 +403,16 @@ function openDetails(channelId) {
     input.checked = input.value === c.mode;
   });
   el("filter-input").value = c.filter_prompt || "";
+
+  const blSection = el("provider-blacklist-section");
+  const providerChannels = new Set(state.providerChannels || []);
+  if (state.isProvider && providerChannels.has(c.id)) {
+    blSection.hidden = false;
+    el("provider-blacklist-input").checked =
+      (state.providerBlacklist || []).includes(c.id);
+  } else {
+    blSection.hidden = true;
+  }
 
   el("list").classList.add("hidden");
   el("details").classList.remove("hidden");
@@ -572,6 +700,10 @@ async function init() {
     state.dedupDebug = !!data.dedup_debug;
     state.summaryPrompt = data.summary_prompt == null ? null : String(data.summary_prompt);
     state.summaryPromptDefault = data.summary_prompt_default == null ? null : String(data.summary_prompt_default);
+    state.isProvider = !!data.is_provider;
+    state.providerStatus = data.provider_status == null ? null : String(data.provider_status);
+    state.providerBlacklist = Array.isArray(data.provider_blacklist) ? data.provider_blacklist : [];
+    state.providerChannels = Array.isArray(data.provider_channels) ? data.provider_channels : [];
     rebuildLangSelect();
     applyLanguage();
     renderList();
@@ -634,6 +766,11 @@ async function init() {
     if (state.selectedId == null) return;
     el("filter-input").value = "";
     saveFilter(state.selectedId, null);
+  });
+
+  el("provider-blacklist-input").addEventListener("change", (ev) => {
+    if (state.selectedId == null) return;
+    toggleProviderBlacklist(state.selectedId, !!ev.target.checked);
   });
 }
 

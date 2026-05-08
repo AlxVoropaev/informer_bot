@@ -11,6 +11,7 @@ import json
 import logging
 import time
 from collections import defaultdict, deque
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from urllib.parse import parse_qsl
 
@@ -19,6 +20,7 @@ from aiohttp import web
 from informer_bot.db import Database, format_user_label
 from informer_bot.i18n import LANGUAGES
 from informer_bot.modes import SubscriptionMode
+from informer_bot.pipeline import SendDmFn, prune_orphan_channels
 from informer_bot.summarizer import (
     SYSTEM_PROMPT,
     estimate_cost_usd,
@@ -36,9 +38,17 @@ _RATE_LIMIT_REQUESTS = 30
 _RATE_LIMIT_WINDOW = 60.0
 _rate_state: dict[int, deque[float]] = defaultdict(deque)
 
+NotifyOwnerProviderRequestFn = Callable[[int], Awaitable[None]]
+
 DB_KEY: web.AppKey[Database] = web.AppKey("db", Database)
 BOT_TOKEN_KEY: web.AppKey[str] = web.AppKey("bot_token", str)
 OWNER_ID_KEY: web.AppKey[int] = web.AppKey("owner_id", int)
+# Callables can't be expressed as a generic type for AppKey at runtime, so
+# leave the runtime type erased and let the static type-arg carry the contract.
+NOTIFY_OWNER_KEY: web.AppKey[NotifyOwnerProviderRequestFn] = web.AppKey(
+    "notify_owner_provider_request",
+)
+SEND_DM_KEY: web.AppKey[SendDmFn] = web.AppKey("send_dm")
 
 
 def verify_init_data(init_data: str, bot_token: str) -> dict | None:
@@ -125,11 +135,10 @@ def _channel_payload(db: Database, user_id: int) -> list[dict]:
             "title": c.title,
             "username": c.username,
             "about": c.about,
-            "blacklisted": c.blacklisted,
             "mode": modes.get(c.id) or SubscriptionMode.OFF,
             "filter_prompt": filters.get(c.id),
         }
-        for c in db.list_channels(include_blacklisted=False)
+        for c in db.list_visible_channels()
     ]
 
 
@@ -137,6 +146,8 @@ async def _state(request: web.Request) -> web.Response:
     db = request.app[DB_KEY]
     owner_id = request.app[OWNER_ID_KEY]
     user_id: int = request["user_id"]
+    provider = db.get_provider(user_id)
+    is_provider = provider is not None and provider.status == "approved"
     payload: dict = {
         "user_id": user_id,
         "language": db.get_language(user_id),
@@ -144,7 +155,12 @@ async def _state(request: web.Request) -> web.Response:
         "auto_delete_hours": db.get_user_auto_delete_hours(user_id),
         "dedup_debug": db.get_dedup_debug(user_id),
         "channels": _channel_payload(db, user_id),
+        "is_provider": is_provider,
+        "provider_status": provider.status if provider else None,
     }
+    if is_provider:
+        payload["provider_blacklist"] = sorted(db.list_provider_blacklist(user_id))
+        payload["provider_channels"] = sorted(db.list_provider_channels(user_id))
     if user_id == owner_id:
         custom = db.get_meta("summary_prompt") or ""
         payload["summary_prompt"] = custom or None
@@ -354,7 +370,64 @@ async def _language(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "language": code})
 
 
-def build_app(*, db: Database, bot_token: str, owner_id: int) -> web.Application:
+async def _become_provider(request: web.Request) -> web.Response:
+    db = request.app[DB_KEY]
+    owner_id = request.app[OWNER_ID_KEY]
+    user_id: int = request["user_id"]
+    if user_id == owner_id:
+        return web.json_response({"ok": False, "reason": "owner"})
+    existing = db.get_provider(user_id)
+    if existing is not None:
+        if existing.status == "pending":
+            return web.json_response({"ok": False, "reason": "already_pending"})
+        if existing.status == "approved":
+            return web.json_response({"ok": False, "reason": "already_approved"})
+        if existing.status == "denied":
+            return web.json_response({"ok": False, "reason": "denied"})
+    session_path = f"data/sessions/{user_id}.session"
+    db.add_pending_provider(user_id=user_id, session_path=session_path)
+    log.info("miniapp: provider request from user=%s", user_id)
+    notify = request.app[NOTIFY_OWNER_KEY]
+    await notify(user_id)
+    return web.json_response({"ok": True, "status": "pending"})
+
+
+async def _blacklist(request: web.Request) -> web.Response:
+    db = request.app[DB_KEY]
+    user_id: int = request["user_id"]
+    provider = db.get_provider(user_id)
+    if provider is None or provider.status != "approved":
+        return web.json_response({"error": "not_provider"}, status=403)
+    body = await request.json()
+    channel_id = int(body["channel_id"])
+    blacklisted = bool(body["blacklisted"])
+    if channel_id not in db.list_provider_channels(user_id):
+        return web.json_response(
+            {"error": "channel_not_owned_by_provider"}, status=400,
+        )
+    db.set_provider_channel_blacklisted(
+        provider_user_id=user_id, channel_id=channel_id, blacklisted=blacklisted,
+    )
+    log.info(
+        "miniapp: provider=%s channel=%s blacklisted -> %s",
+        user_id, channel_id, blacklisted,
+    )
+    send_dm = request.app[SEND_DM_KEY]
+    await prune_orphan_channels(db=db, send_dm=send_dm)
+    return web.json_response({
+        "ok": True,
+        "blacklist": sorted(db.list_provider_blacklist(user_id)),
+    })
+
+
+def build_app(
+    *,
+    db: Database,
+    bot_token: str,
+    owner_id: int,
+    notify_owner_provider_request: NotifyOwnerProviderRequestFn,
+    send_dm: SendDmFn,
+) -> web.Application:
     app = web.Application(
         middlewares=[_auth_middleware],
         client_max_size=128 * 1024,
@@ -362,6 +435,8 @@ def build_app(*, db: Database, bot_token: str, owner_id: int) -> web.Application
     app[DB_KEY] = db
     app[BOT_TOKEN_KEY] = bot_token
     app[OWNER_ID_KEY] = owner_id
+    app[NOTIFY_OWNER_KEY] = notify_owner_provider_request
+    app[SEND_DM_KEY] = send_dm
     app.router.add_get("/api/state", _state)
     app.router.add_post("/api/subscription", _subscription)
     app.router.add_post("/api/filter", _filter)
@@ -370,6 +445,8 @@ def build_app(*, db: Database, bot_token: str, owner_id: int) -> web.Application
     app.router.add_post("/api/dedup_debug", _dedup_debug)
     app.router.add_post("/api/summary_prompt", _summary_prompt)
     app.router.add_get("/api/usage", _usage)
+    app.router.add_post("/api/become_provider", _become_provider)
+    app.router.add_post("/api/blacklist", _blacklist)
 
     async def index(_req: web.Request) -> web.FileResponse:
         return web.FileResponse(_STATIC_DIR / "index.html")
@@ -380,9 +457,20 @@ def build_app(*, db: Database, bot_token: str, owner_id: int) -> web.Application
 
 
 async def start_server(
-    *, db: Database, bot_token: str, owner_id: int, host: str, port: int
+    *,
+    db: Database,
+    bot_token: str,
+    owner_id: int,
+    host: str,
+    port: int,
+    notify_owner_provider_request: NotifyOwnerProviderRequestFn,
+    send_dm: SendDmFn,
 ) -> web.AppRunner:
-    app = build_app(db=db, bot_token=bot_token, owner_id=owner_id)
+    app = build_app(
+        db=db, bot_token=bot_token, owner_id=owner_id,
+        notify_owner_provider_request=notify_owner_provider_request,
+        send_dm=send_dm,
+    )
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, host=host, port=port)

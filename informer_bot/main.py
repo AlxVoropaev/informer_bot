@@ -24,18 +24,14 @@ from informer_bot.bot import (
     build_dm_keyboard,
     cmd_app,
     cmd_become_provider,
-    cmd_blacklist,
     cmd_help,
     cmd_revoke_provider,
     cmd_start,
     cmd_update,
     cmd_usage,
+    notify_owner_provider_request,
     on_approve,
-    on_blacklist,
-    on_blacklist_done,
-    on_blacklist_page,
     on_deny,
-    on_noop,
     on_provider_approve,
     on_provider_deny,
     on_save,
@@ -347,13 +343,8 @@ async def main() -> None:
         CommandHandler("start", cmd_start),
         CommandHandler("help", cmd_help),
         CommandHandler("app", cmd_app),
-        CommandHandler("blacklist", cmd_blacklist),
         CommandHandler("usage", cmd_usage),
         CommandHandler("update", cmd_update),
-        CallbackQueryHandler(on_blacklist, pattern=r"^bl:"),
-        CallbackQueryHandler(on_blacklist_done, pattern=r"^bl_done$"),
-        CallbackQueryHandler(on_blacklist_page, pattern=r"^blpage:"),
-        CallbackQueryHandler(on_noop, pattern=r"^noop$"),
         CallbackQueryHandler(on_approve, pattern=r"^approve:"),
         CallbackQueryHandler(on_deny, pattern=r"^deny:"),
         CallbackQueryHandler(on_save, pattern=r"^save$"),
@@ -506,9 +497,16 @@ async def main() -> None:
 
     webapp_runner = None
     if miniapp_url:
+        async def _notify_owner_provider_request(requester_id: int) -> None:
+            await notify_owner_provider_request(
+                app.bot, db, requester_id=requester_id, owner_id=cfg.owner_id,
+            )
+
         webapp_runner = await start_webapp_server(
             db=db, bot_token=cfg.telegram_bot_token, owner_id=cfg.owner_id,
             host=cfg.webapp_host, port=cfg.webapp_port,
+            notify_owner_provider_request=_notify_owner_provider_request,
+            send_dm=send_dm,
         )
         try:
             await app.bot.set_chat_menu_button(menu_button=MenuButtonWebApp(

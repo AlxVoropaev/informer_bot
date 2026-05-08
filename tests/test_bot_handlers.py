@@ -8,18 +8,13 @@ from informer_bot.bot import (
     BotState,
     cmd_app,
     cmd_become_provider,
-    cmd_blacklist,
     cmd_help,
     cmd_revoke_provider,
     cmd_start,
     cmd_update,
     cmd_usage,
     on_approve,
-    on_blacklist,
-    on_blacklist_done,
-    on_blacklist_page,
     on_deny,
-    on_noop,
     on_provider_approve,
     on_provider_deny,
 )
@@ -32,16 +27,12 @@ USER_ID = 42
 @pytest.fixture
 def db(tmp_path: Path) -> Database:
     db = Database(tmp_path / "bot.db")
-    # Owner needs to exist as a provider for the legacy blacklist shim to
-    # route through `channel_blacklist(owner_id, ...)`.
     db.set_user_status(user_id=OWNER_ID, status="approved")
     db.add_pending_provider(user_id=OWNER_ID, session_path="data/informer.session")
     db.set_provider_status(user_id=OWNER_ID, status="approved")
     db.set_meta("owner_id", str(OWNER_ID))
     db.upsert_channel(channel_id=1, title="Alpha")
     db.upsert_channel(channel_id=2, title="Beta")
-    db.upsert_channel(channel_id=3, title="BannedChan")
-    db.set_blacklisted(channel_id=3, blacklisted=True)
     db.set_user_status(user_id=USER_ID, status="approved")
     return db
 
@@ -86,12 +77,6 @@ def _cb_update(user_id: int, data: str) -> SimpleNamespace:
     )
 
 
-def _kb_rows(reply_kwargs: dict) -> list[list[tuple[str, str]]]:
-    """Extract [[(button_text, callback_data), ...], ...] from an InlineKeyboardMarkup kwarg."""
-    markup = reply_kwargs["reply_markup"]
-    return [[(b.text, b.callback_data) for b in row] for row in markup.inline_keyboard]
-
-
 # ---------- /help ----------
 
 async def test_help_for_regular_user_lists_user_commands_only(db: Database) -> None:
@@ -113,8 +98,9 @@ async def test_help_for_owner_includes_admin_commands(db: Database) -> None:
 
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.await_args.args[0]
-    for cmd in ("/app", "/blacklist", "/update"):
+    for cmd in ("/app", "/update"):
         assert cmd in text
+    assert "/blacklist" not in text
 
 
 async def test_help_works_for_unapproved_user(db: Database) -> None:
@@ -277,102 +263,6 @@ async def test_app_blocks_non_approved_user(db: Database) -> None:
     assert "not allowed" in text
 
 
-# ---------- /blacklist ----------
-
-async def test_blacklist_denies_non_owner(db: Database) -> None:
-    update = _msg_update(USER_ID)
-    await cmd_blacklist(update, _ctx(db))
-
-    update.message.reply_text.assert_awaited_once()
-    text = update.message.reply_text.await_args.args[0].lower()
-    assert "not allowed" in text or "forbidden" in text
-
-
-async def test_blacklist_shows_all_channels_with_blacklist_marker(db: Database) -> None:
-    update = _msg_update(OWNER_ID)
-    await cmd_blacklist(update, _ctx(db))
-
-    flat = [btn for row in _kb_rows(update.message.reply_text.await_args.kwargs) for btn in row]
-    titles = [t for t, _ in flat]
-    assert any("Alpha" in t for t in titles)
-    assert any("Beta" in t for t in titles)
-    banned = next(t for t in titles if "BannedChan" in t)
-    assert banned.startswith("⛔")
-    toggles = [(text, data) for text, data in flat if data.startswith("bl:")]
-    assert len(toggles) == len(flat) - 1
-    assert flat[-1] == ("Done", "bl_done")
-
-
-# ---------- blacklist callback ----------
-
-async def test_blacklist_toggle_flips_flag_for_owner(db: Database) -> None:
-    upd = _cb_update(OWNER_ID, "bl:1")
-    await on_blacklist(upd, _ctx(db))
-
-    [alpha] = [c for c in db.list_channels(include_blacklisted=True) if c.id == 1]
-    assert alpha.blacklisted is True
-
-    upd2 = _cb_update(OWNER_ID, "bl:1")
-    await on_blacklist(upd2, _ctx(db))
-    [alpha] = [c for c in db.list_channels(include_blacklisted=True) if c.id == 1]
-    assert alpha.blacklisted is False
-
-
-async def test_blacklist_toggling_on_dms_existing_subscribers(db: Database) -> None:
-    db.subscribe(user_id=10, channel_id=1)
-    db.subscribe(user_id=20, channel_id=1)
-    ctx = _ctx(db)
-
-    upd = _cb_update(OWNER_ID, "bl:1")
-    await on_blacklist(upd, ctx)
-
-    [alpha] = [c for c in db.list_channels(include_blacklisted=True) if c.id == 1]
-    assert alpha.blacklisted is True
-    assert ctx.bot.send_message.await_count == 2
-    sent = {call.kwargs["chat_id"]: call.kwargs["text"] for call in ctx.bot.send_message.await_args_list}
-    assert set(sent.keys()) == {10, 20}
-    for text in sent.values():
-        assert "Alpha" in text and "admin blocked" in text.lower()
-
-
-async def test_blacklist_toggling_off_does_not_dm(db: Database) -> None:
-    db.subscribe(user_id=10, channel_id=3)  # channel 3 is already blacklisted in fixture
-    ctx = _ctx(db)
-
-    upd = _cb_update(OWNER_ID, "bl:3")
-    await on_blacklist(upd, ctx)
-
-    [banned] = [c for c in db.list_channels(include_blacklisted=True) if c.id == 3]
-    assert banned.blacklisted is False
-    ctx.bot.send_message.assert_not_called()
-
-
-async def test_blacklist_callback_denies_non_owner(db: Database) -> None:
-    upd = _cb_update(USER_ID, "bl:1")
-    await on_blacklist(upd, _ctx(db))
-
-    [alpha] = [c for c in db.list_channels(include_blacklisted=True) if c.id == 1]
-    assert alpha.blacklisted is False
-    upd.callback_query.answer.assert_awaited()
-
-
-async def test_blacklist_done_closes_keyboard_for_owner(db: Database) -> None:
-    upd = _cb_update(OWNER_ID, "bl_done")
-    await on_blacklist_done(upd, _ctx(db))
-
-    upd.callback_query.answer.assert_awaited()
-    upd.callback_query.edit_message_text.assert_awaited_once()
-    text = upd.callback_query.edit_message_text.await_args.args[0]
-    assert "blacklist" in text.lower() or "done" in text.lower() or "closed" in text.lower()
-
-
-async def test_blacklist_done_denies_non_owner(db: Database) -> None:
-    upd = _cb_update(USER_ID, "bl_done")
-    await on_blacklist_done(upd, _ctx(db))
-
-    upd.callback_query.edit_message_text.assert_not_awaited()
-
-
 # ---------- /usage ----------
 
 async def test_usage_blocks_non_approved_user(db: Database) -> None:
@@ -496,56 +386,6 @@ async def test_usage_for_admin_breaks_out_user_by_provider(db: Database) -> None
     assert "remote" in text
     # User label appears once before its per-provider sub-rows.
     assert text.count("@alice (10)") == 1
-
-
-# ---------- pagination (blacklist only) ----------
-
-def _seed_many_channels(db: Database, count: int, prefix: str = "Ch") -> None:
-    for i in range(count):
-        db.upsert_channel(channel_id=1000 + i, title=f"{prefix}{i:02d}")
-
-
-async def test_blacklist_paginates_for_owner(db: Database) -> None:
-    _seed_many_channels(db, 18)
-    update = _msg_update(OWNER_ID)
-    await cmd_blacklist(update, _ctx(db))
-
-    rows = _kb_rows(update.message.reply_text.await_args.kwargs)
-    bl_toggles = [d for row in rows for _, d in row if d.startswith("bl:")]
-    assert len(bl_toggles) == 15
-    flat = [btn for row in rows for btn in row]
-    nav_pairs = [(t, d) for t, d in flat if d == "noop" or d.startswith("blpage:")]
-    assert nav_pairs == [("1/2", "noop"), ("▶", "blpage:1")]
-
-
-async def test_blacklist_page_callback_advances_for_owner(db: Database) -> None:
-    _seed_many_channels(db, 18)
-    ctx = _ctx(db)
-    upd = _cb_update(OWNER_ID, "blpage:1")
-
-    await on_blacklist_page(upd, ctx)
-
-    assert ctx.user_data["bl_page"] == 1
-    upd.callback_query.edit_message_reply_markup.assert_awaited_once()
-
-
-async def test_blacklist_page_callback_denies_non_owner(db: Database) -> None:
-    _seed_many_channels(db, 18)
-    upd = _cb_update(USER_ID, "blpage:1")
-
-    await on_blacklist_page(upd, _ctx(db))
-
-    upd.callback_query.answer.assert_awaited()
-    upd.callback_query.edit_message_reply_markup.assert_not_called()
-
-
-async def test_noop_callback_just_answers(db: Database) -> None:
-    upd = _cb_update(USER_ID, "noop")
-    await on_noop(upd, _ctx(db))
-
-    upd.callback_query.answer.assert_awaited()
-    upd.callback_query.edit_message_text.assert_not_called()
-    upd.callback_query.edit_message_reply_markup.assert_not_called()
 
 
 # ---------- /update ----------
