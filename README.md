@@ -62,6 +62,10 @@ If you're the bot's `OWNER_ID`, you also get:
 
 ## Documentation
 
+**For users**
+
+- [Full feature list](docs/features.md) — every supported feature in one place.
+
 **For self-hosters**
 
 - [Self-hosting setup](docs/setup.md) — install, configure `.env`, log in, run.
