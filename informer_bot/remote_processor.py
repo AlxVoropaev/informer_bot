@@ -11,7 +11,6 @@ from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
 from informer_bot.summarizer import Embedding, RelevanceCheck, Summary
 from shared.protocol import (
-    REPLY_FILENAME,
     REQUEST_FILENAME,
     EmbedReply,
     EmbedRequest,
@@ -81,6 +80,7 @@ class RemoteProcessorClient:
         self._limiter = _RateLimiter(min_send_interval_seconds)
         self._healthy: bool = True
         self._on_state_change: Callable[[bool], Awaitable[None]] | None = None
+        self._cleanup_tasks: set[asyncio.Task[None]] = set()
 
     @property
     def healthy(self) -> bool:
@@ -143,7 +143,10 @@ class RemoteProcessorClient:
         except RemoteProcessorTimeout:
             await self._set_healthy(False)
             raise
-        assert isinstance(reply, SummarizeReply)
+        if not isinstance(reply, SummarizeReply):
+            raise RemoteProcessorError(
+                f"unexpected reply type for summarize: {type(reply).__name__}"
+            )
         return Summary(
             text=reply.text,
             input_tokens=reply.input_tokens,
@@ -158,7 +161,10 @@ class RemoteProcessorClient:
         except RemoteProcessorTimeout:
             await self._set_healthy(False)
             raise
-        assert isinstance(reply, IsRelevantReply)
+        if not isinstance(reply, IsRelevantReply):
+            raise RemoteProcessorError(
+                f"unexpected reply type for is_relevant: {type(reply).__name__}"
+            )
         return RelevanceCheck(
             relevant=reply.relevant,
             input_tokens=reply.input_tokens,
@@ -175,7 +181,10 @@ class RemoteProcessorClient:
         except RemoteProcessorTimeout:
             await self._set_healthy(False)
             raise
-        assert isinstance(reply, EmbedReply)
+        if not isinstance(reply, EmbedReply):
+            raise RemoteProcessorError(
+                f"unexpected reply type for embed: {type(reply).__name__}"
+            )
         return Embedding(
             vector=list(reply.vector),
             tokens=reply.tokens,
@@ -186,7 +195,10 @@ class RemoteProcessorClient:
     async def ping(self) -> None:
         req = PingRequest.new()
         reply = await self._send_and_wait(req, Op.ping)
-        assert isinstance(reply, PingReply)
+        if not isinstance(reply, PingReply):
+            raise RemoteProcessorError(
+                f"unexpected reply type for ping: {type(reply).__name__}"
+            )
 
     async def _send_and_wait(self, req: Request, op: Op) -> Reply:
         loop = asyncio.get_running_loop()
@@ -224,7 +236,17 @@ class RemoteProcessorClient:
         ids = [i for i in (request_msg_id, reply_msg_id) if i is not None]
         if not ids:
             return
-        asyncio.create_task(self._delete_messages(ids))
+        task = asyncio.create_task(self._delete_messages(ids))
+        self._cleanup_tasks.add(task)
+        task.add_done_callback(self._cleanup_tasks.discard)
+
+    async def close(self) -> None:
+        tasks = list(self._cleanup_tasks)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._cleanup_tasks.clear()
 
     async def _delete_messages(self, ids: list[int]) -> None:
         try:
@@ -276,6 +298,12 @@ class RemoteProcessorClient:
 
     @staticmethod
     def _resolve(pending: _Pending, reply: Reply, reply_msg_id: int | None) -> None:
+        # Freshness invariant: stale replies for already-cleared requests are
+        # filtered earlier in _on_reply via the self._pending dict (the entry
+        # is popped in _send_and_wait's finally on timeout). This done()-guard
+        # only catches the narrow race where _on_reply reads `pending` before
+        # the timeout's finally runs but `wait_for` has already cancelled the
+        # future. In that case we drop the late reply silently.
         if pending.future.done():
             return
         pending.future.set_result((reply, reply_msg_id))

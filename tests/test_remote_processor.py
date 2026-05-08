@@ -449,3 +449,94 @@ async def test_health_loop_exits_when_stop_event_set() -> None:
         rp.run_health_check_loop(interval_seconds=10.0, stop_event=stop_event),
         timeout=1.0,
     )
+
+
+async def test_embed_raises_on_wrong_reply_type(
+    remote: tuple[RemoteProcessorClient, SimpleNamespace],
+) -> None:
+    rp, _app_mock = remote
+    rp.start()
+
+    async def replier() -> None:
+        # Wait for embed() to register its pending entry, then resolve the
+        # future directly with a wrong-typed reply (bypassing decode_reply,
+        # which would otherwise validate the payload against pending.op).
+        for _ in range(100):
+            if rp._pending:
+                break
+            await asyncio.sleep(0.005)
+        assert rp._pending, "embed() never registered a pending request"
+        req_id, pending = next(iter(rp._pending.items()))
+        wrong_reply = SummarizeReply(
+            id=req_id, text="x", input_tokens=1, output_tokens=1,
+        )
+        pending.future.set_result((wrong_reply, 9999))
+
+    asyncio.create_task(replier())
+    with pytest.raises(RemoteProcessorError, match="unexpected reply type for embed"):
+        await rp.embed("text")
+
+
+async def test_ping_raises_on_wrong_reply_type(
+    remote: tuple[RemoteProcessorClient, SimpleNamespace],
+) -> None:
+    rp, _app_mock = remote
+    rp.start()
+
+    async def replier() -> None:
+        for _ in range(100):
+            if rp._pending:
+                break
+            await asyncio.sleep(0.005)
+        assert rp._pending, "ping() never registered a pending request"
+        req_id, pending = next(iter(rp._pending.items()))
+        wrong_reply = SummarizeReply(
+            id=req_id, text="x", input_tokens=1, output_tokens=1,
+        )
+        pending.future.set_result((wrong_reply, 9999))
+
+    asyncio.create_task(replier())
+    with pytest.raises(RemoteProcessorError, match="unexpected reply type for ping"):
+        await rp.ping()
+
+
+async def test_cleanup_tasks_tracked(
+    remote: tuple[RemoteProcessorClient, SimpleNamespace],
+) -> None:
+    rp, _app_mock = remote
+
+    rp._schedule_delete(1, 2)
+    assert len(rp._cleanup_tasks) == 1
+
+    task = next(iter(rp._cleanup_tasks))
+    await task
+    # Done-callback runs synchronously after the task completes; yield once
+    # so any pending callbacks land before we check.
+    await asyncio.sleep(0)
+
+    assert len(rp._cleanup_tasks) == 0
+
+
+async def test_close_cancels_pending_cleanup_tasks() -> None:
+    app_mock = _make_app_mock()
+    hang = asyncio.Event()  # never set
+
+    async def hang_forever(**_kwargs):
+        await hang.wait()
+
+    app_mock.bot.delete_messages = AsyncMock(side_effect=hang_forever)
+
+    rp = RemoteProcessorClient(
+        application=app_mock,  # type: ignore[arg-type]
+        bus_group_id=-100123,
+        processor_bot_user_id=42,
+        timeout_seconds=2.0,
+        min_send_interval_seconds=0.0,
+    )
+
+    rp._schedule_delete(1, 2)
+    assert len(rp._cleanup_tasks) == 1
+
+    await rp.close()
+
+    assert len(rp._cleanup_tasks) == 0
