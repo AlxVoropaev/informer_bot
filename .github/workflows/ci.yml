@@ -22,5 +22,21 @@ jobs:
       - name: Install dependencies
         run: uv sync --all-extras --dev
 
-      - name: Run tests
-        run: uv run pytest
+      # Lint gate — catches style issues, unused imports, and obvious bugs.
+      - name: Lint (ruff)
+        run: uv run ruff check informer_bot processor_bot shared tests
+
+      # Type-check gate — prevents regressions in type correctness across
+      # the bot, sidecar, and shared protocol modules.
+      - name: Type-check (mypy)
+        run: uv run mypy informer_bot processor_bot shared
+
+      # Security gate — fails on Medium+ findings (e.g. assert-as-validation,
+      # weak crypto). No --exit-zero: we want this to block merges.
+      - name: Security scan (bandit)
+        run: uv run bandit -r informer_bot processor_bot shared --severity-level medium
+
+      # Test + coverage gate — enforces an 80% floor (just above current
+      # ~79% baseline) so coverage trends up rather than drifting down.
+      - name: Tests with coverage
+        run: uv run pytest --cov=informer_bot --cov=processor_bot --cov=shared --cov-report=term-missing --cov-fail-under=80 -q
