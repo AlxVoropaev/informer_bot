@@ -6,6 +6,11 @@ services:
         UID: ${HOST_UID:?set HOST_UID before building, e.g. HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose build}
         GID: ${HOST_GID:?set HOST_GID before building, e.g. HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose build}
     env_file: ./data/.env
+    environment:
+      # Bind all interfaces inside the container so Caddy can reach the bot
+      # over the docker network. Loopback (the code default) would only be
+      # reachable from inside this container.
+      WEBAPP_HOST: 0.0.0.0
     volumes:
       - ./data:/app/data
     restart: unless-stopped

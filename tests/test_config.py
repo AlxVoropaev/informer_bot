@@ -100,7 +100,7 @@ def test_defaults_are_applied_when_optional_vars_unset(
     assert cfg.dedup_threshold == 0.85
     assert cfg.dedup_window_hours == 48
     assert cfg.catch_up_window_hours == 48
-    assert cfg.webapp_host == "0.0.0.0"
+    assert cfg.webapp_host == "127.0.0.1"
     assert cfg.webapp_port == 8085
     assert cfg.miniapp_url is None
     assert cfg.openai_api_key is None
@@ -135,3 +135,15 @@ def test_embedding_provider_is_lowercased(
     cfg = load_config()
 
     assert cfg.embedding_provider == "openai"
+
+
+def test_webapp_host_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """compose.yaml relies on WEBAPP_HOST=0.0.0.0 to make the bot reachable
+    from Caddy over the docker network — verify the override path works."""
+    _set_required(monkeypatch)
+    _clear_optional(monkeypatch)
+    monkeypatch.setenv("WEBAPP_HOST", "0.0.0.0")
+
+    cfg = load_config()
+
+    assert cfg.webapp_host == "0.0.0.0"
