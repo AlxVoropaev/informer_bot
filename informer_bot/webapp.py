@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import time
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
@@ -16,9 +17,12 @@ from pathlib import Path
 from urllib.parse import parse_qsl
 
 from aiohttp import web
+from telethon import TelegramClient
+from telethon import errors as telethon_errors
 
 from informer_bot.db import Database, format_user_label
 from informer_bot.i18n import LANGUAGES
+from informer_bot.login_sessions import LoginSessions
 from informer_bot.modes import SubscriptionMode
 from informer_bot.pipeline import SendDmFn, prune_orphan_channels
 from informer_bot.summarizer import (
@@ -49,6 +53,11 @@ NOTIFY_OWNER_KEY: web.AppKey[NotifyOwnerProviderRequestFn] = web.AppKey(
     "notify_owner_provider_request",
 )
 SEND_DM_KEY: web.AppKey[SendDmFn] = web.AppKey("send_dm")
+LOGIN_SESSIONS_KEY: web.AppKey[LoginSessions] = web.AppKey(
+    "login_sessions", LoginSessions,
+)
+API_ID_KEY: web.AppKey[int] = web.AppKey("api_id", int)
+API_HASH_KEY: web.AppKey[str] = web.AppKey("api_hash", str)
 
 
 def verify_init_data(init_data: str, bot_token: str) -> dict | None:
@@ -420,11 +429,249 @@ async def _blacklist(request: web.Request) -> web.Response:
     })
 
 
+def _require_owner(request: web.Request) -> web.Response | None:
+    owner_id = request.app[OWNER_ID_KEY]
+    user_id: int = request["user_id"]
+    if user_id != owner_id:
+        return web.json_response({"error": "not_owner"}, status=403)
+    return None
+
+
+async def _providers_list(request: web.Request) -> web.Response:
+    owner_check = _require_owner(request)
+    if owner_check is not None:
+        return owner_check
+    db = request.app[DB_KEY]
+    sessions = request.app[LOGIN_SESSIONS_KEY]
+    payload: list[dict] = []
+    for provider in db.list_providers(status="approved"):
+        entry = sessions.get(provider.user_id)
+        payload.append({
+            "user_id": provider.user_id,
+            "label": db.get_user_label(provider.user_id),
+            "status": provider.status,
+            "has_session": Path(provider.session_path).exists(),
+            "session_path": provider.session_path,
+            "login_step": entry.step if entry else None,
+        })
+    return web.json_response({"providers": payload})
+
+
+def _target_provider(
+    request: web.Request, body: dict,
+) -> tuple[int | None, web.Response | None]:
+    db = request.app[DB_KEY]
+    try:
+        target_id = int(body["user_id"])
+    except (KeyError, TypeError, ValueError):
+        return None, web.json_response({"error": "bad_user_id"}, status=400)
+    provider = db.get_provider(target_id)
+    if provider is None or provider.status != "approved":
+        return None, web.json_response({"error": "unknown_provider"}, status=404)
+    return target_id, None
+
+
+async def _provider_login_start(request: web.Request) -> web.Response:
+    owner_check = _require_owner(request)
+    if owner_check is not None:
+        return owner_check
+    db = request.app[DB_KEY]
+    sessions = request.app[LOGIN_SESSIONS_KEY]
+    body = await request.json()
+    target_id, err = _target_provider(request, body)
+    if err is not None:
+        return err
+    assert target_id is not None
+    force = bool(body.get("force"))
+    provider = db.get_provider(target_id)
+    assert provider is not None
+    session_file = Path(provider.session_path)
+    if session_file.exists() and not force:
+        return web.json_response({"error": "session_exists"}, status=409)
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(session_file.parent, 0o700)
+    except OSError:
+        pass
+    existing = sessions.pop(target_id)
+    if existing is not None:
+        try:
+            await existing.client.disconnect()
+        except Exception:  # noqa: BLE001
+            log.exception("provider_login: disconnect on restart failed")
+    api_id = request.app[API_ID_KEY]
+    api_hash = request.app[API_HASH_KEY]
+    client = TelegramClient(str(session_file), api_id, api_hash)
+    await client.connect()
+    sessions.start(target_id, client)
+    log.info("miniapp: provider_login start user=%s", target_id)
+    return web.json_response({"ok": True, "step": "phone"})
+
+
+async def _provider_login_phone(request: web.Request) -> web.Response:
+    owner_check = _require_owner(request)
+    if owner_check is not None:
+        return owner_check
+    sessions = request.app[LOGIN_SESSIONS_KEY]
+    body = await request.json()
+    target_id, err = _target_provider(request, body)
+    if err is not None:
+        return err
+    assert target_id is not None
+    entry = sessions.get(target_id)
+    if entry is None:
+        return web.json_response({"error": "no_login_in_progress"}, status=409)
+    if entry.step != "phone":
+        return web.json_response({"error": "bad_step"}, status=409)
+    phone = str(body.get("phone", "")).strip()
+    if not phone:
+        return web.json_response({"error": "bad_phone"}, status=400)
+    try:
+        sent = await entry.client.send_code_request(phone)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("provider_login: send_code_request failed: %s", exc)
+        try:
+            await entry.client.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
+        sessions.pop(target_id)
+        return web.json_response(
+            {"error": "telethon_error", "detail": str(exc)}, status=400,
+        )
+    sessions.set_phone(target_id, phone, sent.phone_code_hash)
+    return web.json_response({"ok": True, "step": "code"})
+
+
+def _chmod_session(session_path: str) -> None:
+    try:
+        os.chmod(session_path, 0o600)
+    except OSError:
+        pass
+
+
+async def _provider_login_code(request: web.Request) -> web.Response:
+    owner_check = _require_owner(request)
+    if owner_check is not None:
+        return owner_check
+    db = request.app[DB_KEY]
+    sessions = request.app[LOGIN_SESSIONS_KEY]
+    body = await request.json()
+    target_id, err = _target_provider(request, body)
+    if err is not None:
+        return err
+    assert target_id is not None
+    entry = sessions.get(target_id)
+    if entry is None:
+        return web.json_response({"error": "no_login_in_progress"}, status=409)
+    if entry.step != "code":
+        return web.json_response({"error": "bad_step"}, status=409)
+    code = str(body.get("code", "")).strip()
+    if not code:
+        return web.json_response({"error": "bad_code"}, status=400)
+    try:
+        await entry.client.sign_in(
+            phone=entry.phone, code=code,
+            phone_code_hash=entry.phone_code_hash,
+        )
+    except telethon_errors.SessionPasswordNeededError:
+        sessions.require_password(target_id)
+        return web.json_response({"ok": True, "step": "password"})
+    except (
+        telethon_errors.PhoneCodeInvalidError,
+        telethon_errors.PhoneCodeExpiredError,
+    ) as exc:
+        # Keep the entry so the admin can retry the code.
+        return web.json_response(
+            {"error": "telethon_error", "detail": type(exc).__name__},
+            status=400,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("provider_login: sign_in(code) failed: %s", exc)
+        try:
+            await entry.client.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
+        sessions.pop(target_id)
+        return web.json_response(
+            {"error": "telethon_error", "detail": str(exc)}, status=400,
+        )
+    provider = db.get_provider(target_id)
+    assert provider is not None
+    await entry.client.disconnect()
+    sessions.pop(target_id)
+    _chmod_session(provider.session_path)
+    log.info("miniapp: provider_login done user=%s", target_id)
+    return web.json_response({"ok": True, "done": True})
+
+
+async def _provider_login_password(request: web.Request) -> web.Response:
+    owner_check = _require_owner(request)
+    if owner_check is not None:
+        return owner_check
+    db = request.app[DB_KEY]
+    sessions = request.app[LOGIN_SESSIONS_KEY]
+    body = await request.json()
+    target_id, err = _target_provider(request, body)
+    if err is not None:
+        return err
+    assert target_id is not None
+    entry = sessions.get(target_id)
+    if entry is None:
+        return web.json_response({"error": "no_login_in_progress"}, status=409)
+    if entry.step != "password":
+        return web.json_response({"error": "bad_step"}, status=409)
+    password = body.get("password")
+    if not password:
+        return web.json_response({"error": "bad_password"}, status=400)
+    try:
+        await entry.client.sign_in(password=password)
+    except telethon_errors.PasswordHashInvalidError:
+        return web.json_response({"error": "bad_password"}, status=400)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("provider_login: sign_in(password) failed: %s", exc)
+        try:
+            await entry.client.disconnect()
+        except Exception:  # noqa: BLE001
+            pass
+        sessions.pop(target_id)
+        return web.json_response(
+            {"error": "telethon_error", "detail": str(exc)}, status=400,
+        )
+    provider = db.get_provider(target_id)
+    assert provider is not None
+    await entry.client.disconnect()
+    sessions.pop(target_id)
+    _chmod_session(provider.session_path)
+    log.info("miniapp: provider_login done user=%s (2fa)", target_id)
+    return web.json_response({"ok": True, "done": True})
+
+
+async def _provider_login_cancel(request: web.Request) -> web.Response:
+    owner_check = _require_owner(request)
+    if owner_check is not None:
+        return owner_check
+    sessions = request.app[LOGIN_SESSIONS_KEY]
+    body = await request.json()
+    try:
+        target_id = int(body["user_id"])
+    except (KeyError, TypeError, ValueError):
+        return web.json_response({"error": "bad_user_id"}, status=400)
+    entry = sessions.pop(target_id)
+    if entry is not None:
+        try:
+            await entry.client.disconnect()
+        except Exception:  # noqa: BLE001
+            log.exception("provider_login: disconnect on cancel failed")
+    return web.json_response({"ok": True})
+
+
 def build_app(
     *,
     db: Database,
     bot_token: str,
     owner_id: int,
+    api_id: int,
+    api_hash: str,
     notify_owner_provider_request: NotifyOwnerProviderRequestFn,
     send_dm: SendDmFn,
 ) -> web.Application:
@@ -437,7 +684,16 @@ def build_app(
     app[OWNER_ID_KEY] = owner_id
     app[NOTIFY_OWNER_KEY] = notify_owner_provider_request
     app[SEND_DM_KEY] = send_dm
+    app[LOGIN_SESSIONS_KEY] = LoginSessions()
+    app[API_ID_KEY] = api_id
+    app[API_HASH_KEY] = api_hash
     app.router.add_get("/api/state", _state)
+    app.router.add_get("/api/providers", _providers_list)
+    app.router.add_post("/api/provider_login/start", _provider_login_start)
+    app.router.add_post("/api/provider_login/phone", _provider_login_phone)
+    app.router.add_post("/api/provider_login/code", _provider_login_code)
+    app.router.add_post("/api/provider_login/password", _provider_login_password)
+    app.router.add_post("/api/provider_login/cancel", _provider_login_cancel)
     app.router.add_post("/api/subscription", _subscription)
     app.router.add_post("/api/filter", _filter)
     app.router.add_post("/api/language", _language)
@@ -461,6 +717,8 @@ async def start_server(
     db: Database,
     bot_token: str,
     owner_id: int,
+    api_id: int,
+    api_hash: str,
     host: str,
     port: int,
     notify_owner_provider_request: NotifyOwnerProviderRequestFn,
@@ -468,6 +726,7 @@ async def start_server(
 ) -> web.AppRunner:
     app = build_app(
         db=db, bot_token=bot_token, owner_id=owner_id,
+        api_id=api_id, api_hash=api_hash,
         notify_owner_provider_request=notify_owner_provider_request,
         send_dm=send_dm,
     )
