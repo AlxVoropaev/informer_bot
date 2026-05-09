@@ -23,7 +23,7 @@ group"). See [processor-bot.md](../processor-bot.md).
 
 - **Admin / Owner** (single, hard-coded `OWNER_ID`): approves provider requests, runs
   `/update` and `/revoke_provider`, runs the `informer-bot-login` CLI to bootstrap each
-  new provider's session.
+  new provider's session, or via the owner-only Providers section of the Mini App.
 - **Providers** (≥1, owner is provider #1): each contributes channels from their own
   Telegram user-account; each has a personal blacklist edited via the Mini App.
 - **Bot users** (many): subscribe via the bot, toggle channels in the Mini App, receive
