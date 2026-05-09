@@ -499,6 +499,14 @@ async def _provider_login_start(request: web.Request) -> web.Response:
             await existing.client.disconnect()
         except Exception:  # noqa: BLE001
             log.exception("provider_login: disconnect on restart failed")
+    if force:
+        for path in (session_file, session_file.with_suffix(".session-journal")):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                log.exception("provider_login: unlink %s failed", path)
     api_id = request.app[API_ID_KEY]
     api_hash = request.app[API_HASH_KEY]
     client = TelegramClient(str(session_file), api_id, api_hash)
