@@ -68,6 +68,31 @@ const I18N = {
     providerBlacklistHint: "When checked, this channel is hidden from bot users via your contribution. Other providers' contributions are unaffected.",
     providerBlacklistOn: "Channel blacklisted.",
     providerBlacklistOff: "Channel un-blacklisted.",
+    providersHeading: "Providers",
+    providersHint: "Log in a Telethon user-account session for an approved provider. The session is stored on the server.",
+    providersSessionOk: "✓ session",
+    providersSessionMissing: "— no session",
+    providersLogin: "Login",
+    providersRelogin: "Re-login",
+    providersResume: "Resume",
+    providersStep: { phone: "phone", code: "code", password: "password" },
+    providersConfirmReplace: "A session already exists for this provider. Replace it?",
+    providerLoginTitle: (label) => `Login: ${label}`,
+    providerLoginStepPhone: "Enter the provider's phone number (international format).",
+    providerLoginStepCode: "Enter the code from Telegram.",
+    providerLoginStepPassword: "Enter the 2FA password.",
+    providerLoginPhoneLabel: "Phone",
+    providerLoginPhoneSubmit: "Send code",
+    providerLoginCodeLabel: "Code from Telegram",
+    providerLoginCodeSubmit: "Submit",
+    providerLoginPasswordLabel: "2FA password",
+    providerLoginPasswordSubmit: "Submit",
+    providerLoginCancel: "Cancel",
+    providerLoginDoneMsg: "Logged in successfully.",
+    providerLoginDoneBack: "Back to providers",
+    providerLoginCancelled: "Login cancelled.",
+    providerLoginBadPassword: "Wrong password.",
+    providerLoginSessionExists: "Session already exists.",
   },
   ru: {
     search: "Поиск каналов…",
@@ -134,6 +159,31 @@ const I18N = {
     providerBlacklistHint: "Когда отмечено, этот канал скрыт от пользователей бота через ваш вклад. Вклады других провайдеров не затрагиваются.",
     providerBlacklistOn: "Канал заблокирован.",
     providerBlacklistOff: "Канал разблокирован.",
+    providersHeading: "Провайдеры",
+    providersHint: "Залогинить Telethon-сессию пользовательского аккаунта для одобренного провайдера. Сессия хранится на сервере.",
+    providersSessionOk: "✓ сессия",
+    providersSessionMissing: "— нет сессии",
+    providersLogin: "Войти",
+    providersRelogin: "Перелогиниться",
+    providersResume: "Продолжить",
+    providersStep: { phone: "телефон", code: "код", password: "пароль" },
+    providersConfirmReplace: "Сессия для этого провайдера уже существует. Заменить её?",
+    providerLoginTitle: (label) => `Вход: ${label}`,
+    providerLoginStepPhone: "Введите номер телефона провайдера (международный формат).",
+    providerLoginStepCode: "Введите код из Telegram.",
+    providerLoginStepPassword: "Введите пароль двухфакторной защиты.",
+    providerLoginPhoneLabel: "Телефон",
+    providerLoginPhoneSubmit: "Отправить код",
+    providerLoginCodeLabel: "Код из Telegram",
+    providerLoginCodeSubmit: "Отправить",
+    providerLoginPasswordLabel: "Пароль 2FA",
+    providerLoginPasswordSubmit: "Отправить",
+    providerLoginCancel: "Отмена",
+    providerLoginDoneMsg: "Вход выполнен.",
+    providerLoginDoneBack: "Назад к провайдерам",
+    providerLoginCancelled: "Вход отменён.",
+    providerLoginBadPassword: "Неверный пароль.",
+    providerLoginSessionExists: "Сессия уже существует.",
   },
 };
 
@@ -152,6 +202,8 @@ const state = {
   providerStatus: null,
   providerBlacklist: [],
   providerChannels: [],
+  providers: [],
+  providerLogin: { userId: null, label: "", step: null },
 };
 
 function t() { return I18N[state.language] || I18N.en; }
@@ -208,6 +260,19 @@ function applyLanguage() {
   el("summary-prompt-reset").textContent = dict.summaryPromptReset;
   el("provider-blacklist-label").textContent = dict.providerBlacklistLabel;
   el("provider-blacklist-hint").textContent = dict.providerBlacklistHint;
+  el("providers-heading").textContent = dict.providersHeading;
+  el("providers-hint").textContent = dict.providersHint;
+  el("provider-login-back").textContent = dict.back;
+  el("provider-login-phone-label").textContent = dict.providerLoginPhoneLabel;
+  el("provider-login-phone-submit").textContent = dict.providerLoginPhoneSubmit;
+  el("provider-login-code-label").textContent = dict.providerLoginCodeLabel;
+  el("provider-login-code-submit").textContent = dict.providerLoginCodeSubmit;
+  el("provider-login-password-label").textContent = dict.providerLoginPasswordLabel;
+  el("provider-login-password-submit").textContent = dict.providerLoginPasswordSubmit;
+  el("provider-login-cancel").textContent = dict.providerLoginCancel;
+  el("provider-login-done-msg").textContent = dict.providerLoginDoneMsg;
+  el("provider-login-done-back").textContent = dict.providerLoginDoneBack;
+  if (state.providers && state.providers.length) renderProviders();
   document.querySelectorAll('input[name="mode"]').forEach((input) => {
     const labelSpan = input.nextElementSibling;
     labelSpan.textContent = dict.modes[input.value];
@@ -305,6 +370,227 @@ async function toggleProviderBlacklist(channelId, blacklisted) {
     el("provider-blacklist-input").checked = (state.providerBlacklist || []).includes(channelId);
     showToast(e.message || t().network_error);
   }
+}
+
+async function loadProviders() {
+  try {
+    const data = await api("/api/providers");
+    state.providers = Array.isArray(data.providers) ? data.providers : [];
+    renderProviders();
+  } catch (e) {
+    state.providers = [];
+    const list = el("providers-list");
+    list.replaceChildren();
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = e.message || t().network_error;
+    list.appendChild(empty);
+  }
+}
+
+function renderProviders() {
+  const dict = t();
+  const list = el("providers-list");
+  list.replaceChildren();
+  if (!state.providers.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "—";
+    list.appendChild(empty);
+    return;
+  }
+  for (const p of state.providers) {
+    const row = document.createElement("div");
+    row.className = "provider-row";
+
+    const info = document.createElement("div");
+    info.className = "provider-info";
+    const label = document.createElement("div");
+    label.className = "provider-label";
+    label.textContent = `${p.label} · ${p.user_id}`;
+    info.appendChild(label);
+
+    const meta = document.createElement("div");
+    meta.className = "provider-meta";
+    const badge = document.createElement("span");
+    badge.className = "badge " + (p.has_session ? "badge-ok" : "badge-missing");
+    badge.textContent = p.has_session ? dict.providersSessionOk : dict.providersSessionMissing;
+    meta.appendChild(badge);
+    if (p.login_step) {
+      const step = document.createElement("span");
+      step.className = "badge badge-step";
+      step.textContent = `${dict.providersResume}: ${dict.providersStep[p.login_step] || p.login_step}`;
+      meta.appendChild(step);
+    }
+    info.appendChild(meta);
+    row.appendChild(info);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "ghost provider-action";
+    if (p.login_step) {
+      btn.textContent = dict.providersResume;
+    } else {
+      btn.textContent = p.has_session ? dict.providersRelogin : dict.providersLogin;
+    }
+    btn.addEventListener("click", () => onProviderLoginClick(p));
+    row.appendChild(btn);
+
+    list.appendChild(row);
+  }
+}
+
+async function onProviderLoginClick(p) {
+  if (p.login_step) {
+    openProviderLogin(p, p.login_step);
+    return;
+  }
+  if (p.has_session) {
+    const msg = t().providersConfirmReplace;
+    const proceed = await new Promise((resolve) => {
+      if (tg && typeof tg.showConfirm === "function") {
+        try { tg.showConfirm(msg, (ok) => resolve(!!ok)); return; } catch (_) {}
+      }
+      resolve(window.confirm(msg));
+    });
+    if (!proceed) return;
+  }
+  try {
+    const data = await api("/api/provider_login/start", {
+      method: "POST",
+      body: JSON.stringify({ user_id: p.user_id, force: !!p.has_session }),
+    });
+    openProviderLogin(p, data.step || "phone");
+  } catch (e) {
+    if (e.status === 409 || e.message === "session_exists") {
+      showToast(t().providerLoginSessionExists);
+    } else {
+      showToast(e.message || t().network_error);
+    }
+  }
+}
+
+function openProviderLogin(p, step) {
+  state.providerLogin = { userId: p.user_id, label: p.label, step };
+  const dict = t();
+  el("provider-login-title").textContent = dict.providerLoginTitle(p.label);
+  setProviderLoginStep(step);
+  setProviderLoginStatus("", null);
+  el("settings").classList.add("hidden");
+  el("settings").setAttribute("aria-hidden", "true");
+  el("provider-login").classList.remove("hidden");
+  el("provider-login").setAttribute("aria-hidden", "false");
+  window.scrollTo(0, 0);
+  if (tg && tg.BackButton) {
+    tg.BackButton.offClick(closeSettings);
+    tg.BackButton.show();
+    tg.BackButton.onClick(closeProviderLogin);
+  }
+}
+
+function closeProviderLogin() {
+  state.providerLogin = { userId: null, label: "", step: null };
+  el("provider-login").classList.add("hidden");
+  el("provider-login").setAttribute("aria-hidden", "true");
+  el("provider-login-phone-input").value = "";
+  el("provider-login-code-input").value = "";
+  el("provider-login-password-input").value = "";
+  if (tg && tg.BackButton) {
+    tg.BackButton.offClick(closeProviderLogin);
+    tg.BackButton.hide();
+  }
+  openSettings();
+}
+
+function setProviderLoginStep(step) {
+  state.providerLogin.step = step;
+  const dict = t();
+  const stepHint = {
+    phone: dict.providerLoginStepPhone,
+    code: dict.providerLoginStepCode,
+    password: dict.providerLoginStepPassword,
+    done: "",
+  };
+  el("provider-login-step").textContent = stepHint[step] || "";
+  el("provider-login-step").hidden = step === "done";
+  el("provider-login-phone").hidden = step !== "phone";
+  el("provider-login-code").hidden = step !== "code";
+  el("provider-login-password").hidden = step !== "password";
+  el("provider-login-done").hidden = step !== "done";
+  el("provider-login-cancel-row").hidden = step === "done";
+  if (step === "phone") el("provider-login-phone-input").focus();
+  else if (step === "code") el("provider-login-code-input").focus();
+  else if (step === "password") el("provider-login-password-input").focus();
+}
+
+function setProviderLoginStatus(text, kind) {
+  const node = el("provider-login-status");
+  node.textContent = text || "";
+  node.classList.remove("error", "ok");
+  if (kind) node.classList.add(kind);
+  node.hidden = !text;
+}
+
+async function submitProviderPhone() {
+  const phone = el("provider-login-phone-input").value.trim();
+  if (!phone) return;
+  await providerLoginPost("/api/provider_login/phone", { phone });
+}
+
+async function submitProviderCode() {
+  const code = el("provider-login-code-input").value.trim();
+  if (!code) return;
+  await providerLoginPost("/api/provider_login/code", { code });
+}
+
+async function submitProviderPassword() {
+  const password = el("provider-login-password-input").value;
+  if (!password) return;
+  await providerLoginPost("/api/provider_login/password", { password });
+}
+
+async function providerLoginPost(path, payload) {
+  const userId = state.providerLogin.userId;
+  if (userId == null) return;
+  setProviderLoginStatus("", null);
+  try {
+    const data = await api(path, {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId, ...payload }),
+    });
+    if (data.done) {
+      setProviderLoginStep("done");
+      setProviderLoginStatus(t().providerLoginDoneMsg, "ok");
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+    } else if (data.step) {
+      setProviderLoginStep(data.step);
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+    }
+  } catch (e) {
+    const dict = t();
+    let msg = e.message || dict.network_error;
+    if (e.message === "bad_password") msg = dict.providerLoginBadPassword;
+    setProviderLoginStatus(msg, "error");
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("error");
+  }
+}
+
+async function cancelProviderLogin() {
+  const userId = state.providerLogin.userId;
+  if (userId == null) {
+    closeProviderLogin();
+    return;
+  }
+  try {
+    await api("/api/provider_login/cancel", {
+      method: "POST",
+      body: JSON.stringify({ user_id: userId }),
+    });
+    showToast(t().providerLoginCancelled);
+  } catch (e) {
+    showToast(e.message || t().network_error);
+  }
+  closeProviderLogin();
 }
 
 function rebuildLangSelect() {
@@ -528,6 +814,7 @@ function openSettings() {
   el("autodel-input").value = state.autoDeleteHours == null ? "" : String(state.autoDeleteHours);
   el("dedup-debug-input").checked = !!state.dedupDebug;
   const promptSection = el("summary-prompt-section");
+  const providersSection = el("providers-section");
   if (state.isOwner) {
     promptSection.hidden = false;
     const promptInput = el("summary-prompt-input");
@@ -538,8 +825,11 @@ function openSettings() {
       promptInput.value = state.summaryPrompt;
       promptInput.placeholder = "";
     }
+    providersSection.hidden = false;
+    loadProviders();
   } else {
     promptSection.hidden = true;
+    providersSection.hidden = true;
   }
   el("settings").classList.remove("hidden");
   el("settings").setAttribute("aria-hidden", "false");
@@ -772,6 +1062,13 @@ async function init() {
     if (state.selectedId == null) return;
     toggleProviderBlacklist(state.selectedId, !!ev.target.checked);
   });
+
+  el("provider-login-back").addEventListener("click", closeProviderLogin);
+  el("provider-login-phone-submit").addEventListener("click", submitProviderPhone);
+  el("provider-login-code-submit").addEventListener("click", submitProviderCode);
+  el("provider-login-password-submit").addEventListener("click", submitProviderPassword);
+  el("provider-login-cancel").addEventListener("click", cancelProviderLogin);
+  el("provider-login-done-back").addEventListener("click", closeProviderLogin);
 }
 
 init();
