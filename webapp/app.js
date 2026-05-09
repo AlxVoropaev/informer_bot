@@ -292,7 +292,7 @@ function applyLanguage() {
 
 function renderTabs() {
   const tabs = el("tabs");
-  if (!state.isProvider) {
+  if (!state.isProvider || el("list").classList.contains("hidden")) {
     tabs.hidden = true;
     return;
   }
@@ -389,6 +389,7 @@ async function toggleProviderBlacklist(channelId, blacklisted) {
     renderList();
   } catch (e) {
     el("provider-blacklist-input").checked = (state.providerBlacklist || []).includes(channelId);
+    renderList();
     showToast(e.message || t().network_error);
   }
 }
