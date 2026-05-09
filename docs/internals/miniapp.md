@@ -39,6 +39,16 @@ checked against `users.status='approved'`.
 
 In-progress Telethon clients live in an in-memory map (`informer_bot.login_sessions.LoginSessions`) keyed by `user_id`, with a 10-minute idle TTL — so a bot restart drops any in-flight login and the admin restarts from `phone`. The `informer_bot.cli_login` CLI remains the fallback.
 
+## Tabs
+
+Approved providers (`is_provider === true`) see two top-level tabs: **Subscribe**
+(the existing channel list, unchanged) and **Provide** (only the channels in the
+caller's `provider_channels`, with an inline blacklist checkbox per row driven by
+`provider_blacklist`; tapping the row body still opens the same details view).
+Search is scoped to the active tab and the input resets on tab switch; default
+tab is Subscribe. Non-providers see no tab UI — just the single subscribe list,
+identical to before.
+
 ## Deep-linking
 
 The new-channel announcement DM (sent on `/update`) attaches a
