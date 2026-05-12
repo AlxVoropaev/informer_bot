@@ -271,6 +271,28 @@ async def test_deny_denies_non_owner(db: Database) -> None:
     ctx.bot.send_message.assert_not_called()
 
 
+async def test_approve_handles_malformed_callback(db: Database) -> None:
+    ctx = _ctx(db)
+    upd = _cb_update(OWNER_ID, "approve")
+
+    await on_approve(upd, ctx)
+
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_text.assert_not_awaited()
+    ctx.bot.send_message.assert_not_called()
+
+
+async def test_deny_handles_malformed_callback(db: Database) -> None:
+    ctx = _ctx(db)
+    upd = _cb_update(OWNER_ID, "deny:abc")
+
+    await on_deny(upd, ctx)
+
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_text.assert_not_awaited()
+    ctx.bot.send_message.assert_not_called()
+
+
 # ---------- /app ----------
 
 async def test_app_offers_miniapp_button_for_approved_user(db: Database) -> None:
@@ -876,6 +898,28 @@ async def test_on_provider_deny_denies_non_owner(db: Database) -> None:
     await on_provider_deny(upd, ctx)
 
     assert db.get_provider(USER_ID).status == "pending"
+    ctx.bot.send_message.assert_not_called()
+
+
+async def test_on_provider_approve_handles_malformed_callback(db: Database) -> None:
+    ctx = _ctx(db)
+    upd = _cb_update(OWNER_ID, "provider_approve")
+
+    await on_provider_approve(upd, ctx)
+
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_text.assert_not_awaited()
+    ctx.bot.send_message.assert_not_called()
+
+
+async def test_on_provider_deny_handles_malformed_callback(db: Database) -> None:
+    ctx = _ctx(db)
+    upd = _cb_update(OWNER_ID, "provider_deny:xyz")
+
+    await on_provider_deny(upd, ctx)
+
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_text.assert_not_awaited()
     ctx.bot.send_message.assert_not_called()
 
 

@@ -46,6 +46,21 @@ def _query(update: Update) -> CallbackQuery:
     return update.callback_query
 
 
+def _target_id_from_callback(query: CallbackQuery) -> int | None:
+    """Parse the trailing int target_id from a ``"action:<id>"`` callback.
+
+    Returns ``None`` if ``query.data`` isn't a string or the suffix isn't an
+    int. The bot generated the callback in the first place, so this is
+    defense-in-depth for malformed payloads from old clients or fuzzers.
+    """
+    if not isinstance(query.data, str):
+        return None
+    try:
+        return int(query.data.split(":", 1)[1])
+    except (IndexError, ValueError):
+        return None
+
+
 @dataclass
 class BotState:
     """All long-lived deps the PTB handlers need from main.py.
@@ -275,8 +290,10 @@ async def on_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await query.answer(t(actor_lang, "denied"))
         return
 
-    assert isinstance(query.data, str)
-    target_id = int(query.data.split(":", 1)[1])
+    target_id = _target_id_from_callback(query)
+    if target_id is None:
+        await query.answer()
+        return
     db.set_user_status(user_id=target_id, status="approved")
     log.info("user=%s approved by owner", target_id)
 
@@ -307,8 +324,10 @@ async def on_deny(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.answer(t(actor_lang, "denied"))
         return
 
-    assert isinstance(query.data, str)
-    target_id = int(query.data.split(":", 1)[1])
+    target_id = _target_id_from_callback(query)
+    if target_id is None:
+        await query.answer()
+        return
     db.set_user_status(user_id=target_id, status="denied")
     log.info("user=%s denied by owner", target_id)
 
@@ -468,8 +487,10 @@ async def on_provider_approve(
         await query.answer(t(actor_lang, "denied"))
         return
 
-    assert isinstance(query.data, str)
-    target_id = int(query.data.split(":", 1)[1])
+    target_id = _target_id_from_callback(query)
+    if target_id is None:
+        await query.answer()
+        return
     db.set_provider_status(user_id=target_id, status="approved")
     log.info("provider user=%s approved by owner", target_id)
 
@@ -496,8 +517,10 @@ async def on_provider_deny(
         await query.answer(t(actor_lang, "denied"))
         return
 
-    assert isinstance(query.data, str)
-    target_id = int(query.data.split(":", 1)[1])
+    target_id = _target_id_from_callback(query)
+    if target_id is None:
+        await query.answer()
+        return
     db.set_provider_status(user_id=target_id, status="denied")
     log.info("provider user=%s denied by owner", target_id)
 
