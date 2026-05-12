@@ -99,6 +99,11 @@ const I18N = {
     tabSubscribe: "Subscribe",
     tabProvide: "Provide",
     provideEmpty: "No channels you contribute yet.",
+    selectAll: "Select all",
+    deselectAll: "Deselect all",
+    bulkBlacklistDone: (n, on) => on
+      ? `Blacklisted ${n} channels.`
+      : `Un-blacklisted ${n} channels.`,
   },
   ru: {
     search: "Поиск каналов…",
@@ -196,6 +201,11 @@ const I18N = {
     tabSubscribe: "Подписка",
     tabProvide: "Предоставляю",
     provideEmpty: "Ты пока не предоставляешь каналов.",
+    selectAll: "Выбрать все",
+    deselectAll: "Снять все",
+    bulkBlacklistDone: (n, on) => on
+      ? `Заблокировано ${n} каналов.`
+      : `Разблокировано ${n} каналов.`,
   },
 };
 
@@ -288,6 +298,8 @@ function applyLanguage() {
   if (state.providers && state.providers.length) renderProviders();
   el("tab-subscribe").textContent = dict.tabSubscribe;
   el("tab-provide").textContent = dict.tabProvide;
+  el("bulk-select-all").textContent = dict.selectAll;
+  el("bulk-deselect-all").textContent = dict.deselectAll;
   document.querySelectorAll('input[name="mode"]').forEach((input) => {
     const labelSpan = input.nextElementSibling;
     labelSpan.textContent = dict.modes[input.value];
@@ -298,13 +310,16 @@ function applyLanguage() {
 
 function renderTabs() {
   const tabs = el("tabs");
+  const bulk = el("bulk-actions");
   if (!state.isProvider || el("list").classList.contains("hidden")) {
     tabs.hidden = true;
+    bulk.hidden = true;
     return;
   }
   tabs.hidden = false;
   el("tab-subscribe").classList.toggle("active", state.activeTab === "subscribe");
   el("tab-provide").classList.toggle("active", state.activeTab === "provide");
+  bulk.hidden = state.activeTab !== "provide";
 }
 
 
@@ -397,6 +412,37 @@ async function toggleProviderBlacklist(channelId, blacklisted) {
     el("provider-blacklist-input").checked = (state.providerBlacklist || []).includes(channelId);
     renderList();
     showToast(e.message || t().network_error);
+  }
+}
+
+async function bulkToggleBlacklist(blacklisted) {
+  const blSet = new Set(state.providerBlacklist || []);
+  const targets = (state.filteredView || [])
+    .filter((c) => blacklisted ? !blSet.has(c.id) : blSet.has(c.id))
+    .map((c) => c.id);
+  const dict = t();
+  if (targets.length === 0) {
+    showToast(dict.bulkBlacklistDone(0, blacklisted));
+    return;
+  }
+  const selBtn = el("bulk-select-all");
+  const dselBtn = el("bulk-deselect-all");
+  selBtn.disabled = true;
+  dselBtn.disabled = true;
+  try {
+    const data = await api("/api/blacklist_bulk", {
+      method: "POST",
+      body: JSON.stringify({ channel_ids: targets, blacklisted }),
+    });
+    state.providerBlacklist = data.blacklist || [];
+    showToast(dict.bulkBlacklistDone(targets.length, blacklisted));
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+    renderList();
+  } catch (e) {
+    showToast(e.message || t().network_error);
+  } finally {
+    selBtn.disabled = false;
+    dselBtn.disabled = false;
   }
 }
 
@@ -787,6 +833,7 @@ function openDetails(channelId) {
   el("details").setAttribute("aria-hidden", "false");
   el("search").parentElement.style.display = "none";
   el("tabs").hidden = true;
+  el("bulk-actions").hidden = true;
   window.scrollTo(0, 0);
 
   if (tg && tg.BackButton) {
@@ -870,6 +917,7 @@ async function openUsage() {
   el("list").classList.add("hidden");
   el("search").parentElement.style.display = "none";
   el("tabs").hidden = true;
+  el("bulk-actions").hidden = true;
   window.scrollTo(0, 0);
   el("usage-body").innerHTML = `<div class="empty">${t().loading}</div>`;
   if (tg && tg.BackButton) {
@@ -922,6 +970,7 @@ function openSettings() {
   el("list").classList.add("hidden");
   el("search").parentElement.style.display = "none";
   el("tabs").hidden = true;
+  el("bulk-actions").hidden = true;
   window.scrollTo(0, 0);
   if (tg && tg.BackButton) {
     tg.BackButton.show();
@@ -1157,6 +1206,9 @@ async function init() {
       renderList();
     });
   });
+
+  el("bulk-select-all").addEventListener("click", () => bulkToggleBlacklist(true));
+  el("bulk-deselect-all").addEventListener("click", () => bulkToggleBlacklist(false));
 
   el("provider-blacklist-input").addEventListener("change", (ev) => {
     if (state.selectedId == null) return;

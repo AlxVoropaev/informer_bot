@@ -470,6 +470,12 @@ button.provider-action:hover { background: var(--separator); }
   color: var(--button-text);
 }
 
+.bulk-actions {
+  display: flex;
+  gap: 8px;
+  margin: 12px 12px 0;
+}
+
 .row .row-blacklist {
   display: inline-flex;
   align-items: center;

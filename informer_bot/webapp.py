@@ -433,6 +433,41 @@ async def _blacklist(request: web.Request) -> web.Response:
     })
 
 
+async def _blacklist_bulk(request: web.Request) -> web.Response:
+    db = request.app[DB_KEY]
+    user_id: int = request["user_id"]
+    provider = db.get_provider(user_id)
+    if provider is None or provider.status != "approved":
+        return web.json_response({"error": "not_provider"}, status=403)
+    body = await request.json()
+    channel_ids = [int(c) for c in body.get("channel_ids", [])]
+    blacklisted = bool(body["blacklisted"])
+    if not channel_ids:
+        return web.json_response({
+            "ok": True,
+            "blacklist": sorted(db.list_provider_blacklist(user_id)),
+        })
+    owned = db.list_provider_channels(user_id)
+    if any(cid not in owned for cid in channel_ids):
+        return web.json_response(
+            {"error": "channel_not_owned_by_provider"}, status=400,
+        )
+    for cid in channel_ids:
+        db.set_provider_channel_blacklisted(
+            provider_user_id=user_id, channel_id=cid, blacklisted=blacklisted,
+        )
+    log.info(
+        "miniapp: provider=%s bulk blacklisted=%s count=%s",
+        user_id, blacklisted, len(channel_ids),
+    )
+    send_dm = request.app[SEND_DM_KEY]
+    await prune_orphan_channels(db=db, send_dm=send_dm)
+    return web.json_response({
+        "ok": True,
+        "blacklist": sorted(db.list_provider_blacklist(user_id)),
+    })
+
+
 def _require_owner(request: web.Request) -> web.Response | None:
     owner_id = request.app[OWNER_ID_KEY]
     user_id: int = request["user_id"]
@@ -796,6 +831,7 @@ def build_app(
     app.router.add_get("/api/usage", _usage)
     app.router.add_post("/api/become_provider", _become_provider)
     app.router.add_post("/api/blacklist", _blacklist)
+    app.router.add_post("/api/blacklist_bulk", _blacklist_bulk)
 
     async def index(_req: web.Request) -> web.FileResponse:
         return web.FileResponse(_STATIC_DIR / "index.html")
