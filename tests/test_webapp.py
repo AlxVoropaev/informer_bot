@@ -167,6 +167,14 @@ async def test_stale_auth_date_rejected_with_401(client: TestClient) -> None:
     assert body["error"] == "invalid_init_data"
 
 
+def test_verify_init_data_rejects_future_auth_date() -> None:
+    """initData claiming auth_date far in the future must be rejected to
+    prevent attackers from pre-minting long-lived tokens."""
+    future = int(time.time()) + 10000
+    init_data = _make_init_data(auth_date=future)
+    assert webapp.verify_init_data(init_data, BOT_TOKEN) is None
+
+
 async def test_missing_auth_date_rejected_with_401(client: TestClient) -> None:
     """Regression guard for S1: initData without auth_date must be rejected
     even when its HMAC validates."""
@@ -1110,6 +1118,64 @@ async def test_blacklist_bulk_runs_orphan_sweep_once(
     dm_user_id, dm_text = send_dm.await_args.args
     assert dm_user_id == SUBSCRIBER
     assert "Orphan" in dm_text
+
+
+async def test_blacklist_rejects_missing_channel_id(
+    client: TestClient,
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+    resp = await client.post(
+        "/api/blacklist", headers=headers,
+        json={"blacklisted": True},
+    )
+    assert resp.status == 400
+    assert (await resp.json())["error"] in ("bad_channel_id", "bad_request")
+
+
+async def test_blacklist_rejects_non_numeric_channel_id(
+    client: TestClient,
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+    resp = await client.post(
+        "/api/blacklist", headers=headers,
+        json={"channel_id": "abc", "blacklisted": True},
+    )
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "bad_channel_id"
+
+
+async def test_blacklist_rejects_missing_blacklisted(
+    client: TestClient,
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+    resp = await client.post(
+        "/api/blacklist", headers=headers,
+        json={"channel_id": 5},
+    )
+    assert resp.status == 400
+
+
+async def test_blacklist_bulk_rejects_non_numeric_in_list(
+    client: TestClient,
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+    resp = await client.post(
+        "/api/blacklist_bulk", headers=headers,
+        json={"channel_ids": ["1", "abc"], "blacklisted": True},
+    )
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "bad_channel_id"
+
+
+async def test_blacklist_bulk_rejects_missing_blacklisted(
+    client: TestClient,
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+    resp = await client.post(
+        "/api/blacklist_bulk", headers=headers,
+        json={"channel_ids": [5]},
+    )
+    assert resp.status == 400
 
 
 async def test_blacklist_bulk_empty_list_noop(

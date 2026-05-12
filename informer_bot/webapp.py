@@ -121,6 +121,8 @@ def verify_init_data(init_data: str, bot_token: str) -> dict | None:
         return None
     if int(auth_date) + _INITDATA_MAX_AGE < int(time.time()):
         return None
+    if int(auth_date) > int(time.time()) + 60:
+        return None
     return pairs
 
 
@@ -490,8 +492,14 @@ async def _blacklist(request: web.Request) -> web.Response:
     if provider is None or provider.status != "approved":
         return web.json_response({"error": "not_provider"}, status=403)
     body = await request.json()
-    channel_id = int(body["channel_id"])
-    blacklisted = bool(body["blacklisted"])
+    try:
+        channel_id = int(body["channel_id"])
+    except (KeyError, TypeError, ValueError):
+        return web.json_response({"error": "bad_channel_id"}, status=400)
+    try:
+        blacklisted = bool(body["blacklisted"])
+    except KeyError:
+        return web.json_response({"error": "bad_request"}, status=400)
     if channel_id not in db.list_provider_channels(user_id):
         return web.json_response(
             {"error": "channel_not_owned_by_provider"}, status=400,
@@ -522,8 +530,14 @@ async def _blacklist_bulk(request: web.Request) -> web.Response:
     if provider is None or provider.status != "approved":
         return web.json_response({"error": "not_provider"}, status=403)
     body = await request.json()
-    channel_ids = [int(c) for c in body.get("channel_ids", [])]
-    blacklisted = bool(body["blacklisted"])
+    try:
+        channel_ids = [int(c) for c in body.get("channel_ids", [])]
+    except (TypeError, ValueError):
+        return web.json_response({"error": "bad_channel_id"}, status=400)
+    try:
+        blacklisted = bool(body["blacklisted"])
+    except KeyError:
+        return web.json_response({"error": "bad_request"}, status=400)
     if not channel_ids:
         return web.json_response({
             "ok": True,
@@ -617,17 +631,19 @@ async def _provider_login_start(request: web.Request) -> web.Response:
     target_id, err = _target_provider(request, body)
     if err is not None:
         return err
-    assert target_id is not None
+    if target_id is None:
+        return web.json_response({"error": "internal"}, status=500)
     force = bool(body.get("force"))
     provider = db.get_provider(target_id)
-    assert provider is not None
+    if provider is None:
+        return web.json_response({"error": "internal"}, status=500)
     live_path = provider.session_path
     live_file = Path(live_path)
     if live_file.exists() and not force:
         return web.json_response({"error": "session_exists"}, status=409)
-    live_file.parent.mkdir(parents=True, exist_ok=True)
+    os.makedirs(live_file.parent, mode=0o700, exist_ok=True)
     try:
-        os.chmod(live_file.parent, 0o700)
+        os.chmod(live_file.parent, 0o700)  # tighten if dir pre-existed
     except OSError:
         pass
     existing = sessions.pop(target_id)
@@ -664,7 +680,8 @@ async def _provider_login_phone(request: web.Request) -> web.Response:
     target_id, err = _target_provider(request, body)
     if err is not None:
         return err
-    assert target_id is not None
+    if target_id is None:
+        return web.json_response({"error": "internal"}, status=500)
     entry = sessions.get(target_id)
     if entry is None:
         return web.json_response({"error": "no_login_in_progress"}, status=409)
@@ -737,7 +754,8 @@ async def _provider_login_code(request: web.Request) -> web.Response:
     target_id, err = _target_provider(request, body)
     if err is not None:
         return err
-    assert target_id is not None
+    if target_id is None:
+        return web.json_response({"error": "internal"}, status=500)
     entry = sessions.get(target_id)
     if entry is None:
         return web.json_response({"error": "no_login_in_progress"}, status=409)
@@ -776,7 +794,8 @@ async def _provider_login_code(request: web.Request) -> web.Response:
             {"error": "telethon_error", "detail": str(exc)}, status=400,
         )
     provider = db.get_provider(target_id)
-    assert provider is not None
+    if provider is None:
+        return web.json_response({"error": "internal"}, status=500)
     await entry.client.disconnect()
     sessions.pop(target_id)
     stop_provider_client = request.app[STOP_PROVIDER_KEY]
@@ -804,7 +823,8 @@ async def _provider_login_password(request: web.Request) -> web.Response:
     target_id, err = _target_provider(request, body)
     if err is not None:
         return err
-    assert target_id is not None
+    if target_id is None:
+        return web.json_response({"error": "internal"}, status=500)
     entry = sessions.get(target_id)
     if entry is None:
         return web.json_response({"error": "no_login_in_progress"}, status=409)
@@ -830,7 +850,8 @@ async def _provider_login_password(request: web.Request) -> web.Response:
             {"error": "telethon_error", "detail": str(exc)}, status=400,
         )
     provider = db.get_provider(target_id)
-    assert provider is not None
+    if provider is None:
+        return web.json_response({"error": "internal"}, status=500)
     await entry.client.disconnect()
     sessions.pop(target_id)
     stop_provider_client = request.app[STOP_PROVIDER_KEY]
@@ -878,9 +899,11 @@ async def _provider_logout(request: web.Request) -> web.Response:
     target_id, err = _target_provider(request, body)
     if err is not None:
         return err
-    assert target_id is not None
+    if target_id is None:
+        return web.json_response({"error": "internal"}, status=500)
     provider = db.get_provider(target_id)
-    assert provider is not None
+    if provider is None:
+        return web.json_response({"error": "internal"}, status=500)
     stop_provider_client = request.app[STOP_PROVIDER_KEY]
     stopped = await stop_provider_client(target_id)
     _remove_session_files(provider.session_path)
