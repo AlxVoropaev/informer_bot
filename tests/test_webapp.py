@@ -199,6 +199,13 @@ async def test_pending_user_blocked_on_every_endpoint(
     )
     assert sub_resp.status == 403
 
+    sub_bulk_resp = await client.post(
+        "/api/subscription_bulk",
+        headers=headers,
+        json={"channel_ids": [], "mode": "off"},
+    )
+    assert sub_bulk_resp.status == 403
+
     filter_resp = await client.post(
         "/api/filter",
         headers=headers,
@@ -966,6 +973,93 @@ async def test_blacklist_bulk_empty_list_noop(
     assert resp.status == 200
     assert (await resp.json()) == {"ok": True, "blacklist": []}
     send_dm.assert_not_called()
+
+
+# ---------- /api/subscription_bulk ----------
+
+
+async def test_subscription_bulk_sets_mode_for_many_channels(
+    client: TestClient, db: Database,
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)}
+
+    resp = await client.post(
+        "/api/subscription_bulk", headers=headers,
+        json={"channel_ids": [1, 2], "mode": "all"},
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    modes = {c["id"]: c["mode"] for c in body["channels"]}
+    assert modes[1] == "all"
+    assert modes[2] == "all"
+    assert db.get_subscription_mode(user_id=USER_ID, channel_id=1) == SubscriptionMode.ALL
+    assert db.get_subscription_mode(user_id=USER_ID, channel_id=2) == SubscriptionMode.ALL
+
+    resp = await client.post(
+        "/api/subscription_bulk", headers=headers,
+        json={"channel_ids": [1, 2], "mode": "off"},
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    modes = {c["id"]: c["mode"] for c in body["channels"]}
+    assert modes[1] == "off"
+    assert modes[2] == "off"
+    assert db.get_subscription_mode(user_id=USER_ID, channel_id=1) == SubscriptionMode.OFF
+    assert db.get_subscription_mode(user_id=USER_ID, channel_id=2) == SubscriptionMode.OFF
+
+
+async def test_subscription_bulk_rejects_bad_mode(
+    client: TestClient, db: Database,
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)}
+    resp = await client.post(
+        "/api/subscription_bulk", headers=headers,
+        json={"channel_ids": [1], "mode": "bogus"},
+    )
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "bad_mode"
+
+
+async def test_subscription_bulk_rejects_non_numeric_channel_id(
+    client: TestClient, db: Database,
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)}
+    resp = await client.post(
+        "/api/subscription_bulk", headers=headers,
+        json={"channel_ids": ["x"], "mode": "all"},
+    )
+    assert resp.status == 400
+    assert (await resp.json())["error"] == "bad_channel_id"
+
+
+async def test_subscription_bulk_rejects_unknown_channel_atomically(
+    client: TestClient, db: Database,
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)}
+    resp = await client.post(
+        "/api/subscription_bulk", headers=headers,
+        json={"channel_ids": [1, 999], "mode": "all"},
+    )
+    assert resp.status == 404
+    assert (await resp.json())["error"] == "no_channel"
+    # Atomicity: channel 1 must not have been subscribed.
+    assert db.get_subscription_mode(user_id=USER_ID, channel_id=1) is None
+
+
+async def test_subscription_bulk_empty_list_noop(
+    client: TestClient, db: Database,
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)}
+    resp = await client.post(
+        "/api/subscription_bulk", headers=headers,
+        json={"channel_ids": [], "mode": "all"},
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["ok"] is True
+    assert isinstance(body["channels"], list)
+    assert db.get_subscription_mode(user_id=USER_ID, channel_id=1) is None
+    assert db.get_subscription_mode(user_id=USER_ID, channel_id=2) is None
 
 
 # ---------- /api/state: channels payload no longer carries 'blacklisted' ----------

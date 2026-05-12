@@ -23,6 +23,7 @@ checked against `users.status='approved'`.
 
 - `GET /api/state` → `{user_id, language, is_owner, auto_delete_hours, dedup_debug, is_provider, provider_status, channels: [...]}` — owner payload also includes `summary_prompt` (the saved custom override, or `null` when no override is active and the hardcoded default is in use) and `summary_prompt_default` (the hardcoded default). Approved providers (owner included) additionally get `provider_blacklist` (array of channel ids the caller has personally blacklisted) and `provider_channels` (array of channel ids the caller's user-account is currently contributing). Each entry in `channels` no longer has a per-row `blacklisted` field — frontend cross-references the top-level `provider_blacklist` instead.
 - `POST /api/subscription` `{channel_id, mode}` (`mode` ∈ `off|filtered|debug|all|unsubscribe`)
+- `POST /api/subscription_bulk` `{channel_ids: [int, ...], mode}` → bulk variant of `/api/subscription` (same `mode` set). Validates atomically: rejects with 404 `no_channel` if ANY id is unknown — none of the subscriptions are applied in that case. Empty `channel_ids` returns the current `channels` payload as a no-op. No `prune_orphan_channels` (only subscriptions change here, not provider channel ownership).
 - `POST /api/filter` `{channel_id, filter_prompt}` (null/empty clears)
 - `POST /api/language` `{language}`
 - `POST /api/auto_delete` `{hours}` — integer 1..720 enables, `null`/`0`/`""` disables
@@ -55,7 +56,11 @@ caller's `provider_channels`, with an inline blacklist checkbox per row driven b
 `provider_blacklist`; tapping the row body still opens the same details view).
 Search is scoped to the active tab and the input resets on tab switch; default
 tab is Subscribe. Non-providers see no tab UI — just the single subscribe list,
-identical to before.
+identical to before. The bulk-actions row (Select all / Deselect all) is visible
+on both tabs whenever the tab row is: on Subscribe it sets every currently-visible
+channel to subscription mode `all` / `off` (via `/api/subscription_bulk`); on
+Provide it toggles the per-provider blacklist on visible rows (via
+`/api/blacklist_bulk`).
 
 ## Deep-linking
 

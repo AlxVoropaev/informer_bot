@@ -251,6 +251,37 @@ async def _subscription(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "channels": _channel_payload(db, user_id)})
 
 
+async def _subscription_bulk(request: web.Request) -> web.Response:
+    db = request.app[DB_KEY]
+    user_id: int = request["user_id"]
+    body = await request.json()
+    mode = body.get("mode")
+    if mode not in SubscriptionMode:
+        return web.json_response({"error": "bad_mode"}, status=400)
+    try:
+        channel_ids = [int(c) for c in body.get("channel_ids", [])]
+    except (TypeError, ValueError):
+        return web.json_response({"error": "bad_channel_id"}, status=400)
+    if not channel_ids:
+        return web.json_response({
+            "ok": True,
+            "channels": _channel_payload(db, user_id),
+        })
+    for cid in channel_ids:
+        if db.get_channel(cid) is None:
+            return web.json_response({"error": "no_channel"}, status=404)
+    for cid in channel_ids:
+        if mode == SubscriptionMode.UNSUBSCRIBE:
+            db.unsubscribe(user_id, cid)
+        else:
+            db.subscribe(user_id, cid, mode=SubscriptionMode(mode))
+    log.info(
+        "miniapp: user=%s bulk mode=%s count=%s",
+        user_id, mode, len(channel_ids),
+    )
+    return web.json_response({"ok": True, "channels": _channel_payload(db, user_id)})
+
+
 async def _filter(request: web.Request) -> web.Response:
     db = request.app[DB_KEY]
     user_id: int = request["user_id"]
@@ -866,6 +897,7 @@ def build_app(
     app.router.add_post("/api/provider_login/cancel", _provider_login_cancel)
     app.router.add_post("/api/provider_logout", _provider_logout)
     app.router.add_post("/api/subscription", _subscription)
+    app.router.add_post("/api/subscription_bulk", _subscription_bulk)
     app.router.add_post("/api/filter", _filter)
     app.router.add_post("/api/language", _language)
     app.router.add_post("/api/auto_delete", _auto_delete)

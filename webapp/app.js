@@ -104,6 +104,9 @@ const I18N = {
     bulkBlacklistDone: (n, on) => on
       ? `Blacklisted ${n} channels.`
       : `Un-blacklisted ${n} channels.`,
+    bulkSubscribeDone: (n, on) => on
+      ? `Subscribed to ${n} channels.`
+      : `Unsubscribed from ${n} channels.`,
   },
   ru: {
     search: "Поиск каналов…",
@@ -206,6 +209,9 @@ const I18N = {
     bulkBlacklistDone: (n, on) => on
       ? `Заблокировано ${n} каналов.`
       : `Разблокировано ${n} каналов.`,
+    bulkSubscribeDone: (n, on) => on
+      ? `Подписались на ${n} каналов.`
+      : `Отписались от ${n} каналов.`,
   },
 };
 
@@ -319,7 +325,7 @@ function renderTabs() {
   tabs.hidden = false;
   el("tab-subscribe").classList.toggle("active", state.activeTab === "subscribe");
   el("tab-provide").classList.toggle("active", state.activeTab === "provide");
-  bulk.hidden = state.activeTab !== "provide";
+  bulk.hidden = false;
 }
 
 
@@ -436,6 +442,36 @@ async function bulkToggleBlacklist(blacklisted) {
     });
     state.providerBlacklist = data.blacklist || [];
     showToast(dict.bulkBlacklistDone(targets.length, blacklisted));
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+    renderList();
+  } catch (e) {
+    showToast(e.message || t().network_error);
+  } finally {
+    selBtn.disabled = false;
+    dselBtn.disabled = false;
+  }
+}
+
+async function bulkSetSubscription(mode) {
+  const targets = (state.filteredView || [])
+    .filter((c) => c.mode !== mode)
+    .map((c) => c.id);
+  const dict = t();
+  if (targets.length === 0) {
+    showToast(dict.bulkSubscribeDone(0, mode === "all"));
+    return;
+  }
+  const selBtn = el("bulk-select-all");
+  const dselBtn = el("bulk-deselect-all");
+  selBtn.disabled = true;
+  dselBtn.disabled = true;
+  try {
+    const data = await api("/api/subscription_bulk", {
+      method: "POST",
+      body: JSON.stringify({ channel_ids: targets, mode }),
+    });
+    state.channels = data.channels || [];
+    showToast(dict.bulkSubscribeDone(targets.length, mode === "all"));
     if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
     renderList();
   } catch (e) {
@@ -1219,8 +1255,14 @@ async function init() {
     });
   });
 
-  el("bulk-select-all").addEventListener("click", () => bulkToggleBlacklist(true));
-  el("bulk-deselect-all").addEventListener("click", () => bulkToggleBlacklist(false));
+  el("bulk-select-all").addEventListener("click", () => {
+    if (state.activeTab === "provide") bulkToggleBlacklist(true);
+    else bulkSetSubscription("all");
+  });
+  el("bulk-deselect-all").addEventListener("click", () => {
+    if (state.activeTab === "provide") bulkToggleBlacklist(false);
+    else bulkSetSubscription("off");
+  });
 
   el("provider-blacklist-input").addEventListener("change", (ev) => {
     if (state.selectedId == null) return;
