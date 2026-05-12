@@ -343,6 +343,16 @@ async def main() -> None:
     log.info("starting informer_bot (log_level=%s, db=%s)", cfg.log_level, cfg.db_path)
     db = Database(cfg.db_path)
     db.set_user_status(user_id=cfg.owner_id, status="approved")
+    if db.get_provider(cfg.owner_id) is None:
+        owner_session_path = f"data/sessions/{cfg.owner_id}.session"
+        db.add_pending_provider(
+            user_id=cfg.owner_id, session_path=owner_session_path,
+        )
+        db.set_provider_status(user_id=cfg.owner_id, status="approved")
+        log.info(
+            "auto-approved owner=%s as provider (session_path=%r)",
+            cfg.owner_id, owner_session_path,
+        )
 
     miniapp_url = cfg.miniapp_url
 
