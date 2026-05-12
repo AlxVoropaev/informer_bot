@@ -67,6 +67,7 @@ _rate_state: dict[int, deque[float]] = defaultdict(deque)
 
 NotifyOwnerProviderRequestFn = Callable[[int], Awaitable[None]]
 StopProviderClientFn = Callable[[int], Awaitable[bool]]
+StartProviderClientFn = Callable[[int], Awaitable[bool]]
 
 DB_KEY: web.AppKey[Database] = web.AppKey("db", Database)
 BOT_TOKEN_KEY: web.AppKey[str] = web.AppKey("bot_token", str)
@@ -79,6 +80,9 @@ NOTIFY_OWNER_KEY: web.AppKey[NotifyOwnerProviderRequestFn] = web.AppKey(
 SEND_DM_KEY: web.AppKey[SendDmFn] = web.AppKey("send_dm")
 STOP_PROVIDER_KEY: web.AppKey[StopProviderClientFn] = web.AppKey(
     "stop_provider_client",
+)
+START_PROVIDER_KEY: web.AppKey[StartProviderClientFn] = web.AppKey(
+    "start_provider_client",
 )
 LOGIN_SESSIONS_KEY: web.AppKey[LoginSessions] = web.AppKey(
     "login_sessions", LoginSessions,
@@ -716,11 +720,18 @@ async def _provider_login_code(request: web.Request) -> web.Response:
     assert provider is not None
     await entry.client.disconnect()
     sessions.pop(target_id)
+    stop_provider_client = request.app[STOP_PROVIDER_KEY]
+    start_provider_client = request.app[START_PROVIDER_KEY]
+    await stop_provider_client(target_id)
     replaced = _finalize_session_file(entry)
     _chmod_session(provider.session_path)
-    log.info("miniapp: provider_login done user=%s", target_id)
+    started = await start_provider_client(target_id)
+    log.info(
+        "miniapp: provider_login done user=%s replaced=%s started=%s",
+        target_id, replaced, started,
+    )
     return web.json_response(
-        {"ok": True, "done": True, "restart_required": replaced},
+        {"ok": True, "done": True, "restart_required": not started},
     )
 
 
@@ -763,11 +774,18 @@ async def _provider_login_password(request: web.Request) -> web.Response:
     assert provider is not None
     await entry.client.disconnect()
     sessions.pop(target_id)
+    stop_provider_client = request.app[STOP_PROVIDER_KEY]
+    start_provider_client = request.app[START_PROVIDER_KEY]
+    await stop_provider_client(target_id)
     replaced = _finalize_session_file(entry)
     _chmod_session(provider.session_path)
-    log.info("miniapp: provider_login done user=%s (2fa)", target_id)
+    started = await start_provider_client(target_id)
+    log.info(
+        "miniapp: provider_login done user=%s (2fa) replaced=%s started=%s",
+        target_id, replaced, started,
+    )
     return web.json_response(
-        {"ok": True, "done": True, "restart_required": replaced},
+        {"ok": True, "done": True, "restart_required": not started},
     )
 
 
@@ -823,6 +841,7 @@ def build_app(
     notify_owner_provider_request: NotifyOwnerProviderRequestFn,
     send_dm: SendDmFn,
     stop_provider_client: StopProviderClientFn,
+    start_provider_client: StartProviderClientFn,
 ) -> web.Application:
     app = web.Application(
         middlewares=[_auth_middleware],
@@ -834,6 +853,7 @@ def build_app(
     app[NOTIFY_OWNER_KEY] = notify_owner_provider_request
     app[SEND_DM_KEY] = send_dm
     app[STOP_PROVIDER_KEY] = stop_provider_client
+    app[START_PROVIDER_KEY] = start_provider_client
     app[LOGIN_SESSIONS_KEY] = LoginSessions()
     app[API_ID_KEY] = api_id
     app[API_HASH_KEY] = api_hash
@@ -873,6 +893,7 @@ async def start_server(
     notify_owner_provider_request: NotifyOwnerProviderRequestFn,
     send_dm: SendDmFn,
     stop_provider_client: StopProviderClientFn,
+    start_provider_client: StartProviderClientFn,
 ) -> web.AppRunner:
     app = build_app(
         db=db, bot_token=bot_token, owner_id=owner_id,
@@ -880,6 +901,7 @@ async def start_server(
         notify_owner_provider_request=notify_owner_provider_request,
         send_dm=send_dm,
         stop_provider_client=stop_provider_client,
+        start_provider_client=start_provider_client,
     )
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()

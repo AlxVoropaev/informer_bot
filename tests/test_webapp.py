@@ -102,9 +102,14 @@ def stop_provider_client() -> AsyncMock:
 
 
 @pytest.fixture
+def start_provider_client() -> AsyncMock:
+    return AsyncMock(return_value=True)
+
+
+@pytest.fixture
 async def client(
     db: Database, notify_owner: AsyncMock, send_dm: AsyncMock,
-    stop_provider_client: AsyncMock,
+    stop_provider_client: AsyncMock, start_provider_client: AsyncMock,
 ) -> TestClient:
     app = build_app(
         db=db, bot_token=BOT_TOKEN, owner_id=OWNER_ID,
@@ -112,6 +117,7 @@ async def client(
         notify_owner_provider_request=notify_owner,
         send_dm=send_dm,
         stop_provider_client=stop_provider_client,
+        start_provider_client=start_provider_client,
     )
     server = TestServer(app)
     client = TestClient(server)
@@ -1041,6 +1047,7 @@ async def test_providers_list_owner_only(client: TestClient) -> None:
 async def test_provider_login_happy_path(
     client: TestClient, db: Database, approved_provider: int,
     session_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    start_provider_client: AsyncMock,
 ) -> None:
     mock_client = AsyncMock()
     sent = type("Sent", (), {"phone_code_hash": "abc"})()
@@ -1083,11 +1090,13 @@ async def test_provider_login_happy_path(
         phone="+15551234567", code="11111", phone_code_hash="abc",
     )
     mock_client.disconnect.assert_awaited()
+    start_provider_client.assert_awaited_once_with(PROVIDER_ID)
 
 
 async def test_provider_login_2fa_path(
     client: TestClient, approved_provider: int,
     session_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    start_provider_client: AsyncMock,
 ) -> None:
     from telethon.errors import SessionPasswordNeededError
 
@@ -1131,6 +1140,7 @@ async def test_provider_login_2fa_path(
         "ok": True, "done": True, "restart_required": False,
     }
     assert sign_in_calls[-1] == {"password": "secret"}
+    start_provider_client.assert_awaited_once_with(PROVIDER_ID)
 
     # Entry should be gone now: another phone call must 409.
     resp = await client.post(
@@ -1172,6 +1182,7 @@ async def test_provider_login_start_existing_session_409_then_force(
 async def test_provider_login_force_success_replaces_live_file(
     client: TestClient, approved_provider: int, session_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
+    stop_provider_client: AsyncMock, start_provider_client: AsyncMock,
 ) -> None:
     """Successful force-login swaps temp file over the live path."""
     live_path = session_dir / f"{PROVIDER_ID}.session"
@@ -1210,10 +1221,12 @@ async def test_provider_login_force_success_replaces_live_file(
     body = await resp.json()
     assert resp.status == 200
     assert body["done"] is True
-    assert body["restart_required"] is True
+    assert body["restart_required"] is False
     # Temp file must be gone, swapped over the live path.
     assert temp_path.exists() is False
     assert live_path.read_bytes() == b"NEW"
+    stop_provider_client.assert_awaited_once_with(PROVIDER_ID)
+    start_provider_client.assert_awaited_once_with(PROVIDER_ID)
 
 
 async def test_provider_login_force_cancel_removes_temp_keeps_live(

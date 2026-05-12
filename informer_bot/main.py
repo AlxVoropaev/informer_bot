@@ -40,6 +40,7 @@ from informer_bot.bot import (
 from informer_bot.client import (
     catch_up,
     fetch_subscribed_channels,
+    register_new_post_handler,
 )
 from informer_bot.config import Config, load_config
 from informer_bot.db import Database
@@ -55,7 +56,13 @@ from informer_bot.pipeline import (
     SummarizeFn,
     handle_new_post,
 )
-from informer_bot.provider_clients import ProviderClient, start_all, stop_all
+from informer_bot.provider_clients import (
+    ProviderClient,
+    make_source_dedup_claim,
+    session_exists,
+    start_all,
+    stop_all,
+)
 from informer_bot.remote_processor import RemoteProcessorClient
 from informer_bot.summarizer import (
     EMBED_DIMENSIONS,
@@ -516,8 +523,56 @@ async def main() -> None:
                             "provider_logout: disconnect user=%s failed", user_id,
                         )
                     provider_clients.remove(pc)
+                    state = app.bot_data["state"]
+                    try:
+                        state.provider_user_ids.remove(user_id)
+                    except ValueError:
+                        pass
                     return True
             return False
+
+        async def _start_provider_client(user_id: int) -> bool:
+            provider = db.get_provider(user_id)
+            if provider is None or provider.status != "approved":
+                return False
+            if not session_exists(provider.session_path):
+                log.warning(
+                    "provider user=%s session_path=%r missing; hot-start skipped",
+                    user_id, provider.session_path,
+                )
+                return False
+            tg = TelegramClient(
+                provider.session_path, cfg.telegram_api_id, cfg.telegram_api_hash,
+            )
+            try:
+                await tg.connect()
+                if not await tg.is_user_authorized():
+                    log.warning(
+                        "provider user=%s not authorized after login; hot-start skipped",
+                        user_id,
+                    )
+                    await tg.disconnect()
+                    return False
+            except Exception:
+                log.exception(
+                    "provider user=%s hot-start failed (session_path=%r)",
+                    user_id, provider.session_path,
+                )
+                return False
+            register_new_post_handler(
+                tg, buffer, claim=make_source_dedup_claim(inflight),
+            )
+            provider_clients.append(ProviderClient(
+                user_id=user_id, tg=tg, session_path=provider.session_path,
+            ))
+            state = app.bot_data["state"]
+            if user_id not in state.provider_user_ids:
+                state.provider_user_ids.append(user_id)
+            log.info(
+                "provider user=%s hot-started (session_path=%r)",
+                user_id, provider.session_path,
+            )
+            return True
 
         webapp_runner = await start_webapp_server(
             db=db, bot_token=cfg.telegram_bot_token, owner_id=cfg.owner_id,
@@ -526,6 +581,7 @@ async def main() -> None:
             notify_owner_provider_request=_notify_owner_provider_request,
             send_dm=send_dm,
             stop_provider_client=_stop_provider_client,
+            start_provider_client=_start_provider_client,
         )
         try:
             await app.bot.set_chat_menu_button(menu_button=MenuButtonWebApp(
