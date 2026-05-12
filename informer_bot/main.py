@@ -31,6 +31,7 @@ from informer_bot.bot import (
     cmd_usage,
     notify_owner_provider_request,
     on_approve,
+    on_become_provider_self,
     on_deny,
     on_provider_approve,
     on_provider_deny,
@@ -352,6 +353,7 @@ async def main() -> None:
         CommandHandler("revoke_provider", cmd_revoke_provider),
         CallbackQueryHandler(on_provider_approve, pattern=r"^provider_approve:"),
         CallbackQueryHandler(on_provider_deny, pattern=r"^provider_deny:"),
+        CallbackQueryHandler(on_become_provider_self, pattern=r"^provider_self$"),
     ):
         app.add_handler(handler)
 

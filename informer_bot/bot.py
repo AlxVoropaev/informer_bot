@@ -285,8 +285,15 @@ async def on_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         t(actor_lang, "user_allowed", target=target_id)
     )
     target_lang = db.get_language(target_id)
+    reply_markup: InlineKeyboardMarkup | None = None
+    if target_id != _owner_id(context) and db.get_provider(target_id) is None:
+        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(
+            text=t(target_lang, "become_provider_button"),
+            callback_data="provider_self",
+        )]])
     await context.bot.send_message(
-        chat_id=target_id, text=t(target_lang, "approved_notice")
+        chat_id=target_id, text=t(target_lang, "approved_notice"),
+        reply_markup=reply_markup,
     )
 
 
@@ -502,6 +509,61 @@ async def on_provider_deny(
     target_lang = db.get_language(target_id)
     await context.bot.send_message(
         chat_id=target_id, text=t(target_lang, "provider_denied_user"),
+    )
+
+
+async def on_become_provider_self(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    db = _db(context)
+    user_id = _user(update).id
+    query = _query(update)
+    lang = db.get_language(user_id)
+
+    if db.get_user_status(user_id) != "approved":
+        await query.answer(t(lang, "denied"))
+        return
+
+    if user_id == _owner_id(context):
+        await query.answer(t(lang, "provider_owner_already"))
+        return
+
+    existing = db.get_provider(user_id)
+    if existing is not None:
+        if existing.status == "pending":
+            await query.answer(t(lang, "provider_already_pending"))
+            return
+        if existing.status == "approved":
+            await query.answer(t(lang, "provider_already_approved"))
+            return
+        if existing.status == "denied":
+            await query.answer(t(lang, "provider_request_denied"))
+            return
+
+    session_path = f"data/sessions/{user_id}.session"
+    db.add_pending_provider(user_id=user_id, session_path=session_path)
+    db.set_provider_status(user_id=user_id, status="approved")
+    log.info("user=%s self-onboarded as provider", user_id)
+
+    await query.answer()
+    # Strip the now-stale button by editing reply markup off. We don't rewrite
+    # the message text — the approved_notice still applies. Then DM a separate
+    # confirmation so the user gets a clear "you're a provider now" signal.
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        log.exception("provider_self: failed to strip button for user=%s", user_id)
+    await context.bot.send_message(
+        chat_id=user_id, text=t(lang, "provider_self_approved_user"),
+    )
+    owner_id = _owner_id(context)
+    owner_lang = db.get_language(owner_id)
+    await context.bot.send_message(
+        chat_id=owner_id,
+        text=t(
+            owner_lang, "provider_self_approved_owner",
+            user_label=db.get_user_label(user_id),
+        ),
     )
 
 

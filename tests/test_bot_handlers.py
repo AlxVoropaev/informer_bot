@@ -14,6 +14,7 @@ from informer_bot.bot import (
     cmd_update,
     cmd_usage,
     on_approve,
+    on_become_provider_self,
     on_deny,
     on_provider_approve,
     on_provider_deny,
@@ -218,6 +219,44 @@ async def test_approve_denies_non_owner(db: Database) -> None:
 
     assert db.get_user_status(new_user) == "pending"
     ctx.bot.send_message.assert_not_called()
+
+
+async def test_approve_attaches_become_provider_button(db: Database) -> None:
+    new_user = 555
+    db.add_pending_user(user_id=new_user, username="bob")
+    ctx = _ctx(db)
+    upd = _cb_update(OWNER_ID, f"approve:{new_user}")
+
+    await on_approve(upd, ctx)
+
+    ctx.bot.send_message.assert_awaited_once()
+    kw = ctx.bot.send_message.await_args.kwargs
+    assert kw["chat_id"] == new_user
+    markup = kw["reply_markup"]
+    assert markup is not None
+    flat = [b.callback_data for row in markup.inline_keyboard for b in row]
+    assert "provider_self" in flat
+
+
+async def test_approve_omits_become_provider_button_for_existing_provider(
+    db: Database,
+) -> None:
+    new_user = 555
+    db.add_pending_user(user_id=new_user, username="bob")
+    db.add_pending_provider(
+        user_id=new_user, session_path=f"data/sessions/{new_user}.session",
+    )
+    ctx = _ctx(db)
+    upd = _cb_update(OWNER_ID, f"approve:{new_user}")
+
+    await on_approve(upd, ctx)
+
+    ctx.bot.send_message.assert_awaited_once()
+    kw = ctx.bot.send_message.await_args.kwargs
+    markup = kw["reply_markup"]
+    if markup is not None:
+        flat = [b.callback_data for row in markup.inline_keyboard for b in row]
+        assert "provider_self" not in flat
 
 
 async def test_deny_denies_non_owner(db: Database) -> None:
@@ -723,6 +762,54 @@ async def test_become_provider_previously_denied(db: Database) -> None:
     assert "denied" in text
     # Status must remain denied (no auto-resubmit).
     assert db.get_provider(USER_ID).status == "denied"
+
+
+# ---------- provider self-onboard from approval DM ----------
+
+async def test_provider_self_creates_approved_provider(db: Database) -> None:
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, "provider_self")
+
+    await on_become_provider_self(upd, ctx)
+
+    provider = db.get_provider(USER_ID)
+    assert provider is not None
+    assert provider.status == "approved"
+    assert provider.session_path == f"data/sessions/{USER_ID}.session"
+    upd.callback_query.answer.assert_awaited()
+    upd.callback_query.edit_message_reply_markup.assert_awaited_once()
+    chats = [c.kwargs["chat_id"] for c in ctx.bot.send_message.await_args_list]
+    assert USER_ID in chats
+    assert OWNER_ID in chats
+
+
+async def test_provider_self_blocks_non_approved_user(db: Database) -> None:
+    new_user = 555
+    db.add_pending_user(user_id=new_user, username="bob")
+    ctx = _ctx(db)
+    upd = _cb_update(new_user, "provider_self")
+
+    await on_become_provider_self(upd, ctx)
+
+    assert db.get_provider(new_user) is None
+    ctx.bot.send_message.assert_not_called()
+    upd.callback_query.answer.assert_awaited()
+
+
+async def test_provider_self_idempotent_when_already_approved(db: Database) -> None:
+    db.add_pending_provider(
+        user_id=USER_ID, session_path=f"data/sessions/{USER_ID}.session",
+    )
+    db.set_provider_status(user_id=USER_ID, status="approved")
+    before = db.get_provider(USER_ID)
+    ctx = _ctx(db)
+    upd = _cb_update(USER_ID, "provider_self")
+
+    await on_become_provider_self(upd, ctx)
+
+    after = db.get_provider(USER_ID)
+    assert before == after
+    ctx.bot.send_message.assert_not_called()
 
 
 # ---------- provider approve / deny callbacks ----------

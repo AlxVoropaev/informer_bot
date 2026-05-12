@@ -37,12 +37,19 @@ See also: [storage.md](storage.md), [dedup.md](dedup.md),
 - **Access gate:** new users hit `/start` and land in `users.status='pending'`; the
   bot DMs the owner an Allow/Deny inline keyboard (callbacks `approve:<id>` /
   `deny:<id>`). Only `approved` users can use `/usage`, `/app`, and any Mini App
-  endpoint. The owner is auto-approved on startup.
+  endpoint. The owner is auto-approved on startup. The approval DM the user
+  receives also carries a `🛰 Become a provider` shortcut button (callback
+  `provider_self`) when the user has no `providers` row yet — see Providers below.
 - **Providers:** any approved user can request to become a channel-contributing
   provider, either via the Telegram command `/become_provider` or via the Mini App
   "Request to be a provider" pill. Lifecycle: `pending` → `approved` (owner approves)
   → "active" (derived: a session file exists at `provider.session_path`). `denied`
-  is terminal until manual reset. Each new request DMs the owner an Allow/Deny
+  is terminal until manual reset. A faster onboarding path also exists: when the
+  owner approves a new bot user via the access-gate Allow button, the user's
+  "approved" DM includes a `🛰 Become a provider` inline button that — for users
+  who don't yet have a `providers` row — directly inserts an `approved` provider
+  record (no second owner Allow/Deny). The owner is DMed an FYI and still runs
+  the CLI login. Each non-shortcut request DMs the owner an Allow/Deny
   inline keyboard (callbacks `provider_approve:<id>` / `provider_deny:<id>`). After
   approval, the owner runs the CLI `uv run python -m informer_bot.cli_login --user-id
   <id>` to complete the interactive Telethon login (phone/code/2FA) and write
