@@ -342,6 +342,34 @@ async def prune_orphan_channels(
     return removed, notified
 
 
+async def notify_subscribers_of_lost_visibility(
+    *,
+    db: Database,
+    send_dm: SendDmFn,
+    visible_before: set[int],
+) -> int:
+    """DM `channel_gone` to subscribers of channels that were visible
+    before a blacklist action and aren't any more. Returns the number of
+    DMs sent. Idempotent at the transition: only channels in
+    `visible_before` but not in the current visible set are notified.
+    Does not delete channels — they keep their `provider_channels` rows
+    and can return when un-blacklisted.
+    """
+    visible_after = {c.id for c in db.list_visible_channels()}
+    lost = visible_before - visible_after
+    sent = 0
+    for channel_id in lost:
+        title = db.get_channel_title(channel_id) or ""
+        subs = db.list_subscribed_users_for_channel(channel_id=channel_id)
+        for user_id, _mode in subs:
+            lang = db.get_language(user_id)
+            await send_dm(
+                user_id, t(lang, "channel_gone", title=title),
+            )
+        sent += len(subs)
+    return sent
+
+
 async def refresh_channels(
     *,
     fetch_fn_for: FetchChannelsForFn,

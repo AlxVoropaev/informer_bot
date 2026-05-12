@@ -24,7 +24,11 @@ from informer_bot.db import Database, format_user_label
 from informer_bot.i18n import LANGUAGES
 from informer_bot.login_sessions import LoginSessions
 from informer_bot.modes import SubscriptionMode
-from informer_bot.pipeline import SendDmFn, prune_orphan_channels
+from informer_bot.pipeline import (
+    SendDmFn,
+    notify_subscribers_of_lost_visibility,
+    prune_orphan_channels,
+)
 from informer_bot.summarizer import (
     SYSTEM_PROMPT,
     estimate_cost_usd,
@@ -492,6 +496,7 @@ async def _blacklist(request: web.Request) -> web.Response:
         return web.json_response(
             {"error": "channel_not_owned_by_provider"}, status=400,
         )
+    visible_before = {c.id for c in db.list_visible_channels()}
     db.set_provider_channel_blacklisted(
         provider_user_id=user_id, channel_id=channel_id, blacklisted=blacklisted,
     )
@@ -501,6 +506,9 @@ async def _blacklist(request: web.Request) -> web.Response:
     )
     send_dm = request.app[SEND_DM_KEY]
     await prune_orphan_channels(db=db, send_dm=send_dm)
+    await notify_subscribers_of_lost_visibility(
+        db=db, send_dm=send_dm, visible_before=visible_before,
+    )
     return web.json_response({
         "ok": True,
         "blacklist": sorted(db.list_provider_blacklist(user_id)),
@@ -526,6 +534,7 @@ async def _blacklist_bulk(request: web.Request) -> web.Response:
         return web.json_response(
             {"error": "channel_not_owned_by_provider"}, status=400,
         )
+    visible_before = {c.id for c in db.list_visible_channels()}
     for cid in channel_ids:
         db.set_provider_channel_blacklisted(
             provider_user_id=user_id, channel_id=cid, blacklisted=blacklisted,
@@ -536,6 +545,9 @@ async def _blacklist_bulk(request: web.Request) -> web.Response:
     )
     send_dm = request.app[SEND_DM_KEY]
     await prune_orphan_channels(db=db, send_dm=send_dm)
+    await notify_subscribers_of_lost_visibility(
+        db=db, send_dm=send_dm, visible_before=visible_before,
+    )
     return web.json_response({
         "ok": True,
         "blacklist": sorted(db.list_provider_blacklist(user_id)),

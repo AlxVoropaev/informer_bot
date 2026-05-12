@@ -742,6 +742,101 @@ async def test_state_subscribable_flag_reflects_visibility(
     assert by_id[10]["subscribable"] is False
 
 
+# ---------- blacklist DMs subscribers when channel loses visibility ----------
+
+
+async def test_blacklist_sole_provider_dms_subscribers(
+    client: TestClient, db: Database, send_dm: AsyncMock,
+) -> None:
+    """When the sole approved provider blacklists a channel it provides,
+    subscribers must receive a `channel_gone` DM."""
+    SUBSCRIBER = 7777
+    db.set_user_status(user_id=SUBSCRIBER, status="approved")
+    db.subscribe(user_id=SUBSCRIBER, channel_id=1)
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+
+    resp = await client.post(
+        "/api/blacklist", headers=headers,
+        json={"channel_id": 1, "blacklisted": True},
+    )
+    assert resp.status == 200
+    send_dm.assert_awaited_once()
+    dm_user_id, dm_text = send_dm.await_args.args
+    assert dm_user_id == SUBSCRIBER
+    assert "Alpha" in dm_text and "no longer available" in dm_text.lower()
+
+
+async def test_blacklist_unblacklist_sends_no_dm(
+    client: TestClient, db: Database, send_dm: AsyncMock,
+) -> None:
+    """Flipping `blacklisted=False` on an already-blacklisted channel makes
+    the channel re-visible — no DM should fire."""
+    SUBSCRIBER = 7777
+    db.set_user_status(user_id=SUBSCRIBER, status="approved")
+    db.subscribe(user_id=SUBSCRIBER, channel_id=1)
+    db.set_provider_channel_blacklisted(
+        provider_user_id=OWNER_ID, channel_id=1, blacklisted=True,
+    )
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+
+    resp = await client.post(
+        "/api/blacklist", headers=headers,
+        json={"channel_id": 1, "blacklisted": False},
+    )
+    assert resp.status == 200
+    send_dm.assert_not_called()
+
+
+async def test_blacklist_multi_provider_no_dm_when_still_visible(
+    client: TestClient, db: Database, send_dm: AsyncMock,
+) -> None:
+    """If one provider blacklists a channel but another still serves it,
+    the channel stays visible — no DM fires."""
+    co_provider = 7
+    db.set_user_status(user_id=co_provider, status="approved")
+    db.add_pending_provider(
+        user_id=co_provider, session_path=f"data/sessions/{co_provider}.session",
+    )
+    db.set_provider_status(user_id=co_provider, status="approved")
+    db.set_provider_channels(provider_user_id=co_provider, channel_ids={1})
+    SUBSCRIBER = 7777
+    db.set_user_status(user_id=SUBSCRIBER, status="approved")
+    db.subscribe(user_id=SUBSCRIBER, channel_id=1)
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+
+    resp = await client.post(
+        "/api/blacklist", headers=headers,
+        json={"channel_id": 1, "blacklisted": True},
+    )
+    assert resp.status == 200
+    send_dm.assert_not_called()
+
+
+async def test_blacklist_bulk_sole_provider_dms_subscribers(
+    client: TestClient, db: Database, send_dm: AsyncMock,
+) -> None:
+    """Bulk blacklist by the sole provider DMs one notification per
+    affected channel-subscriber pair."""
+    SUBSCRIBER_A = 7777
+    SUBSCRIBER_B = 8888
+    db.set_user_status(user_id=SUBSCRIBER_A, status="approved")
+    db.set_user_status(user_id=SUBSCRIBER_B, status="approved")
+    db.subscribe(user_id=SUBSCRIBER_A, channel_id=1)
+    db.subscribe(user_id=SUBSCRIBER_B, channel_id=2)
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+
+    resp = await client.post(
+        "/api/blacklist_bulk", headers=headers,
+        json={"channel_ids": [1, 2], "blacklisted": True},
+    )
+    assert resp.status == 200
+    assert send_dm.await_count == 2
+    by_user = {call.args[0]: call.args[1] for call in send_dm.await_args_list}
+    assert set(by_user) == {SUBSCRIBER_A, SUBSCRIBER_B}
+    assert "Alpha" in by_user[SUBSCRIBER_A]
+    assert "Beta" in by_user[SUBSCRIBER_B]
+
+
 # ---------- /api/become_provider ----------
 
 

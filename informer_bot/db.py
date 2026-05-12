@@ -637,6 +637,22 @@ class Database:
                 )
             ]
 
+    # Unlike `subscribers_for_channel`, this skips the owner-blacklist filter:
+    # the blacklist-notify path needs to DM the very users that filter would
+    # silently drop (owner blacklisting their own channel is the trigger).
+    def list_subscribed_users_for_channel(
+        self, channel_id: int,
+    ) -> list[tuple[int, str]]:
+        with self._lock:
+            return [
+                (r[0], r[1])
+                for r in self._conn.execute(
+                    "SELECT user_id, mode FROM subscriptions "
+                    "WHERE channel_id = ? AND mode != 'off'",
+                    (channel_id,),
+                )
+            ]
+
     def delete_channel(self, channel_id: int) -> None:
         with self._lock:
             self._conn.execute("DELETE FROM subscriptions WHERE channel_id = ?", (channel_id,))

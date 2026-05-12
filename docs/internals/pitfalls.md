@@ -205,6 +205,28 @@ semantics + always-show owned channels`; `<this commit>`
 (fix(miniapp): hide owned-blacklisted channels from Subscribe tab) added
 the `subscribable` flag to also hide them from Subscribe.
 
+### `channel_gone` has two triggers — orphan AND all-providers-blacklisted
+
+**Symptom:** a provider blacklists their only-providing channel; subscribers
+stop receiving posts but never get the documented "no longer available" DM
+(`docs/features.md:52-53`, `docs/usage.md:57`).
+**Why:** the historic orphan-detection path
+(`prune_orphan_channels` → `channels_with_no_provider`) only fires when
+`provider_channels` empties, which blacklisting never does — blacklisting
+only inserts into `channel_blacklist`. The blacklist endpoints called
+`prune_orphan_channels` cosmetically but it was a no-op for the blacklist
+case.
+**How to avoid:** the blacklist endpoints (`_blacklist` and
+`_blacklist_bulk` in `informer_bot/webapp.py`) snapshot
+`list_visible_channels()` before the write and call
+`notify_subscribers_of_lost_visibility` after, which DMs subscribers of
+any channel that lost visibility. Do not reuse `subscribers_for_channel`
+from this path — it has a legacy owner-blacklist filter that silently
+drops the very users we want to notify; use
+`list_subscribed_users_for_channel` instead.
+**Evidence:** `<this commit>` (`fix(miniapp): DM subscribers when a
+channel goes invisible due to blacklist`).
+
 ### Owner needs an `approved` row in `providers` on fresh installs
 
 **Symptom:** fresh DB → `/api/providers` returns `[]` → Mini App's
