@@ -713,6 +713,35 @@ async def test_state_provider_sees_own_channels_even_when_all_blacklisted(
     assert 10 in ids, "blacklisted-but-owned channel must remain visible to its provider"
 
 
+async def test_state_subscribable_flag_reflects_visibility(
+    client: TestClient, db: Database,
+) -> None:
+    """Channels served by some approved provider are subscribable=True;
+    channels injected only because the caller owns + blacklisted them
+    (no other provider serves them) are subscribable=False."""
+    db.add_pending_provider(
+        user_id=USER_ID, session_path=f"data/sessions/{USER_ID}.session",
+    )
+    db.set_provider_status(user_id=USER_ID, status="approved")
+    db.upsert_channel(channel_id=10, title="Gamma")
+    db.set_provider_channels(provider_user_id=USER_ID, channel_ids={10})
+    db.set_provider_channel_blacklisted(
+        provider_user_id=USER_ID, channel_id=10, blacklisted=True,
+    )
+    resp = await client.get(
+        "/api/state",
+        headers={"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)},
+    )
+    body = await resp.json()
+    by_id = {c["id"]: c for c in body["channels"]}
+    # Channels 1 and 2 are served by the owner (approved provider).
+    assert by_id[1]["subscribable"] is True
+    assert by_id[2]["subscribable"] is True
+    # Channel 10 is only in the payload because USER_ID owns it and
+    # blacklisted it; no other provider serves it.
+    assert by_id[10]["subscribable"] is False
+
+
 # ---------- /api/become_provider ----------
 
 

@@ -190,15 +190,20 @@ filtered by the provider's owned-channel set. `state.channels` came from
 `_channel_payload`, which sourced only from `db.list_visible_channels()` —
 and a channel blacklisted by its sole provider is invisible.
 **How to avoid:** in `_channel_payload`, union the visible list with the
-caller's own channels when they are an `approved` provider. Keep the dict
-shape unchanged (`id, title, username, about, mode, filter_prompt`). Side
-effect: a provider's Subscribe tab will list channels they own even if
-blacklisted — that's the correct invariant, blacklist semantics are "don't
-share through my contribution", not "don't deliver to me".
+caller's own channels when they are an `approved` provider. The Provide tab
+MUST still include owned channels even when blacklisted (so the un-blacklist
+UI isn't stranded). The Subscribe tab MUST filter them out — a channel that
+only appears via this owned-channel fallback is not actually subscribable
+from anyone else's contribution, so showing it there is misleading. The
+payload carries a per-channel `subscribable` flag (True iff the channel
+came from `list_visible_channels()`) so the JS can filter Subscribe without
+dropping the Provide-tab fallback.
 **Evidence:** `984c754` (flip Provide indicator to whitelist-style),
 `0462190` (bulk Select/Deselect all) made one-click bulk blacklisting
 trivial and exposed this; fix in `fix(miniapp): provider bulk Select-all
-semantics + always-show owned channels`.
+semantics + always-show owned channels`; `<this commit>`
+(fix(miniapp): hide owned-blacklisted channels from Subscribe tab) added
+the `subscribable` flag to also hide them from Subscribe.
 
 ### Owner needs an `approved` row in `providers` on fresh installs
 

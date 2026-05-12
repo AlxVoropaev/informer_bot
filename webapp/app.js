@@ -755,7 +755,7 @@ function renderList() {
   const provideSet = new Set(state.providerChannels || []);
   const source = onProvide
     ? state.channels.filter((c) => provideSet.has(c.id))
-    : state.channels;
+    : state.channels.filter((c) => c.subscribable !== false);
   const items = source.filter((c) => !q || c.title.toLowerCase().includes(q));
   state.filteredView = items;
 

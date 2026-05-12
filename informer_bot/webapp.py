@@ -170,14 +170,14 @@ def _channel_payload(db: Database, user_id: int) -> list[dict]:
     modes = db.list_user_subscription_modes(user_id)
     filters = db.list_user_subscription_filters(user_id)
     channels = list(db.list_visible_channels())
+    visible_ids = {c.id for c in channels}
     # An approved provider must always see their own owned channels in the
     # Mini App, even if they've blacklisted them — otherwise blacklisting
     # everything strands them with no UI path to un-blacklist.
     provider = db.get_provider(user_id)
     if provider is not None and provider.status == "approved":
-        seen = {c.id for c in channels}
         for cid in db.list_provider_channels(user_id):
-            if cid in seen:
+            if cid in visible_ids:
                 continue
             extra = db.get_channel(cid)
             if extra is None:
@@ -192,6 +192,7 @@ def _channel_payload(db: Database, user_id: int) -> list[dict]:
             "about": c.about,
             "mode": modes.get(c.id) or SubscriptionMode.OFF,
             "filter_prompt": filters.get(c.id),
+            "subscribable": c.id in visible_ids,
         }
         for c in channels
     ]
