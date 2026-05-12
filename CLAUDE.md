@@ -119,7 +119,19 @@ in the same change. Quick map of where things live:
 
 If nothing documented is affected, leave the docs alone.
 
-## 6. Goal-Driven Execution
+## 6. Maintain pitfalls.md
+
+**Curate the running list of non-obvious gotchas at
+`docs/internals/pitfalls.md`.**
+
+When you fix a bug whose root cause wasn't obvious from the code, add an
+entry. When you discover an invariant that's easy to violate, add an entry.
+Read `docs/internals/pitfalls.md` early when starting work in a subsystem
+you haven't touched recently — that's its whole point. Keep entries
+specific (commit-sha-backed, single-file or single-subsystem invariants);
+generic advice belongs in this file, not there.
+
+## 7. Goal-Driven Execution
 
 **Define success criteria. Loop until verified.**
 
@@ -157,4 +169,5 @@ the ones relevant to your current task; don't load everything blindly.
 - [dedup.md](docs/internals/dedup.md) — deduplication pipeline.
 - [auto-delete.md](docs/internals/auto-delete.md) — per-user auto-delete + sweeper.
 - [processor-bot.md](docs/processor-bot.md) — sidecar bot for private GPU hosts (bus group, protocol, fallback).
+- [pitfalls.md](docs/internals/pitfalls.md) — non-obvious gotchas and invariants harvested from real bug fixes.
 - [todos.md](docs/internals/todos.md) — open TODOs.
