@@ -1375,3 +1375,13 @@ async def test_state_channel_payload_omits_blacklisted_field(
     body = await resp.json()
     for c in body["channels"]:
         assert "blacklisted" not in c
+
+
+async def test_index_rewrites_static_urls_with_mtime_version(
+    client: TestClient,
+) -> None:
+    resp = await client.get("/")
+    assert resp.status == 200
+    body = await resp.text()
+    assert "app.js?v=" in body
+    assert "style.css?v=" in body

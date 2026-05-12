@@ -735,10 +735,14 @@ function renderList() {
     const row = document.createElement("div");
     row.className = "row";
     row.dataset.id = String(c.id);
+    if (onProvide) row.classList.add("provide-row");
 
-    const icon = document.createElement("div");
-    icon.className = "mode-icon";
-    icon.textContent = ({ off: "⬜", filtered: "🔀", debug: "🐞", all: "✅" })[c.mode] || "⬜";
+    let icon = null;
+    if (!onProvide) {
+      icon = document.createElement("div");
+      icon.className = "mode-icon";
+      icon.textContent = ({ off: "⬜", filtered: "🔀", debug: "🐞", all: "✅" })[c.mode] || "⬜";
+    }
 
     const titleBlock = document.createElement("div");
     titleBlock.className = "title-block";
@@ -749,10 +753,12 @@ function renderList() {
 
     const meta = document.createElement("div");
     meta.className = "meta";
-    const modeBadge = document.createElement("span");
-    modeBadge.className = "badge";
-    modeBadge.textContent = dict.badgeMode[c.mode] || c.mode;
-    meta.appendChild(modeBadge);
+    if (!onProvide) {
+      const modeBadge = document.createElement("span");
+      modeBadge.className = "badge";
+      modeBadge.textContent = dict.badgeMode[c.mode] || c.mode;
+      meta.appendChild(modeBadge);
+    }
     if (c.filter_prompt) {
       const f = document.createElement("span");
       f.className = "badge has-filter";
@@ -766,7 +772,7 @@ function renderList() {
     }
     titleBlock.appendChild(meta);
 
-    row.appendChild(icon);
+    if (icon) row.appendChild(icon);
     row.appendChild(titleBlock);
 
     if (onProvide) {

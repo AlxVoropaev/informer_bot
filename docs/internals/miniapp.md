@@ -10,7 +10,9 @@ everything else.
 When `MINIAPP_URL` is set, `main.py` boots an **aiohttp** server alongside the
 PTB application (same asyncio loop, same SQLite, no separate process). The
 server serves `webapp/index.html` at `/`, static assets at `/static/<file>`,
-and a JSON API under `/api/`. Every API call validates the
+and a JSON API under `/api/`. The `/` handler rewrites `/static/app.js` and
+`/static/style.css` URLs in the served HTML with `?v=<mtime>` so the Telegram
+WebView reloads them whenever either file changes on disk. Every API call validates the
 `X-Telegram-Init-Data` header via `informer_bot.webapp.verify_init_data` —
 HMAC-SHA256 with key `HMAC("WebAppData", bot_token)` over the sorted
 `\n`-joined `key=value` pairs from `Telegram.WebApp.initData` — and rejects

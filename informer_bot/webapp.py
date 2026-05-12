@@ -37,6 +37,29 @@ _INITDATA_MAX_AGE = 24 * 3600  # reject initData older than 24h
 _SUMMARY_PROMPT_MAX_LEN = 4096
 _STATIC_DIR = Path(__file__).resolve().parent.parent / "webapp"
 
+_INDEX_RAW: dict[Path, str] = {}
+_INDEX_CACHE: dict[tuple[int, int], str] = {}
+
+
+async def _index(_req: web.Request) -> web.Response:
+    index_path = _STATIC_DIR / "index.html"
+    raw = _INDEX_RAW.get(index_path)
+    if raw is None:
+        raw = index_path.read_text(encoding="utf-8")
+        _INDEX_RAW[index_path] = raw
+    app_mtime = int(os.stat(_STATIC_DIR / "app.js").st_mtime)
+    css_mtime = int(os.stat(_STATIC_DIR / "style.css").st_mtime)
+    key = (app_mtime, css_mtime)
+    html = _INDEX_CACHE.get(key)
+    if html is None:
+        html = raw.replace(
+            '/static/app.js"', f'/static/app.js?v={app_mtime}"'
+        ).replace(
+            '/static/style.css"', f'/static/style.css?v={css_mtime}"'
+        )
+        _INDEX_CACHE[key] = html
+    return web.Response(text=html, content_type="text/html")
+
 # Per-user token bucket: 30 requests / 60s sliding window.
 _RATE_LIMIT_REQUESTS = 30
 _RATE_LIMIT_WINDOW = 60.0
@@ -833,10 +856,7 @@ def build_app(
     app.router.add_post("/api/blacklist", _blacklist)
     app.router.add_post("/api/blacklist_bulk", _blacklist_bulk)
 
-    async def index(_req: web.Request) -> web.FileResponse:
-        return web.FileResponse(_STATIC_DIR / "index.html")
-
-    app.router.add_get("/", index)
+    app.router.add_get("/", _index)
     app.router.add_static("/static/", _STATIC_DIR)
     return app
 

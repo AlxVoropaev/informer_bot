@@ -177,6 +177,7 @@ body {
 .row .meta .badge.has-filter { background: rgba(36, 129, 204, 0.12); color: var(--link); }
 
 .row .chevron { color: var(--hint); font-size: 18px; }
+.row.provide-row { grid-template-columns: 1fr auto auto; }
 
 .empty {
   padding: 40px 24px;
