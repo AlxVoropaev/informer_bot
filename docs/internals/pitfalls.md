@@ -179,6 +179,27 @@ list-comprehension result.
 **Evidence:** `bdda7f3` (fix(bot): use get_channel + None-check in
 blacklist toggle).
 
+### `_channel_payload` must include the provider's own channels, not just `list_visible_channels()`
+
+**Symptom:** an approved provider blacklists every channel they own (e.g.
+via one click on the Provide tab's bulk "Deselect all" / "Select all") and
+the Mini App's Provide tab goes empty — they have no UI path to un-blacklist
+and are permanently stuck.
+**Why:** the Provide tab in `webapp/app.js` renders `state.channels`
+filtered by the provider's owned-channel set. `state.channels` came from
+`_channel_payload`, which sourced only from `db.list_visible_channels()` —
+and a channel blacklisted by its sole provider is invisible.
+**How to avoid:** in `_channel_payload`, union the visible list with the
+caller's own channels when they are an `approved` provider. Keep the dict
+shape unchanged (`id, title, username, about, mode, filter_prompt`). Side
+effect: a provider's Subscribe tab will list channels they own even if
+blacklisted — that's the correct invariant, blacklist semantics are "don't
+share through my contribution", not "don't deliver to me".
+**Evidence:** `984c754` (flip Provide indicator to whitelist-style),
+`0462190` (bulk Select/Deselect all) made one-click bulk blacklisting
+trivial and exposed this; fix in `fix(miniapp): provider bulk Select-all
+semantics + always-show owned channels`.
+
 ### Owner needs an `approved` row in `providers` on fresh installs
 
 **Symptom:** fresh DB → `/api/providers` returns `[]` → Mini App's

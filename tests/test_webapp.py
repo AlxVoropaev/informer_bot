@@ -687,6 +687,32 @@ async def test_state_approved_extra_provider(
     assert body["provider_channels"] == [10]
 
 
+async def test_state_provider_sees_own_channels_even_when_all_blacklisted(
+    client: TestClient, db: Database,
+) -> None:
+    """A provider who has blacklisted every owned channel must still see
+    those channels in /api/state — otherwise the Mini App Provide tab is
+    empty and they have no UI path to un-blacklist."""
+    db.add_pending_provider(
+        user_id=USER_ID, session_path=f"data/sessions/{USER_ID}.session",
+    )
+    db.set_provider_status(user_id=USER_ID, status="approved")
+    db.upsert_channel(channel_id=10, title="Gamma")
+    db.set_provider_channels(provider_user_id=USER_ID, channel_ids={10})
+    db.set_provider_channel_blacklisted(
+        provider_user_id=USER_ID, channel_id=10, blacklisted=True,
+    )
+    # The owner is the only other provider in the fixture and serves
+    # channels {1, 2}; channel 10 is invisible to non-providers.
+    resp = await client.get(
+        "/api/state",
+        headers={"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)},
+    )
+    body = await resp.json()
+    ids = [c["id"] for c in body["channels"]]
+    assert 10 in ids, "blacklisted-but-owned channel must remain visible to its provider"
+
+
 # ---------- /api/become_provider ----------
 
 

@@ -169,6 +169,21 @@ async def _auth_middleware(request: web.Request, handler):
 def _channel_payload(db: Database, user_id: int) -> list[dict]:
     modes = db.list_user_subscription_modes(user_id)
     filters = db.list_user_subscription_filters(user_id)
+    channels = list(db.list_visible_channels())
+    # An approved provider must always see their own owned channels in the
+    # Mini App, even if they've blacklisted them — otherwise blacklisting
+    # everything strands them with no UI path to un-blacklist.
+    provider = db.get_provider(user_id)
+    if provider is not None and provider.status == "approved":
+        seen = {c.id for c in channels}
+        for cid in db.list_provider_channels(user_id):
+            if cid in seen:
+                continue
+            extra = db.get_channel(cid)
+            if extra is None:
+                continue
+            channels.append(extra)
+        channels.sort(key=lambda c: (c.title or "").lower())
     return [
         {
             "id": c.id,
@@ -178,7 +193,7 @@ def _channel_payload(db: Database, user_id: int) -> list[dict]:
             "mode": modes.get(c.id) or SubscriptionMode.OFF,
             "filter_prompt": filters.get(c.id),
         }
-        for c in db.list_visible_channels()
+        for c in channels
     ]
 
 

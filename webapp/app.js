@@ -1256,11 +1256,11 @@ async function init() {
   });
 
   el("bulk-select-all").addEventListener("click", () => {
-    if (state.activeTab === "provide") bulkToggleBlacklist(true);
+    if (state.activeTab === "provide") bulkToggleBlacklist(false);
     else bulkSetSubscription("all");
   });
   el("bulk-deselect-all").addEventListener("click", () => {
-    if (state.activeTab === "provide") bulkToggleBlacklist(false);
+    if (state.activeTab === "provide") bulkToggleBlacklist(true);
     else bulkSetSubscription("off");
   });
 
