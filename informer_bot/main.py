@@ -464,11 +464,13 @@ async def main() -> None:
         inflight=inflight,
     )
     if not provider_clients:
-        raise SystemExit(
-            "No usable Telethon sessions found for any approved provider. "
-            "Run: uv run python login.py"
+        log.warning(
+            "no usable Telethon sessions found — running in degraded mode "
+            "(Mini App + PTB only, no Telethon updates); log in via the "
+            "Mini App or run `uv run python login.py`",
         )
-    log.info("started %d telethon provider client(s)", len(provider_clients))
+    else:
+        log.info("started %d telethon provider client(s)", len(provider_clients))
 
     def _client_for(provider_id: int) -> TelegramClient:
         for pc in provider_clients:
@@ -504,12 +506,26 @@ async def main() -> None:
                 app.bot, db, requester_id=requester_id, owner_id=cfg.owner_id,
             )
 
+        async def _stop_provider_client(user_id: int) -> bool:
+            for pc in list(provider_clients):
+                if pc.user_id == user_id:
+                    try:
+                        await pc.tg.disconnect()
+                    except Exception:
+                        log.exception(
+                            "provider_logout: disconnect user=%s failed", user_id,
+                        )
+                    provider_clients.remove(pc)
+                    return True
+            return False
+
         webapp_runner = await start_webapp_server(
             db=db, bot_token=cfg.telegram_bot_token, owner_id=cfg.owner_id,
             api_id=cfg.telegram_api_id, api_hash=cfg.telegram_api_hash,
             host=cfg.webapp_host, port=cfg.webapp_port,
             notify_owner_provider_request=_notify_owner_provider_request,
             send_dm=send_dm,
+            stop_provider_client=_stop_provider_client,
         )
         try:
             await app.bot.set_chat_menu_button(menu_button=MenuButtonWebApp(

@@ -43,6 +43,7 @@ _RATE_LIMIT_WINDOW = 60.0
 _rate_state: dict[int, deque[float]] = defaultdict(deque)
 
 NotifyOwnerProviderRequestFn = Callable[[int], Awaitable[None]]
+StopProviderClientFn = Callable[[int], Awaitable[bool]]
 
 DB_KEY: web.AppKey[Database] = web.AppKey("db", Database)
 BOT_TOKEN_KEY: web.AppKey[str] = web.AppKey("bot_token", str)
@@ -53,6 +54,9 @@ NOTIFY_OWNER_KEY: web.AppKey[NotifyOwnerProviderRequestFn] = web.AppKey(
     "notify_owner_provider_request",
 )
 SEND_DM_KEY: web.AppKey[SendDmFn] = web.AppKey("send_dm")
+STOP_PROVIDER_KEY: web.AppKey[StopProviderClientFn] = web.AppKey(
+    "stop_provider_client",
+)
 LOGIN_SESSIONS_KEY: web.AppKey[LoginSessions] = web.AppKey(
     "login_sessions", LoginSessions,
 )
@@ -471,6 +475,17 @@ def _target_provider(
     return target_id, None
 
 
+def _remove_session_files(session_path: str) -> None:
+    """Delete a Telethon session file and its sibling journal, if present."""
+    for path in (Path(session_path), Path(session_path + "-journal")):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            log.exception("provider_login: unlink %s failed", path)
+
+
 async def _provider_login_start(request: web.Request) -> web.Response:
     owner_check = _require_owner(request)
     if owner_check is not None:
@@ -485,12 +500,13 @@ async def _provider_login_start(request: web.Request) -> web.Response:
     force = bool(body.get("force"))
     provider = db.get_provider(target_id)
     assert provider is not None
-    session_file = Path(provider.session_path)
-    if session_file.exists() and not force:
+    live_path = provider.session_path
+    live_file = Path(live_path)
+    if live_file.exists() and not force:
         return web.json_response({"error": "session_exists"}, status=409)
-    session_file.parent.mkdir(parents=True, exist_ok=True)
+    live_file.parent.mkdir(parents=True, exist_ok=True)
     try:
-        os.chmod(session_file.parent, 0o700)
+        os.chmod(live_file.parent, 0o700)
     except OSError:
         pass
     existing = sessions.pop(target_id)
@@ -499,19 +515,21 @@ async def _provider_login_start(request: web.Request) -> web.Response:
             await existing.client.disconnect()
         except Exception:  # noqa: BLE001
             log.exception("provider_login: disconnect on restart failed")
+        if existing.temp_session_path:
+            _remove_session_files(existing.temp_session_path)
+    # On re-login, write to a temp file so the live session (held open by the
+    # running provider client) is left alone until the new login succeeds.
+    session_path = live_path + ".relogin" if force else live_path
     if force:
-        for path in (session_file, session_file.with_suffix(".session-journal")):
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
-            except OSError:
-                log.exception("provider_login: unlink %s failed", path)
+        _remove_session_files(session_path)
     api_id = request.app[API_ID_KEY]
     api_hash = request.app[API_HASH_KEY]
-    client = TelegramClient(str(session_file), api_id, api_hash)
+    client = TelegramClient(session_path, api_id, api_hash)
     await client.connect()
-    sessions.start(target_id, client)
+    entry = sessions.start(target_id, client)
+    entry.live_session_path = live_path
+    if force:
+        entry.temp_session_path = session_path
     log.info("miniapp: provider_login start user=%s", target_id)
     return web.json_response({"ok": True, "step": "phone"})
 
@@ -543,6 +561,8 @@ async def _provider_login_phone(request: web.Request) -> web.Response:
         except Exception:  # noqa: BLE001
             pass
         sessions.pop(target_id)
+        if entry.temp_session_path:
+            _remove_session_files(entry.temp_session_path)
         return web.json_response(
             {"error": "telethon_error", "detail": str(exc)}, status=400,
         )
@@ -555,6 +575,35 @@ def _chmod_session(session_path: str) -> None:
         os.chmod(session_path, 0o600)
     except OSError:
         pass
+
+
+def _finalize_session_file(entry) -> bool:
+    """Atomically swap a successful temp re-login over the live session path.
+
+    Returns True iff a swap happened (i.e. this was a re-login). The bot must
+    restart for the new session to take effect because the live provider client
+    still holds the old file's SQLite handle.
+    """
+    temp_path = entry.temp_session_path
+    live_path = entry.live_session_path
+    if not temp_path or not live_path:
+        return False
+    try:
+        os.replace(temp_path, live_path)
+    except OSError:
+        log.exception("provider_login: replace %s -> %s failed", temp_path, live_path)
+        return False
+    # Move the journal sibling too if present so the new session is coherent.
+    temp_journal = temp_path + "-journal"
+    live_journal = live_path + "-journal"
+    if os.path.exists(temp_journal):
+        try:
+            os.replace(temp_journal, live_journal)
+        except OSError:
+            log.exception(
+                "provider_login: replace %s -> %s failed", temp_journal, live_journal,
+            )
+    return True
 
 
 async def _provider_login_code(request: web.Request) -> web.Response:
@@ -600,6 +649,8 @@ async def _provider_login_code(request: web.Request) -> web.Response:
         except Exception:  # noqa: BLE001
             pass
         sessions.pop(target_id)
+        if entry.temp_session_path:
+            _remove_session_files(entry.temp_session_path)
         return web.json_response(
             {"error": "telethon_error", "detail": str(exc)}, status=400,
         )
@@ -607,9 +658,12 @@ async def _provider_login_code(request: web.Request) -> web.Response:
     assert provider is not None
     await entry.client.disconnect()
     sessions.pop(target_id)
+    replaced = _finalize_session_file(entry)
     _chmod_session(provider.session_path)
     log.info("miniapp: provider_login done user=%s", target_id)
-    return web.json_response({"ok": True, "done": True})
+    return web.json_response(
+        {"ok": True, "done": True, "restart_required": replaced},
+    )
 
 
 async def _provider_login_password(request: web.Request) -> web.Response:
@@ -642,6 +696,8 @@ async def _provider_login_password(request: web.Request) -> web.Response:
         except Exception:  # noqa: BLE001
             pass
         sessions.pop(target_id)
+        if entry.temp_session_path:
+            _remove_session_files(entry.temp_session_path)
         return web.json_response(
             {"error": "telethon_error", "detail": str(exc)}, status=400,
         )
@@ -649,9 +705,12 @@ async def _provider_login_password(request: web.Request) -> web.Response:
     assert provider is not None
     await entry.client.disconnect()
     sessions.pop(target_id)
+    replaced = _finalize_session_file(entry)
     _chmod_session(provider.session_path)
     log.info("miniapp: provider_login done user=%s (2fa)", target_id)
-    return web.json_response({"ok": True, "done": True})
+    return web.json_response(
+        {"ok": True, "done": True, "restart_required": replaced},
+    )
 
 
 async def _provider_login_cancel(request: web.Request) -> web.Response:
@@ -670,6 +729,29 @@ async def _provider_login_cancel(request: web.Request) -> web.Response:
             await entry.client.disconnect()
         except Exception:  # noqa: BLE001
             log.exception("provider_login: disconnect on cancel failed")
+        if entry.temp_session_path:
+            _remove_session_files(entry.temp_session_path)
+    return web.json_response({"ok": True})
+
+
+async def _provider_logout(request: web.Request) -> web.Response:
+    owner_check = _require_owner(request)
+    if owner_check is not None:
+        return owner_check
+    db = request.app[DB_KEY]
+    body = await request.json()
+    target_id, err = _target_provider(request, body)
+    if err is not None:
+        return err
+    assert target_id is not None
+    provider = db.get_provider(target_id)
+    assert provider is not None
+    stop_provider_client = request.app[STOP_PROVIDER_KEY]
+    stopped = await stop_provider_client(target_id)
+    _remove_session_files(provider.session_path)
+    log.info(
+        "miniapp: provider_logout user=%s stopped_client=%s", target_id, stopped,
+    )
     return web.json_response({"ok": True})
 
 
@@ -682,6 +764,7 @@ def build_app(
     api_hash: str,
     notify_owner_provider_request: NotifyOwnerProviderRequestFn,
     send_dm: SendDmFn,
+    stop_provider_client: StopProviderClientFn,
 ) -> web.Application:
     app = web.Application(
         middlewares=[_auth_middleware],
@@ -692,6 +775,7 @@ def build_app(
     app[OWNER_ID_KEY] = owner_id
     app[NOTIFY_OWNER_KEY] = notify_owner_provider_request
     app[SEND_DM_KEY] = send_dm
+    app[STOP_PROVIDER_KEY] = stop_provider_client
     app[LOGIN_SESSIONS_KEY] = LoginSessions()
     app[API_ID_KEY] = api_id
     app[API_HASH_KEY] = api_hash
@@ -702,6 +786,7 @@ def build_app(
     app.router.add_post("/api/provider_login/code", _provider_login_code)
     app.router.add_post("/api/provider_login/password", _provider_login_password)
     app.router.add_post("/api/provider_login/cancel", _provider_login_cancel)
+    app.router.add_post("/api/provider_logout", _provider_logout)
     app.router.add_post("/api/subscription", _subscription)
     app.router.add_post("/api/filter", _filter)
     app.router.add_post("/api/language", _language)
@@ -731,12 +816,14 @@ async def start_server(
     port: int,
     notify_owner_provider_request: NotifyOwnerProviderRequestFn,
     send_dm: SendDmFn,
+    stop_provider_client: StopProviderClientFn,
 ) -> web.AppRunner:
     app = build_app(
         db=db, bot_token=bot_token, owner_id=owner_id,
         api_id=api_id, api_hash=api_hash,
         notify_owner_provider_request=notify_owner_provider_request,
         send_dm=send_dm,
+        stop_provider_client=stop_provider_client,
     )
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()

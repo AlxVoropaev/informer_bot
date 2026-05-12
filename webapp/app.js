@@ -75,6 +75,9 @@ const I18N = {
     providersLogin: "Login",
     providersRelogin: "Re-login",
     providersResume: "Resume",
+    providersLogout: "Logout",
+    providersConfirmLogout: "Log this provider out and delete the session file?",
+    providersLoggedOut: "Provider logged out.",
     providersStep: { phone: "phone", code: "code", password: "password" },
     providersConfirmReplace: "A session already exists for this provider. Replace it?",
     providerLoginTitle: (label) => `Login: ${label}`,
@@ -169,6 +172,9 @@ const I18N = {
     providersLogin: "Войти",
     providersRelogin: "Перелогиниться",
     providersResume: "Продолжить",
+    providersLogout: "Выйти",
+    providersConfirmLogout: "Завершить сессию провайдера и удалить файл сессии?",
+    providersLoggedOut: "Провайдер вышел из системы.",
     providersStep: { phone: "телефон", code: "код", password: "пароль" },
     providersConfirmReplace: "Сессия для этого провайдера уже существует. Заменить её?",
     providerLoginTitle: (label) => `Вход: ${label}`,
@@ -458,7 +464,38 @@ function renderProviders() {
     btn.addEventListener("click", () => onProviderLoginClick(p));
     row.appendChild(btn);
 
+    if (p.has_session) {
+      const logoutBtn = document.createElement("button");
+      logoutBtn.type = "button";
+      logoutBtn.className = "ghost provider-action";
+      logoutBtn.textContent = dict.providersLogout;
+      logoutBtn.addEventListener("click", () => onProviderLogoutClick(p));
+      row.appendChild(logoutBtn);
+    }
+
     list.appendChild(row);
+  }
+}
+
+async function onProviderLogoutClick(p) {
+  const msg = t().providersConfirmLogout;
+  const proceed = await new Promise((resolve) => {
+    if (tg && typeof tg.showConfirm === "function") {
+      try { tg.showConfirm(msg, (ok) => resolve(!!ok)); return; } catch (_) {}
+    }
+    resolve(window.confirm(msg));
+  });
+  if (!proceed) return;
+  try {
+    await api("/api/provider_logout", {
+      method: "POST",
+      body: JSON.stringify({ user_id: p.user_id }),
+    });
+    showToast(t().providersLoggedOut);
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+    await loadProviders();
+  } catch (e) {
+    showToast(e.message || t().network_error);
   }
 }
 

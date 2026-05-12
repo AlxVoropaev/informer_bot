@@ -25,6 +25,8 @@ class Entry:
     phone: str | None = None
     phone_code_hash: str | None = None
     last_activity: float = field(default_factory=time.monotonic)
+    temp_session_path: str | None = None
+    live_session_path: str | None = None
 
 
 class LoginSessions:

@@ -97,14 +97,21 @@ def send_dm() -> AsyncMock:
 
 
 @pytest.fixture
+def stop_provider_client() -> AsyncMock:
+    return AsyncMock(return_value=True)
+
+
+@pytest.fixture
 async def client(
     db: Database, notify_owner: AsyncMock, send_dm: AsyncMock,
+    stop_provider_client: AsyncMock,
 ) -> TestClient:
     app = build_app(
         db=db, bot_token=BOT_TOKEN, owner_id=OWNER_ID,
         api_id=12345, api_hash="hash",
         notify_owner_provider_request=notify_owner,
         send_dm=send_dm,
+        stop_provider_client=stop_provider_client,
     )
     server = TestServer(app)
     client = TestClient(server)
@@ -965,7 +972,9 @@ async def test_provider_login_happy_path(
         json={"user_id": PROVIDER_ID, "code": "11111"},
     )
     assert resp.status == 200
-    assert (await resp.json()) == {"ok": True, "done": True}
+    assert (await resp.json()) == {
+        "ok": True, "done": True, "restart_required": False,
+    }
     mock_client.sign_in.assert_awaited_once_with(
         phone="+15551234567", code="11111", phone_code_hash="abc",
     )
@@ -1014,7 +1023,9 @@ async def test_provider_login_2fa_path(
         json={"user_id": PROVIDER_ID, "password": "secret"},
     )
     assert resp.status == 200
-    assert (await resp.json()) == {"ok": True, "done": True}
+    assert (await resp.json()) == {
+        "ok": True, "done": True, "restart_required": False,
+    }
     assert sign_in_calls[-1] == {"password": "secret"}
 
     # Entry should be gone now: another phone call must 409.
@@ -1030,8 +1041,9 @@ async def test_provider_login_start_existing_session_409_then_force(
     client: TestClient, approved_provider: int, session_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    (session_dir / f"{PROVIDER_ID}.session").write_bytes(b"x")
-    _fake_telethon_factory(monkeypatch)
+    live_path = session_dir / f"{PROVIDER_ID}.session"
+    live_path.write_bytes(b"x")
+    _, captured = _fake_telethon_factory(monkeypatch)
     headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
 
     resp = await client.post(
@@ -1046,6 +1058,88 @@ async def test_provider_login_start_existing_session_409_then_force(
         json={"user_id": PROVIDER_ID, "force": True},
     )
     assert resp.status == 200
+    # Live session file must NOT be deleted by `force=True` start.
+    assert live_path.exists()
+    assert live_path.read_bytes() == b"x"
+    # TelegramClient must be created on the temp `.relogin` path.
+    assert captured["session_path"] == str(live_path) + ".relogin"
+
+
+async def test_provider_login_force_success_replaces_live_file(
+    client: TestClient, approved_provider: int, session_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Successful force-login swaps temp file over the live path."""
+    live_path = session_dir / f"{PROVIDER_ID}.session"
+    live_path.write_bytes(b"OLD")
+    temp_path = Path(str(live_path) + ".relogin")
+
+    mock_client = AsyncMock()
+    sent = type("Sent", (), {"phone_code_hash": "abc"})()
+    mock_client.send_code_request = AsyncMock(return_value=sent)
+
+    async def fake_sign_in(**_kwargs):
+        # Telethon would write the session file during sign_in.
+        temp_path.write_bytes(b"NEW")
+        return None
+
+    mock_client.sign_in = fake_sign_in
+    _fake_telethon_factory(monkeypatch, instance=mock_client)
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+
+    resp = await client.post(
+        "/api/provider_login/start", headers=headers,
+        json={"user_id": PROVIDER_ID, "force": True},
+    )
+    assert resp.status == 200
+    assert temp_path.exists() is False  # not yet — sign_in hasn't run
+    assert live_path.read_bytes() == b"OLD"
+
+    await client.post(
+        "/api/provider_login/phone", headers=headers,
+        json={"user_id": PROVIDER_ID, "phone": "+1"},
+    )
+    resp = await client.post(
+        "/api/provider_login/code", headers=headers,
+        json={"user_id": PROVIDER_ID, "code": "11111"},
+    )
+    body = await resp.json()
+    assert resp.status == 200
+    assert body["done"] is True
+    assert body["restart_required"] is True
+    # Temp file must be gone, swapped over the live path.
+    assert temp_path.exists() is False
+    assert live_path.read_bytes() == b"NEW"
+
+
+async def test_provider_login_force_cancel_removes_temp_keeps_live(
+    client: TestClient, approved_provider: int, session_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancelling a force-login deletes the temp file and leaves the live one."""
+    live_path = session_dir / f"{PROVIDER_ID}.session"
+    live_path.write_bytes(b"OLD")
+    temp_path = Path(str(live_path) + ".relogin")
+
+    mock_client = AsyncMock()
+    _fake_telethon_factory(monkeypatch, instance=mock_client)
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+
+    await client.post(
+        "/api/provider_login/start", headers=headers,
+        json={"user_id": PROVIDER_ID, "force": True},
+    )
+    # Simulate Telethon having created the temp file as it would do.
+    temp_path.write_bytes(b"stub")
+
+    resp = await client.post(
+        "/api/provider_login/cancel", headers=headers,
+        json={"user_id": PROVIDER_ID},
+    )
+    assert resp.status == 200
+    mock_client.disconnect.assert_awaited()
+    assert temp_path.exists() is False
+    assert live_path.read_bytes() == b"OLD"
 
 
 async def test_provider_login_start_unknown_provider_404(
@@ -1120,6 +1214,51 @@ async def test_provider_login_phone_without_start_409(
         resp = await client.post(path, headers=headers, json=payload)
         assert resp.status == 409, path
         assert (await resp.json())["error"] == "no_login_in_progress"
+
+
+async def test_provider_logout_owner_only(
+    client: TestClient, approved_provider: int,
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)}
+    resp = await client.post(
+        "/api/provider_logout", headers=headers,
+        json={"user_id": PROVIDER_ID},
+    )
+    assert resp.status == 403
+    assert (await resp.json())["error"] == "not_owner"
+
+
+async def test_provider_logout_unknown_provider_404(
+    client: TestClient, stop_provider_client: AsyncMock,
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+    resp = await client.post(
+        "/api/provider_logout", headers=headers,
+        json={"user_id": 999999},
+    )
+    assert resp.status == 404
+    assert (await resp.json())["error"] == "unknown_provider"
+    stop_provider_client.assert_not_awaited()
+
+
+async def test_provider_logout_stops_client_and_removes_session(
+    client: TestClient, approved_provider: int, session_dir: Path,
+    stop_provider_client: AsyncMock,
+) -> None:
+    live_path = session_dir / f"{PROVIDER_ID}.session"
+    live_path.write_bytes(b"x")
+    journal = Path(str(live_path) + "-journal")
+    journal.write_bytes(b"j")
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+    resp = await client.post(
+        "/api/provider_logout", headers=headers,
+        json={"user_id": PROVIDER_ID},
+    )
+    assert resp.status == 200
+    assert (await resp.json()) == {"ok": True}
+    stop_provider_client.assert_awaited_once_with(PROVIDER_ID)
+    assert live_path.exists() is False
+    assert journal.exists() is False
 
 
 async def test_state_channel_payload_omits_blacklisted_field(
