@@ -93,6 +93,9 @@ const I18N = {
     providerLoginCancelled: "Login cancelled.",
     providerLoginBadPassword: "Wrong password.",
     providerLoginSessionExists: "Session already exists.",
+    tabSubscribe: "Subscribe",
+    tabProvide: "Provide",
+    provideEmpty: "No channels you contribute yet.",
   },
   ru: {
     search: "Поиск каналов…",
@@ -184,6 +187,9 @@ const I18N = {
     providerLoginCancelled: "Вход отменён.",
     providerLoginBadPassword: "Неверный пароль.",
     providerLoginSessionExists: "Сессия уже существует.",
+    tabSubscribe: "Подписка",
+    tabProvide: "Предоставляю",
+    provideEmpty: "Ты пока не предоставляешь каналов.",
   },
 };
 
@@ -204,6 +210,7 @@ const state = {
   providerChannels: [],
   providers: [],
   providerLogin: { userId: null, label: "", step: null },
+  activeTab: "subscribe",
 };
 
 function t() { return I18N[state.language] || I18N.en; }
@@ -273,11 +280,25 @@ function applyLanguage() {
   el("provider-login-done-msg").textContent = dict.providerLoginDoneMsg;
   el("provider-login-done-back").textContent = dict.providerLoginDoneBack;
   if (state.providers && state.providers.length) renderProviders();
+  el("tab-subscribe").textContent = dict.tabSubscribe;
+  el("tab-provide").textContent = dict.tabProvide;
   document.querySelectorAll('input[name="mode"]').forEach((input) => {
     const labelSpan = input.nextElementSibling;
     labelSpan.textContent = dict.modes[input.value];
   });
   renderProviderBanner();
+  renderTabs();
+}
+
+function renderTabs() {
+  const tabs = el("tabs");
+  if (!state.isProvider || el("list").classList.contains("hidden")) {
+    tabs.hidden = true;
+    return;
+  }
+  tabs.hidden = false;
+  el("tab-subscribe").classList.toggle("active", state.activeTab === "subscribe");
+  el("tab-provide").classList.toggle("active", state.activeTab === "provide");
 }
 
 
@@ -368,6 +389,7 @@ async function toggleProviderBlacklist(channelId, blacklisted) {
     renderList();
   } catch (e) {
     el("provider-blacklist-input").checked = (state.providerBlacklist || []).includes(channelId);
+    renderList();
     showToast(e.message || t().network_error);
   }
 }
@@ -610,11 +632,17 @@ function renderList() {
   const container = el("list");
   container.removeAttribute("aria-busy");
   const q = state.searchQuery.trim().toLowerCase();
-  const items = state.channels.filter((c) => !q || c.title.toLowerCase().includes(q));
+  const onProvide = state.isProvider && state.activeTab === "provide";
+  const provideSet = new Set(state.providerChannels || []);
+  const source = onProvide
+    ? state.channels.filter((c) => provideSet.has(c.id))
+    : state.channels;
+  const items = source.filter((c) => !q || c.title.toLowerCase().includes(q));
   state.filteredView = items;
 
   if (items.length === 0) {
-    container.innerHTML = `<div class="empty">${q ? "—" : dict.empty}</div>`;
+    const emptyMsg = q ? "—" : (onProvide ? dict.provideEmpty : dict.empty);
+    container.innerHTML = `<div class="empty">${emptyMsg}</div>`;
     return;
   }
 
@@ -655,13 +683,30 @@ function renderList() {
     }
     titleBlock.appendChild(meta);
 
+    row.appendChild(icon);
+    row.appendChild(titleBlock);
+
+    if (onProvide) {
+      const blLabel = document.createElement("label");
+      blLabel.className = "row-blacklist";
+      const blInput = document.createElement("input");
+      blInput.type = "checkbox";
+      blInput.checked = blSet.has(c.id);
+      blInput.addEventListener("click", (ev) => ev.stopPropagation());
+      blInput.addEventListener("change", (ev) => {
+        ev.stopPropagation();
+        toggleProviderBlacklist(c.id, !!ev.target.checked);
+      });
+      blLabel.appendChild(blInput);
+      blLabel.addEventListener("click", (ev) => ev.stopPropagation());
+      row.appendChild(blLabel);
+    }
+
     const chev = document.createElement("div");
     chev.className = "chevron";
     chev.textContent = "›";
-
-    row.appendChild(icon);
-    row.appendChild(titleBlock);
     row.appendChild(chev);
+
     row.addEventListener("click", () => openDetails(c.id));
     frag.appendChild(row);
   }
@@ -704,6 +749,7 @@ function openDetails(channelId) {
   el("details").classList.remove("hidden");
   el("details").setAttribute("aria-hidden", "false");
   el("search").parentElement.style.display = "none";
+  el("tabs").hidden = true;
   window.scrollTo(0, 0);
 
   if (tg && tg.BackButton) {
@@ -718,6 +764,7 @@ function closeDetails() {
   el("details").setAttribute("aria-hidden", "true");
   el("list").classList.remove("hidden");
   el("search").parentElement.style.display = "";
+  renderTabs();
   if (tg && tg.BackButton) {
     tg.BackButton.offClick(closeDetails);
     tg.BackButton.hide();
@@ -785,6 +832,7 @@ async function openUsage() {
   el("usage").setAttribute("aria-hidden", "false");
   el("list").classList.add("hidden");
   el("search").parentElement.style.display = "none";
+  el("tabs").hidden = true;
   window.scrollTo(0, 0);
   el("usage-body").innerHTML = `<div class="empty">${t().loading}</div>`;
   if (tg && tg.BackButton) {
@@ -804,6 +852,7 @@ function closeUsage() {
   el("usage").setAttribute("aria-hidden", "true");
   el("list").classList.remove("hidden");
   el("search").parentElement.style.display = "";
+  renderTabs();
   if (tg && tg.BackButton) {
     tg.BackButton.offClick(closeUsage);
     tg.BackButton.hide();
@@ -835,6 +884,7 @@ function openSettings() {
   el("settings").setAttribute("aria-hidden", "false");
   el("list").classList.add("hidden");
   el("search").parentElement.style.display = "none";
+  el("tabs").hidden = true;
   window.scrollTo(0, 0);
   if (tg && tg.BackButton) {
     tg.BackButton.show();
@@ -847,6 +897,7 @@ function closeSettings() {
   el("settings").setAttribute("aria-hidden", "true");
   el("list").classList.remove("hidden");
   el("search").parentElement.style.display = "";
+  renderTabs();
   if (tg && tg.BackButton) {
     tg.BackButton.offClick(closeSettings);
     tg.BackButton.hide();
@@ -1056,6 +1107,18 @@ async function init() {
     if (state.selectedId == null) return;
     el("filter-input").value = "";
     saveFilter(state.selectedId, null);
+  });
+
+  document.querySelectorAll("#tabs .tab").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const next = btn.dataset.tab;
+      if (next === state.activeTab) return;
+      state.activeTab = next;
+      state.searchQuery = "";
+      el("search").value = "";
+      renderTabs();
+      renderList();
+    });
   });
 
   el("provider-blacklist-input").addEventListener("change", (ev) => {
