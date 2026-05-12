@@ -29,6 +29,15 @@ checked against `users.status='approved'`.
 - `POST /api/blacklist` `{channel_id, blacklisted}` → caller-as-provider blacklist toggle. `{ok, blacklist}` (200) on success; `{error: "not_provider"}` (403) when the caller isn't an approved provider; `{error: "channel_not_owned_by_provider"}` (400) when the channel isn't in the caller's `provider_channels`. `prune_orphan_channels` is invoked defensively after a successful toggle.
 - `GET /api/usage` → `{is_owner, user: {input_tokens, output_tokens, cost_usd}}` — owner payload also includes `per_user[]`, `system`, `embeddings`.
 - `POST /api/summary_prompt` `{prompt}` — owner-only (non-owners get 403 `not_owner`). Saves a custom system prompt for post summarization. `null`/missing/empty/whitespace resets to the hardcoded default. Prompts longer than 4096 characters are rejected with 400 `prompt_too_long`. Returns `{ok, summary_prompt, summary_prompt_default}` where `summary_prompt` is `null` when no override is active. The custom prompt is stored in the `meta` table under `summary_prompt` and applied to every summarize backend (Anthropic, Ollama, remote processor) via the `SummarizeRequest.system_prompt` field.
+- Provider login (owner-only) — every endpoint below returns 403 `not_owner` for non-owner callers:
+  - `GET /api/providers` → `{providers: [...]}` where each entry is `{user_id, label, status, has_session, session_path, login_step}`. `login_step ∈ null|"phone"|"code"|"password"` and reflects whether an in-progress Mini App login is currently held in memory for that provider.
+  - `POST /api/provider_login/start` `{user_id, force}` → starts a fresh Telethon login for the named approved provider. Returns `{ok: true, step: "phone"}`. 404 `unknown_provider` if `user_id` isn't an approved provider; 409 `session_exists` if a session file already exists and `force` isn't true.
+  - `POST /api/provider_login/phone` `{user_id, phone}` → calls Telethon `send_code_request`. Returns `{ok, step: "code"}`, or 409 `no_login_in_progress` / `bad_step`.
+  - `POST /api/provider_login/code` `{user_id, code}` → calls Telethon `sign_in(code=...)`. Returns `{ok, step: "password"}` when 2FA is required, `{ok, done: true}` on full success (session file written, chmod 600). Telethon errors (e.g. invalid/expired code) return 400 `{error, detail}`.
+  - `POST /api/provider_login/password` `{user_id, password}` → completes 2FA via `sign_in(password=...)`. Returns `{ok, done: true}`, or 400 `bad_password`.
+  - `POST /api/provider_login/cancel` `{user_id}` → disconnects and discards in-progress login state. Always `{ok: true}`.
+
+In-progress Telethon clients live in an in-memory map (`informer_bot.login_sessions.LoginSessions`) keyed by `user_id`, with a 10-minute idle TTL — so a bot restart drops any in-flight login and the admin restarts from `phone`. The `informer_bot.cli_login` CLI remains the fallback.
 
 ## Deep-linking
 

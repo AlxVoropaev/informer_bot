@@ -65,6 +65,55 @@
         <button id="summary-prompt-reset" type="button" class="ghost">Reset</button>
       </div>
     </div>
+
+    <div id="providers-section" class="usage-section" hidden>
+      <h3 id="providers-heading">Providers</h3>
+      <p id="providers-hint" class="tips"></p>
+      <div id="providers-list"></div>
+    </div>
+  </section>
+
+  <section id="provider-login" class="details hidden" aria-hidden="true">
+    <button class="back" id="provider-login-back" type="button">← Back</button>
+    <h2 id="provider-login-title"></h2>
+    <p id="provider-login-step" class="tips"></p>
+
+    <div id="provider-login-phone" class="filter" hidden>
+      <span id="provider-login-phone-label">Phone</span>
+      <input id="provider-login-phone-input" type="tel" autocomplete="off" inputmode="tel" />
+      <div class="filter-actions">
+        <button id="provider-login-phone-submit" type="button" class="primary">Send code</button>
+      </div>
+    </div>
+
+    <div id="provider-login-code" class="filter" hidden>
+      <span id="provider-login-code-label">Code from Telegram</span>
+      <input id="provider-login-code-input" type="text" autocomplete="one-time-code" inputmode="numeric" />
+      <div class="filter-actions">
+        <button id="provider-login-code-submit" type="button" class="primary">Submit</button>
+      </div>
+    </div>
+
+    <div id="provider-login-password" class="filter" hidden>
+      <span id="provider-login-password-label">2FA password</span>
+      <input id="provider-login-password-input" type="password" autocomplete="off" />
+      <div class="filter-actions">
+        <button id="provider-login-password-submit" type="button" class="primary">Submit</button>
+      </div>
+    </div>
+
+    <div id="provider-login-done" hidden>
+      <p id="provider-login-done-msg" class="tips"></p>
+      <div class="filter-actions">
+        <button id="provider-login-done-back" type="button" class="primary">Back to providers</button>
+      </div>
+    </div>
+
+    <p id="provider-login-status" class="login-status" hidden></p>
+
+    <div class="filter-actions" id="provider-login-cancel-row">
+      <button id="provider-login-cancel" type="button" class="ghost">Cancel</button>
+    </div>
   </section>
 
   <section id="details" class="details hidden" aria-hidden="true">

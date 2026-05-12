@@ -102,6 +102,7 @@ async def client(
 ) -> TestClient:
     app = build_app(
         db=db, bot_token=BOT_TOKEN, owner_id=OWNER_ID,
+        api_id=12345, api_hash="hash",
         notify_owner_provider_request=notify_owner,
         send_dm=send_dm,
     )
@@ -851,6 +852,274 @@ async def test_blacklist_runs_orphan_sweep(
 
 
 # ---------- /api/state: channels payload no longer carries 'blacklisted' ----------
+
+
+# ---------- /api/providers + /api/provider_login/* ----------
+
+
+PROVIDER_ID = 1234
+
+
+@pytest.fixture
+def session_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    d = tmp_path / "sessions"
+    d.mkdir()
+    monkeypatch.chdir(tmp_path)
+    return d
+
+
+@pytest.fixture
+def approved_provider(db: Database, session_dir: Path) -> int:
+    db.set_user_status(user_id=PROVIDER_ID, status="approved")
+    db.add_pending_provider(
+        user_id=PROVIDER_ID,
+        session_path=str(session_dir / f"{PROVIDER_ID}.session"),
+    )
+    db.set_provider_status(user_id=PROVIDER_ID, status="approved")
+    return PROVIDER_ID
+
+
+def _fake_telethon_factory(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    instance: AsyncMock | None = None,
+):
+    """Patch `informer_bot.webapp.TelegramClient` so calls return the given
+    mock (or a fresh AsyncMock). Records init args on the mock as
+    ``init_args`` for assertions."""
+    mock = instance if instance is not None else AsyncMock()
+    captured: dict = {}
+
+    def factory(session_path, api_id, api_hash):
+        captured["session_path"] = session_path
+        captured["api_id"] = api_id
+        captured["api_hash"] = api_hash
+        mock.init_args = captured
+        return mock
+
+    monkeypatch.setattr(webapp, "TelegramClient", factory)
+    return mock, captured
+
+
+async def test_providers_list_returns_approved(
+    client: TestClient, db: Database, approved_provider: int,
+    session_dir: Path,
+) -> None:
+    # Touch a session file for one provider so has_session=True.
+    (session_dir / f"{PROVIDER_ID}.session").write_bytes(b"x")
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+    resp = await client.get("/api/providers", headers=headers)
+    assert resp.status == 200
+    body = await resp.json()
+    by_id = {p["user_id"]: p for p in body["providers"]}
+    assert PROVIDER_ID in by_id
+    assert by_id[PROVIDER_ID]["has_session"] is True
+    assert by_id[PROVIDER_ID]["status"] == "approved"
+    assert by_id[PROVIDER_ID]["login_step"] is None
+    # Owner is also an approved provider but has no session file.
+    assert by_id[OWNER_ID]["has_session"] is False
+
+
+async def test_providers_list_owner_only(client: TestClient) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)}
+    resp = await client.get("/api/providers", headers=headers)
+    assert resp.status == 403
+    assert (await resp.json())["error"] == "not_owner"
+
+
+async def test_provider_login_happy_path(
+    client: TestClient, db: Database, approved_provider: int,
+    session_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_client = AsyncMock()
+    sent = type("Sent", (), {"phone_code_hash": "abc"})()
+    mock_client.send_code_request = AsyncMock(return_value=sent)
+    mock_client.sign_in = AsyncMock(return_value=None)
+    _, captured = _fake_telethon_factory(monkeypatch, instance=mock_client)
+
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+
+    resp = await client.post(
+        "/api/provider_login/start", headers=headers,
+        json={"user_id": PROVIDER_ID},
+    )
+    assert resp.status == 200
+    assert (await resp.json()) == {"ok": True, "step": "phone"}
+    assert captured["session_path"] == str(
+        session_dir / f"{PROVIDER_ID}.session"
+    )
+    assert captured["api_id"] == 12345
+    assert captured["api_hash"] == "hash"
+    mock_client.connect.assert_awaited_once()
+
+    resp = await client.post(
+        "/api/provider_login/phone", headers=headers,
+        json={"user_id": PROVIDER_ID, "phone": "+15551234567"},
+    )
+    assert resp.status == 200
+    assert (await resp.json()) == {"ok": True, "step": "code"}
+    mock_client.send_code_request.assert_awaited_once_with("+15551234567")
+
+    resp = await client.post(
+        "/api/provider_login/code", headers=headers,
+        json={"user_id": PROVIDER_ID, "code": "11111"},
+    )
+    assert resp.status == 200
+    assert (await resp.json()) == {"ok": True, "done": True}
+    mock_client.sign_in.assert_awaited_once_with(
+        phone="+15551234567", code="11111", phone_code_hash="abc",
+    )
+    mock_client.disconnect.assert_awaited()
+
+
+async def test_provider_login_2fa_path(
+    client: TestClient, approved_provider: int,
+    session_dir: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from telethon.errors import SessionPasswordNeededError
+
+    mock_client = AsyncMock()
+    sent = type("Sent", (), {"phone_code_hash": "abc"})()
+    mock_client.send_code_request = AsyncMock(return_value=sent)
+
+    sign_in_calls: list[dict] = []
+
+    async def sign_in(**kwargs):
+        sign_in_calls.append(kwargs)
+        if "code" in kwargs:
+            raise SessionPasswordNeededError(request=None)
+        return None
+
+    mock_client.sign_in = sign_in
+    _fake_telethon_factory(monkeypatch, instance=mock_client)
+
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+    await client.post(
+        "/api/provider_login/start", headers=headers,
+        json={"user_id": PROVIDER_ID},
+    )
+    await client.post(
+        "/api/provider_login/phone", headers=headers,
+        json={"user_id": PROVIDER_ID, "phone": "+1"},
+    )
+    resp = await client.post(
+        "/api/provider_login/code", headers=headers,
+        json={"user_id": PROVIDER_ID, "code": "11111"},
+    )
+    assert resp.status == 200
+    assert (await resp.json()) == {"ok": True, "step": "password"}
+
+    resp = await client.post(
+        "/api/provider_login/password", headers=headers,
+        json={"user_id": PROVIDER_ID, "password": "secret"},
+    )
+    assert resp.status == 200
+    assert (await resp.json()) == {"ok": True, "done": True}
+    assert sign_in_calls[-1] == {"password": "secret"}
+
+    # Entry should be gone now: another phone call must 409.
+    resp = await client.post(
+        "/api/provider_login/phone", headers=headers,
+        json={"user_id": PROVIDER_ID, "phone": "+1"},
+    )
+    assert resp.status == 409
+    assert (await resp.json())["error"] == "no_login_in_progress"
+
+
+async def test_provider_login_start_existing_session_409_then_force(
+    client: TestClient, approved_provider: int, session_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (session_dir / f"{PROVIDER_ID}.session").write_bytes(b"x")
+    _fake_telethon_factory(monkeypatch)
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+
+    resp = await client.post(
+        "/api/provider_login/start", headers=headers,
+        json={"user_id": PROVIDER_ID},
+    )
+    assert resp.status == 409
+    assert (await resp.json())["error"] == "session_exists"
+
+    resp = await client.post(
+        "/api/provider_login/start", headers=headers,
+        json={"user_id": PROVIDER_ID, "force": True},
+    )
+    assert resp.status == 200
+
+
+async def test_provider_login_start_unknown_provider_404(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_telethon_factory(monkeypatch)
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+    resp = await client.post(
+        "/api/provider_login/start", headers=headers,
+        json={"user_id": 999999},
+    )
+    assert resp.status == 404
+    assert (await resp.json())["error"] == "unknown_provider"
+
+
+async def test_provider_login_endpoints_owner_only(
+    client: TestClient, approved_provider: int, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fake_telethon_factory(monkeypatch)
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)}
+    for path in (
+        "/api/provider_login/start",
+        "/api/provider_login/phone",
+        "/api/provider_login/code",
+        "/api/provider_login/password",
+        "/api/provider_login/cancel",
+    ):
+        resp = await client.post(
+            path, headers=headers, json={"user_id": PROVIDER_ID},
+        )
+        assert resp.status == 403, path
+        assert (await resp.json())["error"] == "not_owner"
+
+
+async def test_provider_login_cancel_disconnects(
+    client: TestClient, approved_provider: int, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock_client = AsyncMock()
+    _fake_telethon_factory(monkeypatch, instance=mock_client)
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+
+    # Cancel with nothing in progress: still ok.
+    resp = await client.post(
+        "/api/provider_login/cancel", headers=headers,
+        json={"user_id": PROVIDER_ID},
+    )
+    assert resp.status == 200
+    assert (await resp.json()) == {"ok": True}
+
+    await client.post(
+        "/api/provider_login/start", headers=headers,
+        json={"user_id": PROVIDER_ID},
+    )
+    resp = await client.post(
+        "/api/provider_login/cancel", headers=headers,
+        json={"user_id": PROVIDER_ID},
+    )
+    assert resp.status == 200
+    mock_client.disconnect.assert_awaited()
+
+
+async def test_provider_login_phone_without_start_409(
+    client: TestClient, approved_provider: int,
+) -> None:
+    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
+    for path, payload in (
+        ("/api/provider_login/phone", {"user_id": PROVIDER_ID, "phone": "+1"}),
+        ("/api/provider_login/code", {"user_id": PROVIDER_ID, "code": "1"}),
+        ("/api/provider_login/password",
+         {"user_id": PROVIDER_ID, "password": "x"}),
+    ):
+        resp = await client.post(path, headers=headers, json=payload)
+        assert resp.status == 409, path
+        assert (await resp.json())["error"] == "no_login_in_progress"
 
 
 async def test_state_channel_payload_omits_blacklisted_field(

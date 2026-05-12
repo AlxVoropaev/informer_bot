@@ -504,6 +504,7 @@ async def main() -> None:
 
         webapp_runner = await start_webapp_server(
             db=db, bot_token=cfg.telegram_bot_token, owner_id=cfg.owner_id,
+            api_id=cfg.telegram_api_id, api_hash=cfg.telegram_api_hash,
             host=cfg.webapp_host, port=cfg.webapp_port,
             notify_owner_provider_request=_notify_owner_provider_request,
             send_dm=send_dm,
