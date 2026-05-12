@@ -1,8 +1,8 @@
 # Deduplication
 
 After summarising, the summary text is embedded once and compared against
-this user's recent `delivered` rows (last `DEDUP_WINDOW_HOURS`). Cosine
-≥ `DEDUP_THRESHOLD` counts as a duplicate.
+this user's recent `delivered` rows (last `DEDUP_WINDOW_HOURS` (default: 48
+hours)). Cosine ≥ `DEDUP_THRESHOLD` counts as a duplicate.
 
 - **Provider** is `EMBEDDING_PROVIDER`: `auto` (default — `openai` if
   `OPENAI_API_KEY` set, else `none`), `openai`

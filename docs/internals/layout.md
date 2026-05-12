@@ -19,11 +19,14 @@ informer_bot/
 │   ├── config.py            # loads .env, exposes typed settings
 │   ├── db.py                # sqlite schema + queries (sync, single-file)
 │   ├── i18n.py              # EN/RU UI strings + t() helper
+│   ├── modes.py             # SubscriptionMode enum (off/filtered/debug/all/unsubscribe)
 │   ├── summarizer.py        # claude summarize/is_relevant + openai embed_summary + cost estimates
 │   ├── dedup.py             # cosine similarity + find_duplicate(per-user, time-windowed)
 │   ├── client.py            # telethon: list channels, NewMessage handler
 │   ├── provider_clients.py  # multi-session orchestrator: one TelegramClient per approved provider; injects the source-dedup claim into each NewMessage handler
+│   ├── throttle.py          # expensive_limiter / cheap_limiter singletons that throttle Telethon calls to avoid FloodWait
 │   ├── cli_login.py         # interactive Telethon session bootstrap CLI for new providers (`uv run python -m informer_bot.cli_login --user-id <id>`)
+│   ├── login_sessions.py    # in-memory provider-login state (idle TTL); consumed by the Mini App login flow
 │   ├── album.py             # buffer-and-flush coalescer for multi-photo albums
 │   ├── pipeline.py          # handle_new_post + refresh_channels glue
 │   ├── bot.py               # ptb handlers: commands, inline keyboards, callbacks

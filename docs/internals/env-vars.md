@@ -28,6 +28,13 @@ WEBAPP_HOST=127.0.0.1      # optional, bind host for the Mini App server (defaul
 WEBAPP_PORT=8085           # optional, bind port for the Mini App server (default 8085)
 ```
 
+## Optional path overrides
+
+```
+SESSION_PATH=data/informer    # optional, path to the owner's Telethon session file (Telethon appends `.session`); default data/informer
+DB_PATH=data/informer.db      # optional, path to the SQLite database file; default data/informer.db
+```
+
 ## processor_bot only
 
 ```

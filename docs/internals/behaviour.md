@@ -33,7 +33,9 @@ See also: [storage.md](storage.md), [dedup.md](dedup.md),
   next line. No separate URL line. If the source post has a photo (or for an
   album, the first photo), it is downloaded via Telethon and attached via
   `bot.send_photo` with the formatted text as the caption; otherwise
-  `bot.send_message` is used.
+  `bot.send_message` is used. When `MINIAPP_TG_DEEPLINK` is configured, a
+  second inline `<a>` link with the ⚙ glyph is appended to the channel title
+  on the same line, opening the Mini App channel-settings deep-link.
 - **Access gate:** new users hit `/start` and land in `users.status='pending'`; the
   bot DMs the owner an Allow/Deny inline keyboard (callbacks `approve:<id>` /
   `deny:<id>`). Only `approved` users can use `/usage`, `/app`, and any Mini App
