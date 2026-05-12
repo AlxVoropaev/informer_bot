@@ -748,7 +748,7 @@ function renderList() {
     titleBlock.className = "title-block";
     const title = document.createElement("div");
     title.className = "title";
-    title.textContent = (state.isProvider && blSet.has(c.id) ? "⛔ " : "") + c.title;
+    title.textContent = c.title;
     titleBlock.appendChild(title);
 
     const meta = document.createElement("div");
@@ -776,19 +776,25 @@ function renderList() {
     row.appendChild(titleBlock);
 
     if (onProvide) {
-      const blLabel = document.createElement("label");
-      blLabel.className = "row-blacklist";
-      const blInput = document.createElement("input");
-      blInput.type = "checkbox";
-      blInput.checked = blSet.has(c.id);
-      blInput.addEventListener("click", (ev) => ev.stopPropagation());
-      blInput.addEventListener("change", (ev) => {
+      const enabled = !blSet.has(c.id);
+      const toggle = document.createElement("span");
+      toggle.className = "row-toggle";
+      toggle.textContent = enabled ? "🟢" : "🔴";
+      toggle.setAttribute("role", "button");
+      toggle.setAttribute("tabindex", "0");
+      toggle.setAttribute("aria-label", enabled ? "Enabled" : "Disabled");
+      const activate = (ev) => {
         ev.stopPropagation();
-        toggleProviderBlacklist(c.id, !!ev.target.checked);
+        toggleProviderBlacklist(c.id, enabled);
+      };
+      toggle.addEventListener("click", activate);
+      toggle.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") {
+          ev.preventDefault();
+          activate(ev);
+        }
       });
-      blLabel.appendChild(blInput);
-      blLabel.addEventListener("click", (ev) => ev.stopPropagation());
-      row.appendChild(blLabel);
+      row.appendChild(toggle);
     }
 
     const chev = document.createElement("div");

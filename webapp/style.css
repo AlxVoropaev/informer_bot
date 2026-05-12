@@ -477,18 +477,15 @@ button.provider-action:hover { background: var(--separator); }
   margin: 12px 12px 0;
 }
 
-.row .row-blacklist {
+.row .row-toggle {
   display: inline-flex;
   align-items: center;
-  padding: 4px;
+  justify-content: center;
+  padding: 4px 8px;
+  font-size: 20px;
+  line-height: 1;
   cursor: pointer;
-}
-.row .row-blacklist input {
-  width: 18px;
-  height: 18px;
-  margin: 0;
-  accent-color: var(--button);
-  cursor: pointer;
+  user-select: none;
 }
 
 .toast {
