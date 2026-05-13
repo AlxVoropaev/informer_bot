@@ -1142,6 +1142,7 @@ async function openUsage() {
   el("bulk-actions").hidden = true;
   el("provider-banner").hidden = true;
   el("active-model").hidden = true;
+  el("active-embedding-model").hidden = true;
   window.scrollTo(0, 0);
   el("usage-body").innerHTML = `<div class="empty">${t().loading}</div>`;
   if (tg && tg.BackButton) {
@@ -1164,6 +1165,7 @@ function closeUsage() {
   renderTabs();
   renderProviderBanner();
   renderActiveModel();
+  renderActiveEmbeddingModel();
   if (tg && tg.BackButton) {
     tg.BackButton.offClick(closeUsage);
     tg.BackButton.hide();
@@ -1199,6 +1201,7 @@ function openSettings() {
   el("bulk-actions").hidden = true;
   el("provider-banner").hidden = true;
   el("active-model").hidden = true;
+  el("active-embedding-model").hidden = true;
   window.scrollTo(0, 0);
   if (tg && tg.BackButton) {
     tg.BackButton.show();
@@ -1214,6 +1217,7 @@ function closeSettings() {
   renderTabs();
   renderProviderBanner();
   renderActiveModel();
+  renderActiveEmbeddingModel();
   if (tg && tg.BackButton) {
     tg.BackButton.offClick(closeSettings);
     tg.BackButton.hide();
