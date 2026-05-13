@@ -119,7 +119,8 @@ const I18N = {
       ? `Subscribed to ${n} channels.`
       : `Unsubscribed from ${n} channels.`,
     modelLabel: "Model",
-    modelProviders: { anthropic: "Anthropic", ollama: "Ollama", remote: "Remote" },
+    embeddingLabel: "Embedding",
+    modelProviders: { anthropic: "Anthropic", ollama: "Ollama", remote: "Remote", openai: "OpenAI" },
     modelNoReply: "(no reply yet)",
     modelFallback: "fallback",
   },
@@ -239,7 +240,8 @@ const I18N = {
       ? `Подписались на ${n} каналов.`
       : `Отписались от ${n} каналов.`,
     modelLabel: "Модель",
-    modelProviders: { anthropic: "Anthropic", ollama: "Ollama", remote: "Удалённая модель" },
+    embeddingLabel: "Эмбеддинг",
+    modelProviders: { anthropic: "Anthropic", ollama: "Ollama", remote: "Удалённая модель", openai: "OpenAI" },
     modelNoReply: "(пока нет ответа)",
     modelFallback: "резерв",
   },
@@ -264,6 +266,7 @@ const state = {
   providerLogin: { userId: null, label: "", step: null },
   activeTab: "subscribe",
   chatModel: null,
+  embeddingModel: null,
 };
 
 function t() { return I18N[state.language] || I18N.en; }
@@ -343,6 +346,7 @@ function applyLanguage() {
   });
   renderProviderBanner();
   renderActiveModel();
+  renderActiveEmbeddingModel();
   renderTabs();
 }
 
@@ -373,12 +377,54 @@ function renderActiveModel() {
   const providerName = dict.modelProviders[cm.provider] || cm.provider;
   const modelName = cm.model || dict.modelNoReply;
   let text = `${dict.modelLabel}: ${providerName} — ${modelName}`;
-  if (cm.fallback_provider) {
+  if (cm.fallback_provider && (cm.model || cm.fallback_model)) {
     const fbName = dict.modelProviders[cm.fallback_provider] || cm.fallback_provider;
-    text += `  ·  ${dict.modelFallback}: ${fbName}`;
+    const fbSuffix = cm.fallback_model ? ` — ${cm.fallback_model}` : "";
+    text += `  ·  ${dict.modelFallback}: ${fbName}${fbSuffix}`;
   }
   node.textContent = text;
   node.hidden = false;
+}
+
+function renderActiveEmbeddingModel() {
+  const node = el("active-embedding-model");
+  const em = state.embeddingModel;
+  if (!em || !em.provider) {
+    node.hidden = true;
+    node.textContent = "";
+    return;
+  }
+  const dict = t();
+  const providerName = dict.modelProviders[em.provider] || em.provider;
+  const modelName = em.model || dict.modelNoReply;
+  let text = `${dict.embeddingLabel}: ${providerName} — ${modelName}`;
+  if (em.fallback_provider && (em.model || em.fallback_model)) {
+    const fbName = dict.modelProviders[em.fallback_provider] || em.fallback_provider;
+    const fbSuffix = em.fallback_model ? ` — ${em.fallback_model}` : "";
+    text += `  ·  ${dict.modelFallback}: ${fbName}${fbSuffix}`;
+  }
+  node.textContent = text;
+  node.hidden = false;
+}
+
+function chatModelForProvider(provider) {
+  const cm = state.chatModel;
+  if (!cm) return null;
+  if (cm.provider === provider && cm.model) return cm.model;
+  if (cm.fallback_provider === provider && cm.fallback_model) return cm.fallback_model;
+  return null;
+}
+
+function embeddingModelForProvider(provider) {
+  const em = state.embeddingModel;
+  if (!em) return null;
+  if (em.provider === provider && em.model) return em.model;
+  if (em.fallback_provider === provider && em.fallback_model) return em.fallback_model;
+  return null;
+}
+
+function labelWithModel(providerLabel, model) {
+  return model ? `${providerLabel} · ${model}` : providerLabel;
 }
 
 
@@ -988,7 +1034,7 @@ function renderUsage(data) {
       return;
     }
     for (const p of bp) {
-      parent.appendChild(tokenRow(dict.providerLabel(p.provider), p, false));
+      parent.appendChild(tokenRow(labelWithModel(dict.providerLabel(p.provider), chatModelForProvider(p.provider)), p, false));
     }
     if (bp.length >= 2) {
       parent.appendChild(tokenRow(dict.usageTotal, entry, true));
@@ -1021,7 +1067,7 @@ function renderUsage(data) {
           perUser.appendChild(tokenRow(null, r, false));
         } else {
           for (const p of bp) {
-            perUser.appendChild(tokenRow(dict.providerLabel(p.provider), p, false));
+            perUser.appendChild(tokenRow(labelWithModel(dict.providerLabel(p.provider), chatModelForProvider(p.provider)), p, false));
           }
           if (bp.length >= 2) {
             perUser.appendChild(tokenRow(dict.usageTotal, r, true));
@@ -1045,7 +1091,7 @@ function renderUsage(data) {
       emb.appendChild(embRow(null, data.embeddings, false));
     } else {
       for (const p of ebp) {
-        emb.appendChild(embRow(dict.providerLabel(p.provider), p, false));
+        emb.appendChild(embRow(labelWithModel(dict.providerLabel(p.provider), embeddingModelForProvider(p.provider)), p, false));
       }
       if (ebp.length >= 2) {
         emb.appendChild(embRow(dict.usageTotal, data.embeddings, true));
@@ -1316,6 +1362,7 @@ async function init() {
     state.providerBlacklist = Array.isArray(data.provider_blacklist) ? data.provider_blacklist : [];
     state.providerChannels = Array.isArray(data.provider_channels) ? data.provider_channels : [];
     state.chatModel = (data.chat_model && typeof data.chat_model === "object") ? data.chat_model : null;
+    state.embeddingModel = (data.embedding_model && typeof data.embedding_model === "object") ? data.embedding_model : null;
     rebuildLangSelect();
     applyLanguage();
     renderList();
