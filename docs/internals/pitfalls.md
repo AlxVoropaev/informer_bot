@@ -262,6 +262,36 @@ exists; whether a session file is on disk is a separate runtime check.
 **Evidence:** `2bc22a9` (fix(bot): auto-approve owner as provider on fresh
 DB).
 
+### Author CSS `display: flex` silently overrides the `hidden` HTML attribute
+
+**Symptom:** JS sets `element.hidden = true` and the element stays
+visible. Most visibly: the Provider banner, the Subscribe/Provide tabs,
+and the Select-all/Deselect-all bulk-actions row bled through above
+sub-screens (Settings, Usage, channel details). Some sister elements
+with no `display` rule hid correctly, making the inconsistency
+confusing.
+**Why:** the HTML `hidden` attribute resolves to `display: none` in the
+UA stylesheet. Any author CSS rule that sets `display: flex` (or
+`block`, `grid`, etc.) on the same element wins on origin/cascade order
+and overrides it. `.provider-banner`, `.tabs`, and `.bulk-actions` in
+`webapp/style.css` all declare `display: flex`, so every
+`element.hidden = true` call against them was a silent no-op. The
+codebase uses the `hidden` attribute in 36 places, all assuming it
+actually hides.
+**How to avoid:** `webapp/style.css` includes a global
+`[hidden] { display: none !important; }` rule directly under the
+existing `.hidden { display: none !important; }` rule. Don't remove it.
+When adding a new element with `display: flex/grid/block/...`, you
+don't need to do anything — the global rule keeps the attribute
+working. Equivalent alternative: use the `.hidden` class instead of the
+attribute (also `!important`), but the codebase mixes both, so the CSS
+rule is the safer fix.
+**Evidence:** `871fc11` (fix(miniapp): force [hidden] attribute to
+override display: flex in CSS); the prior partial fix `41e5159`
+(fix(miniapp): hide provider banner and active-model on settings/usage
+screens) added the right JS calls but did not solve the visibility
+problem for elements with `display: flex`.
+
 ## Processor-bot / bus group
 
 ### Bus messages must go via the bot account, as JSON file attachments
