@@ -383,6 +383,7 @@ async def main() -> None:
             bus_group_id=cfg.bus_group_id,
             processor_bot_user_id=cfg.processor_bot_user_id,
             timeout_seconds=cfg.processor_timeout_seconds,
+            unhealthy_grace_seconds=cfg.processor_unhealthy_grace_seconds,
         )
         remote.start()
         log.info(

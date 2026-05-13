@@ -35,7 +35,22 @@ class FallbackDispatcher:
         if self._remote.healthy:
             try:
                 return await self._remote.summarize(text, system_prompt=system_prompt)
-            except (RemoteProcessorTimeout, RemoteProcessorError) as exc:
+            except RemoteProcessorTimeout as exc:
+                outcome = await self._remote.await_health_decision()
+                if outcome == "recovered":
+                    try:
+                        return await self._remote.summarize(
+                            text, system_prompt=system_prompt,
+                        )
+                    except (RemoteProcessorTimeout, RemoteProcessorError) as exc2:
+                        log.warning(
+                            "fallback after grace recovery retry: %s", exc2
+                        )
+                if self._fallback_summarize is None:
+                    raise
+                log.warning("fallback summarize: %s", exc)
+                return await self._fallback_summarize(text, system_prompt=system_prompt)
+            except RemoteProcessorError as exc:
                 if self._fallback_summarize is None:
                     raise
                 log.warning("fallback summarize: %s", exc)
@@ -50,7 +65,20 @@ class FallbackDispatcher:
         if self._remote.healthy:
             try:
                 return await self._remote.is_relevant(text, filter_prompt)
-            except (RemoteProcessorTimeout, RemoteProcessorError) as exc:
+            except RemoteProcessorTimeout as exc:
+                outcome = await self._remote.await_health_decision()
+                if outcome == "recovered":
+                    try:
+                        return await self._remote.is_relevant(text, filter_prompt)
+                    except (RemoteProcessorTimeout, RemoteProcessorError) as exc2:
+                        log.warning(
+                            "fallback after grace recovery retry: %s", exc2
+                        )
+                if self._fallback_is_relevant is None:
+                    raise
+                log.warning("fallback is_relevant: %s", exc)
+                return await self._fallback_is_relevant(text, filter_prompt)
+            except RemoteProcessorError as exc:
                 if self._fallback_is_relevant is None:
                     raise
                 log.warning("fallback is_relevant: %s", exc)
@@ -65,7 +93,20 @@ class FallbackDispatcher:
         if self._remote.healthy:
             try:
                 return await self._remote.embed(text)
-            except (RemoteProcessorTimeout, RemoteProcessorError) as exc:
+            except RemoteProcessorTimeout as exc:
+                outcome = await self._remote.await_health_decision()
+                if outcome == "recovered":
+                    try:
+                        return await self._remote.embed(text)
+                    except (RemoteProcessorTimeout, RemoteProcessorError) as exc2:
+                        log.warning(
+                            "fallback after grace recovery retry: %s", exc2
+                        )
+                if self._fallback_embed is None:
+                    raise
+                log.warning("fallback embed: %s", exc)
+                return await self._fallback_embed(text)
+            except RemoteProcessorError as exc:
                 if self._fallback_embed is None:
                     raise
                 log.warning("fallback embed: %s", exc)

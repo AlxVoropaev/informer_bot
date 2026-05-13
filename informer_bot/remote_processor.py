@@ -1,10 +1,12 @@
 import asyncio
+import contextlib
 import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from io import BytesIO
+from typing import Literal
 
 from telegram import InputFile, Update
 from telegram.ext import Application, ContextTypes, MessageHandler, filters
@@ -71,6 +73,7 @@ class RemoteProcessorClient:
         processor_bot_user_id: int,
         timeout_seconds: float,
         min_send_interval_seconds: float = 1.0,
+        unhealthy_grace_seconds: float = 0.0,
     ) -> None:
         self._app = application
         self._bus_group_id = bus_group_id
@@ -81,6 +84,10 @@ class RemoteProcessorClient:
         self._healthy: bool = True
         self._on_state_change: Callable[[bool], Awaitable[None]] | None = None
         self._cleanup_tasks: set[asyncio.Task[None]] = set()
+        self._grace_seconds = unhealthy_grace_seconds
+        self._grace_event: asyncio.Event | None = None
+        self._grace_outcome: Literal["recovered", "unhealthy"] | None = None
+        self._grace_task: asyncio.Task[None] | None = None
 
     @property
     def healthy(self) -> bool:
@@ -104,6 +111,51 @@ class RemoteProcessorClient:
         except Exception:
             log.exception("remote: state-change callback failed")
 
+    def _grace_active(self) -> bool:
+        return self._grace_event is not None and self._grace_outcome is None
+
+    async def _arm_grace(self) -> None:
+        if self._grace_seconds <= 0:
+            await self._set_healthy(False)
+            return
+        if self._grace_active():
+            return
+        self._grace_event = asyncio.Event()
+        self._grace_outcome = None
+        log.info("remote: grace period armed (%.0fs)", self._grace_seconds)
+        self._grace_task = asyncio.create_task(
+            self._grace_expire(self._grace_seconds)
+        )
+
+    async def _grace_expire(self, seconds: float) -> None:
+        try:
+            await asyncio.sleep(seconds)
+        except asyncio.CancelledError:
+            return
+        await self._resolve_grace("unhealthy")
+
+    async def _resolve_grace(
+        self, outcome: Literal["recovered", "unhealthy"]
+    ) -> None:
+        if self._grace_outcome is not None or self._grace_event is None:
+            return
+        self._grace_outcome = outcome
+        self._grace_event.set()
+        if outcome == "unhealthy":
+            await self._set_healthy(False)
+        else:
+            task = self._grace_task
+            if task is not None and not task.done():
+                task.cancel()
+
+    async def await_health_decision(self) -> Literal["recovered", "unhealthy"]:
+        if self._grace_event is None:
+            return "recovered" if self._healthy else "unhealthy"
+        await self._grace_event.wait()
+        outcome = self._grace_outcome
+        assert outcome is not None
+        return outcome
+
     async def run_health_check_loop(
         self, interval_seconds: float, stop_event: asyncio.Event
     ) -> None:
@@ -117,11 +169,13 @@ class RemoteProcessorClient:
                 await self.ping()
             except RemoteProcessorTimeout as exc:
                 log.warning("remote: health ping timed out: %s", exc)
-                await self._set_healthy(False)
+                await self._arm_grace()
             except Exception as exc:
                 log.warning("remote: health ping failed: %s", exc)
-                await self._set_healthy(False)
+                await self._arm_grace()
             else:
+                if self._grace_active():
+                    await self._resolve_grace("recovered")
                 await self._set_healthy(True)
 
     def start(self) -> None:
@@ -137,11 +191,13 @@ class RemoteProcessorClient:
     async def summarize(
         self, text: str, *, system_prompt: str | None = None,
     ) -> Summary:
+        if self._grace_active():
+            raise RemoteProcessorTimeout("processor in grace period")
         req = SummarizeRequest.new(text, system_prompt=system_prompt)
         try:
             reply = await self._send_and_wait(req, Op.summarize)
         except RemoteProcessorTimeout:
-            await self._set_healthy(False)
+            await self._arm_grace()
             raise
         if not isinstance(reply, SummarizeReply):
             raise RemoteProcessorError(
@@ -155,11 +211,13 @@ class RemoteProcessorClient:
         )
 
     async def is_relevant(self, text: str, filter_prompt: str) -> RelevanceCheck:
+        if self._grace_active():
+            raise RemoteProcessorTimeout("processor in grace period")
         req = IsRelevantRequest.new(text, filter_prompt)
         try:
             reply = await self._send_and_wait(req, Op.is_relevant)
         except RemoteProcessorTimeout:
-            await self._set_healthy(False)
+            await self._arm_grace()
             raise
         if not isinstance(reply, IsRelevantReply):
             raise RemoteProcessorError(
@@ -175,11 +233,13 @@ class RemoteProcessorClient:
     async def embed(self, text: str) -> Embedding:
         from informer_bot.summarizer import EMBED_DIMENSIONS
 
+        if self._grace_active():
+            raise RemoteProcessorTimeout("processor in grace period")
         req = EmbedRequest.new(text, EMBED_DIMENSIONS)
         try:
             reply = await self._send_and_wait(req, Op.embed)
         except RemoteProcessorTimeout:
-            await self._set_healthy(False)
+            await self._arm_grace()
             raise
         if not isinstance(reply, EmbedReply):
             raise RemoteProcessorError(
@@ -247,6 +307,11 @@ class RemoteProcessorClient:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._cleanup_tasks.clear()
+        grace_task = self._grace_task
+        if grace_task is not None and not grace_task.done():
+            grace_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await grace_task
 
     async def _delete_messages(self, ids: list[int]) -> None:
         try:

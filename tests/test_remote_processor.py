@@ -517,6 +517,182 @@ async def test_cleanup_tasks_tracked(
     assert len(rp._cleanup_tasks) == 0
 
 
+async def test_grace_period_zero_preserves_immediate_unhealthy() -> None:
+    app_mock = _make_app_mock()
+    rp = RemoteProcessorClient(
+        application=app_mock,  # type: ignore[arg-type]
+        bus_group_id=-100123,
+        processor_bot_user_id=42,
+        timeout_seconds=0.05,
+        min_send_interval_seconds=0.0,
+        unhealthy_grace_seconds=0.0,
+    )
+    rp.start()
+    states: list[bool] = []
+
+    async def on_change(healthy: bool) -> None:
+        states.append(healthy)
+
+    rp.set_state_change_callback(on_change)
+
+    with pytest.raises(RemoteProcessorTimeout):
+        await rp.summarize("never replied")
+
+    assert rp.healthy is False
+    assert states == [False]
+
+
+async def test_call_timeout_arms_grace_without_flipping() -> None:
+    app_mock = _make_app_mock()
+    rp = RemoteProcessorClient(
+        application=app_mock,  # type: ignore[arg-type]
+        bus_group_id=-100123,
+        processor_bot_user_id=42,
+        timeout_seconds=0.05,
+        min_send_interval_seconds=0.0,
+        unhealthy_grace_seconds=5.0,
+    )
+    rp.start()
+    states: list[bool] = []
+
+    async def on_change(healthy: bool) -> None:
+        states.append(healthy)
+
+    rp.set_state_change_callback(on_change)
+
+    with pytest.raises(RemoteProcessorTimeout):
+        await rp.summarize("never replied")
+
+    assert rp.healthy is True
+    assert states == []
+
+    # await_health_decision must not return synchronously — it should block on
+    # the event. Use a short wait_for to confirm.
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(rp.await_health_decision(), timeout=0.05)
+
+    await rp.close()
+
+
+async def test_ping_success_during_grace_resolves_recovered() -> None:
+    from shared.protocol import PingReply
+
+    app_mock = _make_app_mock()
+    rp = RemoteProcessorClient(
+        application=app_mock,  # type: ignore[arg-type]
+        bus_group_id=-100123,
+        processor_bot_user_id=42,
+        timeout_seconds=2.0,
+        min_send_interval_seconds=0.0,
+        unhealthy_grace_seconds=5.0,
+    )
+    rp.start()
+    states: list[bool] = []
+
+    async def on_change(healthy: bool) -> None:
+        states.append(healthy)
+
+    rp.set_state_change_callback(on_change)
+
+    # Manually arm grace (skips wire round-trip for the arming step).
+    await rp._arm_grace()
+    assert rp._grace_event is not None
+    assert rp.healthy is True
+
+    # Now run a single health-check iteration that succeeds. Reuse the
+    # auto-reply pattern from test_health_loop_ping_success_keeps_healthy.
+    real_send_document = app_mock.bot.send_document.side_effect
+
+    async def auto_replier(*args, **kwargs):
+        msg = await real_send_document(*args, **kwargs)
+        body = app_mock._files[msg.document.file_id].decode("utf-8")
+        req_id = json.loads(body)["id"]
+        reply_text = encode_reply(PingReply(id=req_id))
+
+        async def fire() -> None:
+            await asyncio.sleep(0)
+            await _fire_reply(rp, app_mock, reply_text)
+
+        asyncio.create_task(fire())
+        return msg
+
+    app_mock.bot.send_document = AsyncMock(side_effect=auto_replier)
+    stop_event = asyncio.Event()
+
+    async def stopper() -> None:
+        await asyncio.sleep(0.1)
+        stop_event.set()
+
+    asyncio.create_task(stopper())
+    await rp.run_health_check_loop(interval_seconds=0.02, stop_event=stop_event)
+
+    decision = await asyncio.wait_for(rp.await_health_decision(), timeout=0.5)
+    assert decision == "recovered"
+    assert rp.healthy is True
+    # No state-change DM was fired — we never told the owner about the outage.
+    assert states == []
+
+    await rp.close()
+
+
+async def test_grace_expiry_marks_unhealthy_and_fires_dm() -> None:
+    app_mock = _make_app_mock()
+    rp = RemoteProcessorClient(
+        application=app_mock,  # type: ignore[arg-type]
+        bus_group_id=-100123,
+        processor_bot_user_id=42,
+        timeout_seconds=0.05,
+        min_send_interval_seconds=0.0,
+        unhealthy_grace_seconds=0.05,
+    )
+    rp.start()
+    states: list[bool] = []
+
+    async def on_change(healthy: bool) -> None:
+        states.append(healthy)
+
+    rp.set_state_change_callback(on_change)
+
+    with pytest.raises(RemoteProcessorTimeout):
+        await rp.summarize("never replied")
+
+    # During grace, before expiry, still healthy.
+    assert rp.healthy is True
+
+    decision = await asyncio.wait_for(rp.await_health_decision(), timeout=0.5)
+    assert decision == "unhealthy"
+    assert rp.healthy is False
+    assert states == [False]
+
+    await rp.close()
+
+
+async def test_new_call_during_grace_short_circuits() -> None:
+    app_mock = _make_app_mock()
+    rp = RemoteProcessorClient(
+        application=app_mock,  # type: ignore[arg-type]
+        bus_group_id=-100123,
+        processor_bot_user_id=42,
+        timeout_seconds=0.05,
+        min_send_interval_seconds=0.0,
+        unhealthy_grace_seconds=5.0,
+    )
+    rp.start()
+
+    with pytest.raises(RemoteProcessorTimeout):
+        await rp.summarize("never replied")
+
+    sends_before = app_mock.bot.send_document.await_count
+    start = time.monotonic()
+    with pytest.raises(RemoteProcessorTimeout):
+        await rp.summarize("second call")
+    elapsed = time.monotonic() - start
+    assert elapsed < 0.05
+    assert app_mock.bot.send_document.await_count == sends_before
+
+    await rp.close()
+
+
 async def test_close_cancels_pending_cleanup_tasks() -> None:
     app_mock = _make_app_mock()
     hang = asyncio.Event()  # never set

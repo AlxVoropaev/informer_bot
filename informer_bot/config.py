@@ -26,6 +26,7 @@ class Config:
     processor_bot_user_id: int | None = None
     processor_timeout_seconds: float = 60.0
     health_check_interval_seconds: float = 60.0
+    processor_unhealthy_grace_seconds: float = 120.0
     chat_provider_fallback: str = "anthropic"  # 'anthropic' or 'ollama'
     embedding_provider_fallback: str = "openai"  # 'openai', 'ollama', or 'none'
     miniapp_url: str | None = None
@@ -61,6 +62,13 @@ def load_config() -> Config:
     if health_interval <= 0:
         raise SystemExit(
             f"HEALTH_CHECK_INTERVAL_SECONDS must be > 0, got {health_interval}"
+        )
+    grace_seconds = float(
+        os.environ.get("PROCESSOR_UNHEALTHY_GRACE_SECONDS", "120.0")
+    )
+    if grace_seconds < 0:
+        raise SystemExit(
+            f"PROCESSOR_UNHEALTHY_GRACE_SECONDS must be >= 0, got {grace_seconds}"
         )
     chat_fallback = os.environ.get("CHAT_PROVIDER_FALLBACK", "anthropic").lower()
     if chat_fallback not in {"anthropic", "ollama"}:
@@ -120,6 +128,7 @@ def load_config() -> Config:
             os.environ.get("PROCESSOR_TIMEOUT_SECONDS", "60.0")
         ),
         health_check_interval_seconds=health_interval,
+        processor_unhealthy_grace_seconds=grace_seconds,
         chat_provider_fallback=chat_fallback,
         embedding_provider_fallback=embed_fallback,
         miniapp_url=os.environ.get("MINIAPP_URL") or None,

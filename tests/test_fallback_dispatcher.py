@@ -31,6 +31,9 @@ def _remote(*, healthy: bool, **methods: AsyncMock) -> SimpleNamespace:
         summarize=methods.get("summarize", AsyncMock()),
         is_relevant=methods.get("is_relevant", AsyncMock()),
         embed=methods.get("embed", AsyncMock()),
+        await_health_decision=methods.get(
+            "await_health_decision", AsyncMock(return_value="unhealthy"),
+        ),
     )
 
 
@@ -266,3 +269,77 @@ async def test_embed_remote_timeout_falls_back() -> None:
     result = await d.embed("text")
 
     assert result.vector == [9.9]
+
+
+async def test_dispatcher_waits_for_grace_decision_recovered_then_retries() -> None:
+    remote_summarize = AsyncMock(
+        side_effect=[RemoteProcessorTimeout("timed out"), _summary("remote-retry")]
+    )
+    await_decision = AsyncMock(return_value="recovered")
+    fb = AsyncMock(return_value=_summary("fb"))
+    remote = _remote(
+        healthy=True,
+        summarize=remote_summarize,
+        await_health_decision=await_decision,
+    )
+    d = FallbackDispatcher(
+        remote=remote,  # type: ignore[arg-type]
+        fallback_summarize=fb,
+        fallback_is_relevant=None,
+        fallback_embed=None,
+    )
+
+    result = await d.summarize("text")
+
+    assert result.text == "remote-retry"
+    assert remote_summarize.await_count == 2
+    await_decision.assert_awaited_once()
+    fb.assert_not_awaited()
+
+
+async def test_dispatcher_waits_for_grace_decision_unhealthy_then_falls_back() -> None:
+    remote_summarize = AsyncMock(side_effect=RemoteProcessorTimeout("timed out"))
+    await_decision = AsyncMock(return_value="unhealthy")
+    fb = AsyncMock(return_value=_summary("fb"))
+    remote = _remote(
+        healthy=True,
+        summarize=remote_summarize,
+        await_health_decision=await_decision,
+    )
+    d = FallbackDispatcher(
+        remote=remote,  # type: ignore[arg-type]
+        fallback_summarize=fb,
+        fallback_is_relevant=None,
+        fallback_embed=None,
+    )
+
+    result = await d.summarize("text")
+
+    assert result.text == "fb"
+    assert remote_summarize.await_count == 1
+    await_decision.assert_awaited_once()
+    fb.assert_awaited_once_with("text", system_prompt=None)
+
+
+async def test_dispatcher_remote_error_skips_grace_wait() -> None:
+    remote_summarize = AsyncMock(side_effect=RemoteProcessorError("oops"))
+    await_decision = AsyncMock(return_value="recovered")
+    fb = AsyncMock(return_value=_summary("fb"))
+    remote = _remote(
+        healthy=True,
+        summarize=remote_summarize,
+        await_health_decision=await_decision,
+    )
+    d = FallbackDispatcher(
+        remote=remote,  # type: ignore[arg-type]
+        fallback_summarize=fb,
+        fallback_is_relevant=None,
+        fallback_embed=None,
+    )
+
+    result = await d.summarize("text")
+
+    assert result.text == "fb"
+    assert remote_summarize.await_count == 1
+    await_decision.assert_not_awaited()
+    fb.assert_awaited_once_with("text", system_prompt=None)
