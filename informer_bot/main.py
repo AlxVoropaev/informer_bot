@@ -357,7 +357,15 @@ async def main() -> None:
 
     miniapp_url = cfg.miniapp_url
 
-    app = ApplicationBuilder().token(cfg.telegram_bot_token).rate_limiter(AIORateLimiter()).build()
+    app = (
+        ApplicationBuilder()
+        .token(cfg.telegram_bot_token)
+        .rate_limiter(AIORateLimiter())
+        .read_timeout(30)
+        .write_timeout(30)
+        .media_write_timeout(30)
+        .build()
+    )
     for handler in (
         CommandHandler("start", cmd_start),
         CommandHandler("help", cmd_help),
