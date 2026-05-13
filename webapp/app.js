@@ -38,6 +38,17 @@ const I18N = {
     usageNone: "(none yet)",
     usageInOut: (i, o) => `in ${i.toLocaleString()} · out ${o.toLocaleString()}`,
     usageTokens: (n) => `${n.toLocaleString()} tokens`,
+    usageTotal: "Total",
+    usageReset: "Reset all usage",
+    usageResetConfirm: "Reset all token counters (your usage, per-user, system, embeddings)? This cannot be undone.",
+    usageResetDone: "Usage reset",
+    providerLabel: (p) => ({
+      anthropic: "Anthropic (Claude)",
+      remote: "Remote",
+      openai: "OpenAI",
+      ollama: "Ollama",
+      unknown: "Other",
+    })[p] || p,
     settingsTitle: "Settings",
     autoDeleteHeading: "Auto-delete",
     autoDeleteLabel: "Hours (1–720, blank to disable)",
@@ -147,6 +158,17 @@ const I18N = {
     usageNone: "(пока пусто)",
     usageInOut: (i, o) => `вход ${i.toLocaleString()} · выход ${o.toLocaleString()}`,
     usageTokens: (n) => `${n.toLocaleString()} токенов`,
+    usageTotal: "Итого",
+    usageReset: "Сбросить статистику",
+    usageResetConfirm: "Сбросить все счётчики токенов (твой расход, по пользователям, системный, эмбеддинги)? Действие необратимо.",
+    usageResetDone: "Статистика сброшена",
+    providerLabel: (p) => ({
+      anthropic: "Anthropic (Claude)",
+      remote: "Удалённый",
+      openai: "OpenAI",
+      ollama: "Ollama",
+      unknown: "Другое",
+    })[p] || p,
     settingsTitle: "Настройки",
     autoDeleteHeading: "Авто-удаление",
     autoDeleteLabel: "Часы (1–720, пусто — выкл)",
@@ -939,14 +961,44 @@ function renderUsage(data) {
   const body = el("usage-body");
   body.replaceChildren();
 
+  const tokenRow = (label, entry, isTotal) => {
+    const row = document.createElement("div");
+    row.className = isTotal ? "usage-row total" : "usage-row";
+    const left = label
+      ? `${label} — ${dict.usageInOut(entry.input_tokens, entry.output_tokens)}`
+      : dict.usageInOut(entry.input_tokens, entry.output_tokens);
+    row.innerHTML = `<span>${left}</span><span class="num">${fmtUsd(entry.cost_usd)}</span>`;
+    return row;
+  };
+
+  const embRow = (label, entry, isTotal) => {
+    const row = document.createElement("div");
+    row.className = isTotal ? "usage-row total" : "usage-row";
+    const left = label
+      ? `${label} — ${dict.usageTokens(entry.tokens)}`
+      : dict.usageTokens(entry.tokens);
+    row.innerHTML = `<span>${left}</span><span class="num">${fmtUsd(entry.cost_usd)}</span>`;
+    return row;
+  };
+
+  const renderTokenSection = (parent, entry) => {
+    const bp = entry.by_provider || [];
+    if (bp.length === 0) {
+      parent.appendChild(tokenRow(null, entry, false));
+      return;
+    }
+    for (const p of bp) {
+      parent.appendChild(tokenRow(dict.providerLabel(p.provider), p, false));
+    }
+    if (bp.length >= 2) {
+      parent.appendChild(tokenRow(dict.usageTotal, entry, true));
+    }
+  };
+
   const mine = document.createElement("div");
   mine.className = "usage-section";
   mine.innerHTML = `<h3>${dict.usageMine}</h3>`;
-  const mineRow = document.createElement("div");
-  mineRow.className = "usage-row";
-  const u = data.user;
-  mineRow.innerHTML = `<span>${dict.usageInOut(u.input_tokens, u.output_tokens)}</span><span class="num">${fmtUsd(u.cost_usd)}</span>`;
-  mine.appendChild(mineRow);
+  renderTokenSection(mine, data.user);
   body.appendChild(mine);
 
   if (data.is_owner) {
@@ -960,10 +1012,21 @@ function renderUsage(data) {
       perUser.appendChild(empty);
     } else {
       for (const r of data.per_user) {
-        const row = document.createElement("div");
-        row.className = "usage-row";
-        row.innerHTML = `<span>${r.label} — ${dict.usageInOut(r.input_tokens, r.output_tokens)}</span><span class="num">${fmtUsd(r.cost_usd)}</span>`;
-        perUser.appendChild(row);
+        const sub = document.createElement("div");
+        sub.className = "usage-row user-label";
+        sub.innerHTML = `<span>${r.label}</span>`;
+        perUser.appendChild(sub);
+        const bp = r.by_provider || [];
+        if (bp.length === 0) {
+          perUser.appendChild(tokenRow(null, r, false));
+        } else {
+          for (const p of bp) {
+            perUser.appendChild(tokenRow(dict.providerLabel(p.provider), p, false));
+          }
+          if (bp.length >= 2) {
+            perUser.appendChild(tokenRow(dict.usageTotal, r, true));
+          }
+        }
       }
     }
     body.appendChild(perUser);
@@ -971,22 +1034,56 @@ function renderUsage(data) {
     const sys = document.createElement("div");
     sys.className = "usage-section";
     sys.innerHTML = `<h3>${dict.usageSystem}</h3>`;
-    const sysRow = document.createElement("div");
-    sysRow.className = "usage-row";
-    const s = data.system;
-    sysRow.innerHTML = `<span>${dict.usageInOut(s.input_tokens, s.output_tokens)}</span><span class="num">${fmtUsd(s.cost_usd)}</span>`;
-    sys.appendChild(sysRow);
+    renderTokenSection(sys, data.system);
     body.appendChild(sys);
 
     const emb = document.createElement("div");
     emb.className = "usage-section";
     emb.innerHTML = `<h3>${dict.usageEmbeddings}</h3>`;
-    const embRow = document.createElement("div");
-    embRow.className = "usage-row";
-    const e = data.embeddings;
-    embRow.innerHTML = `<span>${dict.usageTokens(e.tokens)}</span><span class="num">${fmtUsd(e.cost_usd)}</span>`;
-    emb.appendChild(embRow);
+    const ebp = (data.embeddings && data.embeddings.by_provider) || [];
+    if (ebp.length === 0) {
+      emb.appendChild(embRow(null, data.embeddings, false));
+    } else {
+      for (const p of ebp) {
+        emb.appendChild(embRow(dict.providerLabel(p.provider), p, false));
+      }
+      if (ebp.length >= 2) {
+        emb.appendChild(embRow(dict.usageTotal, data.embeddings, true));
+      }
+    }
     body.appendChild(emb);
+  }
+
+  if (data.is_owner) {
+    const resetWrap = document.createElement("div");
+    resetWrap.className = "usage-section";
+    const resetBtn = document.createElement("button");
+    resetBtn.type = "button";
+    resetBtn.className = "ghost";
+    resetBtn.textContent = dict.usageReset;
+    resetBtn.addEventListener("click", onUsageResetClick);
+    resetWrap.appendChild(resetBtn);
+    body.appendChild(resetWrap);
+  }
+}
+
+async function onUsageResetClick() {
+  const msg = t().usageResetConfirm;
+  const proceed = await new Promise((resolve) => {
+    if (tg && typeof tg.showConfirm === "function") {
+      try { tg.showConfirm(msg, (ok) => resolve(!!ok)); return; } catch (_) {}
+    }
+    resolve(window.confirm(msg));
+  });
+  if (!proceed) return;
+  try {
+    await api("/api/usage/reset", { method: "POST", body: JSON.stringify({}) });
+    showToast(t().usageResetDone);
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
+    const data = await api("/api/usage");
+    renderUsage(data);
+  } catch (e) {
+    showToast(e.message || t().network_error);
   }
 }
 

@@ -95,6 +95,7 @@ body {
   font-size: 14px;
 }
 .usage-row .num { color: var(--hint); font-variant-numeric: tabular-nums; }
+.usage-row.total { font-weight: 600; }
 
 .topbar select {
   height: 36px;

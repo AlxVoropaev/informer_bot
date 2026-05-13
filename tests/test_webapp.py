@@ -301,6 +301,48 @@ async def test_usage_for_non_owner_omits_admin_keys(
     assert "embeddings" not in body
 
 
+async def test_usage_reset_owner_clears_tables(
+    client: TestClient, db: Database
+) -> None:
+    db.add_usage(
+        user_id=USER_ID, provider="anthropic",
+        input_tokens=1000, output_tokens=200,
+    )
+    db.add_system_usage(provider="anthropic", input_tokens=500, output_tokens=100)
+    db.add_embedding_usage(provider="openai", tokens=75)
+    init_data = _make_init_data(user_id=OWNER_ID)
+    resp = await client.post(
+        "/api/usage/reset", headers={"X-Telegram-Init-Data": init_data}
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["ok"] is True
+    assert db.get_usage(user_id=USER_ID) == []
+    assert db.get_system_usage() == []
+    assert db.get_embedding_usage() == []
+
+
+async def test_usage_reset_non_owner_forbidden(
+    client: TestClient, db: Database
+) -> None:
+    db.add_usage(
+        user_id=USER_ID, provider="anthropic",
+        input_tokens=1000, output_tokens=200,
+    )
+    db.add_system_usage(provider="anthropic", input_tokens=500, output_tokens=100)
+    db.add_embedding_usage(provider="openai", tokens=75)
+    init_data = _make_init_data(user_id=USER_ID)
+    resp = await client.post(
+        "/api/usage/reset", headers={"X-Telegram-Init-Data": init_data}
+    )
+    assert resp.status == 403
+    body = await resp.json()
+    assert body["error"] == "not_owner"
+    assert db.get_usage(user_id=USER_ID) == [("anthropic", 1000, 200)]
+    assert db.get_system_usage() == [("anthropic", 500, 100)]
+    assert db.get_embedding_usage() == [("openai", 75)]
+
+
 # ---------- /api/subscription ----------
 
 async def test_subscription_unsubscribe_deletes_row(

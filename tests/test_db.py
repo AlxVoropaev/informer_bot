@@ -352,6 +352,18 @@ def test_list_all_usage_returns_raw_fields(db: Database) -> None:
     assert by_uid[30] == (None, None, "anthropic", 25, 5)
 
 
+def test_reset_all_usage_clears_all_tables(db: Database) -> None:
+    db.add_usage(user_id=10, provider="anthropic", input_tokens=100, output_tokens=20)
+    db.add_system_usage(provider="anthropic", input_tokens=500, output_tokens=100)
+    db.add_embedding_usage(provider="openai", tokens=75)
+
+    db.reset_all_usage()
+
+    assert db.get_usage(user_id=10) == []
+    assert db.get_system_usage() == []
+    assert db.get_embedding_usage() == []
+
+
 def test_list_all_usage_includes_users_without_user_row(db: Database) -> None:
     db.add_usage(user_id=99, provider="anthropic", input_tokens=10, output_tokens=2)
 

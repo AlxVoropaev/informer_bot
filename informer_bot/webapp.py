@@ -423,6 +423,17 @@ async def _usage(request: web.Request) -> web.Response:
     return web.json_response(payload)
 
 
+async def _usage_reset(request: web.Request) -> web.Response:
+    db = request.app[DB_KEY]
+    owner_id = request.app[OWNER_ID_KEY]
+    user_id: int = request["user_id"]
+    if user_id != owner_id:
+        return web.json_response({"error": "not_owner"}, status=403)
+    db.reset_all_usage()
+    log.info("miniapp: user=%s usage reset", user_id)
+    return web.json_response({"ok": True})
+
+
 async def _dedup_debug(request: web.Request) -> web.Response:
     db = request.app[DB_KEY]
     user_id: int = request["user_id"]
@@ -962,6 +973,7 @@ def build_app(
     app.router.add_post("/api/dedup_debug", _dedup_debug)
     app.router.add_post("/api/summary_prompt", _summary_prompt)
     app.router.add_get("/api/usage", _usage)
+    app.router.add_post("/api/usage/reset", _usage_reset)
     app.router.add_post("/api/become_provider", _become_provider)
     app.router.add_post("/api/blacklist", _blacklist)
     app.router.add_post("/api/blacklist_bulk", _blacklist_bulk)

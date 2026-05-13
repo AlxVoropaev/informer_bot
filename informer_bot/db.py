@@ -1165,6 +1165,14 @@ class Database:
             ).fetchall()
         return [(p, t) for p, t in rows]
 
+    def reset_all_usage(self) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM usage")
+            self._conn.execute("DELETE FROM system_usage")
+            self._conn.execute("DELETE FROM embedding_usage")
+            self._commit()
+        log.info("reset_all_usage: cleared usage, system_usage, embedding_usage")
+
     # ---------- providers ----------
 
     def add_pending_provider(
