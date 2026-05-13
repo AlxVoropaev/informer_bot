@@ -139,6 +139,7 @@ def test_subscribers_for_channel_skips_blacklisted_channel(db: Database) -> None
     _seed_owner(db)
     db.upsert_channel(channel_id=1, title="Open")
     db.upsert_channel(channel_id=2, title="Banned")
+    db.set_provider_channels(provider_user_id=1, channel_ids={1, 2})
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     db.subscribe(user_id=10, channel_id=2)
     db.subscribe(user_id=20, channel_id=1)
@@ -149,6 +150,49 @@ def test_subscribers_for_channel_skips_blacklisted_channel(db: Database) -> None
         (20, SubscriptionMode.FILTERED),
     ]
     assert db.subscribers_for_channel(channel_id=2) == []
+
+
+def test_subscribers_for_channel_skips_when_sole_provider_blacklisted(db: Database) -> None:
+    # Provider A is the sole contributor and blacklists the channel themselves.
+    # Even on a fresh install (no meta.owner_id), subscribers must NOT receive.
+    # This is the production scenario captured on finka2 (May 2026).
+    PROVIDER = 1
+    db.set_user_status(user_id=PROVIDER, status="approved")
+    db.add_pending_provider(user_id=PROVIDER, session_path="data/sessions/1.session")
+    db.set_provider_status(user_id=PROVIDER, status="approved")
+    db.upsert_channel(channel_id=100, title="Lepra")
+    db.set_provider_channels(provider_user_id=PROVIDER, channel_ids={100})
+    db.subscribe(user_id=PROVIDER, channel_id=100, mode=SubscriptionMode.ALL)
+    db.subscribe(user_id=99, channel_id=100, mode=SubscriptionMode.FILTERED)
+    db.set_provider_channel_blacklisted(
+        provider_user_id=PROVIDER, channel_id=100, blacklisted=True,
+    )
+    # Note: meta.owner_id intentionally NOT set — this is the fresh-install case.
+
+    assert db.subscribers_for_channel(channel_id=100) == []
+
+
+def test_subscribers_for_channel_still_delivers_when_other_provider_contributes(
+    db: Database,
+) -> None:
+    # Provider A blacklists, Provider B still contributes the same channel.
+    # Channel stays visible → subscribers (including A) still receive.
+    A, B = 1, 2
+    for pid in (A, B):
+        db.set_user_status(user_id=pid, status="approved")
+        db.add_pending_provider(user_id=pid, session_path=f"data/sessions/{pid}.session")
+        db.set_provider_status(user_id=pid, status="approved")
+    db.upsert_channel(channel_id=100, title="Shared")
+    db.set_provider_channels(provider_user_id=A, channel_ids={100})
+    db.set_provider_channels(provider_user_id=B, channel_ids={100})
+    db.subscribe(user_id=A, channel_id=100, mode=SubscriptionMode.ALL)
+    db.subscribe(user_id=50, channel_id=100, mode=SubscriptionMode.FILTERED)
+    db.set_provider_channel_blacklisted(
+        provider_user_id=A, channel_id=100, blacklisted=True,
+    )
+
+    subs = sorted(db.subscribers_for_channel(channel_id=100))
+    assert subs == [(A, SubscriptionMode.ALL), (50, SubscriptionMode.FILTERED)]
 
 
 def test_mark_seen_returns_true_only_first_time(db: Database) -> None:
@@ -417,7 +461,9 @@ def test_filter_per_channel_is_isolated(db: Database) -> None:
 
 
 def test_subscribers_for_channel_skips_off_mode(db: Database) -> None:
+    _seed_owner(db)
     db.upsert_channel(channel_id=1, title="A")
+    db.set_provider_channels(provider_user_id=1, channel_ids={1})
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.FILTERED)
     db.subscribe(user_id=20, channel_id=1, mode=SubscriptionMode.OFF)
     db.subscribe(user_id=30, channel_id=1, mode=SubscriptionMode.ALL)

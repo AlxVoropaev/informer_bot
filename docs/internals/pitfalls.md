@@ -117,6 +117,26 @@ is acceptable, mixing spaces is not.
 **Evidence:** `27ef2a8` (feat(dedup): purge index when remote embedding
 model changes).
 
+### Blacklist visibility vs. delivery were two different queries
+
+**Symptom:** a provider blacklists a channel they're the sole contributor to.
+The Mini App correctly hides the channel from Subscribe, but live posts still
+arrive in their DMs.
+**Why:** `Database.subscribers_for_channel` used a legacy owner-centric filter
+keyed off `meta.owner_id`. On fresh installs created from `_SCHEMA` at version
+13+, the multi-provider migration never runs and `meta.owner_id` is never
+written; the filter falls back to `provider_user_id = -1` and matches nothing,
+so the blacklist is effectively ignored on the delivery path. Meanwhile
+`list_visible_channels` used the correct multi-provider rule, so the two
+disagreed.
+**How to avoid:** delivery follows visibility. `subscribers_for_channel` now
+requires an approved provider that contributes the channel AND hasn't
+blacklisted it — the same predicate as `list_visible_channels` /
+`is_visible_channel`. Do not re-introduce the `meta.owner_id` shortcut in any
+new helper that gates delivery.
+**Evidence:** `<this commit>` (fix(db): align subscribers_for_channel with
+multi-provider visibility).
+
 ## Auto-delete
 
 ### Don't drop the `delivered` row when Telegram's delete fails

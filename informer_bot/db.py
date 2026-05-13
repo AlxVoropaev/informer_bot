@@ -621,19 +621,24 @@ class Database:
             }
 
     def subscribers_for_channel(self, channel_id: int) -> list[tuple[int, str]]:
-        owner_id = self._owner_id()
-        owner_param = owner_id if owner_id is not None else -1
         with self._lock:
             return [
                 (r[0], r[1])
                 for r in self._conn.execute(
                     "SELECT s.user_id, s.mode FROM subscriptions s "
-                    "JOIN channels c ON c.id = s.channel_id "
                     "WHERE s.channel_id = ? AND s.mode != 'off' "
-                    "  AND NOT EXISTS (SELECT 1 FROM channel_blacklist b "
-                    "                  WHERE b.provider_user_id = ? "
-                    "                    AND b.channel_id = c.id)",
-                    (channel_id, owner_param),
+                    "  AND EXISTS ("
+                    "    SELECT 1 FROM provider_channels pc "
+                    "    JOIN providers p ON p.user_id = pc.provider_user_id "
+                    "    WHERE pc.channel_id = s.channel_id "
+                    "      AND p.status = 'approved' "
+                    "      AND NOT EXISTS ("
+                    "        SELECT 1 FROM channel_blacklist b "
+                    "        WHERE b.provider_user_id = pc.provider_user_id "
+                    "          AND b.channel_id = pc.channel_id"
+                    "      )"
+                    "  )",
+                    (channel_id,),
                 )
             ]
 
