@@ -1094,6 +1094,8 @@ async function openUsage() {
   el("search").parentElement.style.display = "none";
   el("tabs").hidden = true;
   el("bulk-actions").hidden = true;
+  el("provider-banner").hidden = true;
+  el("active-model").hidden = true;
   window.scrollTo(0, 0);
   el("usage-body").innerHTML = `<div class="empty">${t().loading}</div>`;
   if (tg && tg.BackButton) {
@@ -1114,6 +1116,8 @@ function closeUsage() {
   el("list").classList.remove("hidden");
   el("search").parentElement.style.display = "";
   renderTabs();
+  renderProviderBanner();
+  renderActiveModel();
   if (tg && tg.BackButton) {
     tg.BackButton.offClick(closeUsage);
     tg.BackButton.hide();
@@ -1147,6 +1151,8 @@ function openSettings() {
   el("search").parentElement.style.display = "none";
   el("tabs").hidden = true;
   el("bulk-actions").hidden = true;
+  el("provider-banner").hidden = true;
+  el("active-model").hidden = true;
   window.scrollTo(0, 0);
   if (tg && tg.BackButton) {
     tg.BackButton.show();
@@ -1160,6 +1166,8 @@ function closeSettings() {
   el("list").classList.remove("hidden");
   el("search").parentElement.style.display = "";
   renderTabs();
+  renderProviderBanner();
+  renderActiveModel();
   if (tg && tg.BackButton) {
     tg.BackButton.offClick(closeSettings);
     tg.BackButton.hide();
