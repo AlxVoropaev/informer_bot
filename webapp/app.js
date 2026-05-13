@@ -361,7 +361,7 @@ function renderTabs() {
   tabs.hidden = false;
   el("tab-subscribe").classList.toggle("active", state.activeTab === "subscribe");
   el("tab-provide").classList.toggle("active", state.activeTab === "provide");
-  bulk.hidden = false;
+  bulk.hidden = state.activeTab === "provide";
 }
 
 
