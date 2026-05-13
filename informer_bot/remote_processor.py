@@ -89,6 +89,7 @@ class RemoteProcessorClient:
         self._grace_outcome: Literal["recovered", "unhealthy"] | None = None
         self._grace_task: asyncio.Task[None] | None = None
         self._last_chat_model: str | None = None
+        self._last_embed_model: str | None = None
 
     @property
     def healthy(self) -> bool:
@@ -97,6 +98,10 @@ class RemoteProcessorClient:
     @property
     def last_chat_model(self) -> str | None:
         return self._last_chat_model
+
+    @property
+    def last_embed_model(self) -> str | None:
+        return self._last_embed_model
 
     def set_state_change_callback(
         self, callback: Callable[[bool], Awaitable[None]] | None
@@ -251,6 +256,7 @@ class RemoteProcessorClient:
             raise RemoteProcessorError(
                 f"unexpected reply type for embed: {type(reply).__name__}"
             )
+        self._last_embed_model = reply.model or None
         return Embedding(
             vector=list(reply.vector),
             tokens=reply.tokens,

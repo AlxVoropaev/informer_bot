@@ -470,12 +470,53 @@ async def main() -> None:
             model = cfg.ollama_chat_model
         else:
             model = remote.last_chat_model if remote is not None else None
+        fallback_provider: str | None = (
+            cfg.chat_provider_fallback if cfg.chat_provider == "remote" else None
+        )
+        if fallback_provider == "anthropic":
+            fallback_model: str | None = MODEL
+        elif fallback_provider == "ollama":
+            fallback_model = cfg.ollama_chat_model
+        else:
+            fallback_model = None
         return {
             "provider": cfg.chat_provider,
             "model": model,
-            "fallback_provider": (
-                cfg.chat_provider_fallback if cfg.chat_provider == "remote" else None
-            ),
+            "fallback_provider": fallback_provider,
+            "fallback_model": fallback_model,
+        }
+
+    def _effective_embedding_provider() -> str:
+        if cfg.embedding_provider == "auto":
+            return "openai" if cfg.openai_api_key else "none"
+        return cfg.embedding_provider
+
+    def get_active_embedding_model() -> dict | None:
+        provider = _effective_embedding_provider()
+        if provider == "none":
+            return None
+        if provider == "openai":
+            model: str | None = EMBED_MODEL
+        elif provider == "ollama":
+            model = cfg.ollama_embedding_model
+        else:
+            model = remote.last_embed_model if remote is not None else None
+        fallback_provider: str | None = (
+            cfg.embedding_provider_fallback if provider == "remote" else None
+        )
+        if fallback_provider == "none":
+            fallback_provider = None
+        if fallback_provider == "openai":
+            fallback_model: str | None = EMBED_MODEL
+        elif fallback_provider == "ollama":
+            fallback_model = cfg.ollama_embedding_model
+        else:
+            fallback_model = None
+        return {
+            "provider": provider,
+            "model": model,
+            "fallback_provider": fallback_provider,
+            "fallback_model": fallback_model,
         }
 
     send_dm = _make_send_dm(app)
@@ -619,6 +660,7 @@ async def main() -> None:
             stop_provider_client=_stop_provider_client,
             start_provider_client=_start_provider_client,
             get_active_chat_model=get_active_chat_model,
+            get_active_embedding_model=get_active_embedding_model,
         )
         try:
             await app.bot.set_chat_menu_button(menu_button=MenuButtonWebApp(

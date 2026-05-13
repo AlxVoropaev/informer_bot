@@ -112,6 +112,17 @@ def get_active_chat_model() -> Callable[[], dict]:
         "provider": "anthropic",
         "model": "claude-haiku-4-5",
         "fallback_provider": None,
+        "fallback_model": None,
+    }
+
+
+@pytest.fixture
+def get_active_embedding_model() -> Callable[[], dict | None]:
+    return lambda: {
+        "provider": "openai",
+        "model": "text-embedding-3-small",
+        "fallback_provider": None,
+        "fallback_model": None,
     }
 
 
@@ -120,6 +131,7 @@ async def client(
     db: Database, notify_owner: AsyncMock, send_dm: AsyncMock,
     stop_provider_client: AsyncMock, start_provider_client: AsyncMock,
     get_active_chat_model: Callable[[], dict],
+    get_active_embedding_model: Callable[[], dict | None],
 ) -> TestClient:
     app = build_app(
         db=db, bot_token=BOT_TOKEN, owner_id=OWNER_ID,
@@ -129,6 +141,7 @@ async def client(
         stop_provider_client=stop_provider_client,
         start_provider_client=start_provider_client,
         get_active_chat_model=get_active_chat_model,
+        get_active_embedding_model=get_active_embedding_model,
     )
     server = TestServer(app)
     client = TestClient(server)
@@ -168,6 +181,13 @@ async def test_state_includes_chat_model(client: TestClient) -> None:
         "provider": "anthropic",
         "model": "claude-haiku-4-5",
         "fallback_provider": None,
+        "fallback_model": None,
+    }
+    assert body["embedding_model"] == {
+        "provider": "openai",
+        "model": "text-embedding-3-small",
+        "fallback_provider": None,
+        "fallback_model": None,
     }
 
 
