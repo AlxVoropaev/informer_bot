@@ -107,6 +107,10 @@ const I18N = {
     bulkSubscribeDone: (n, on) => on
       ? `Subscribed to ${n} channels.`
       : `Unsubscribed from ${n} channels.`,
+    modelLabel: "Model",
+    modelProviders: { anthropic: "Anthropic", ollama: "Ollama", remote: "Remote" },
+    modelNoReply: "(no reply yet)",
+    modelFallback: "fallback",
   },
   ru: {
     search: "Поиск каналов…",
@@ -212,6 +216,10 @@ const I18N = {
     bulkSubscribeDone: (n, on) => on
       ? `Подписались на ${n} каналов.`
       : `Отписались от ${n} каналов.`,
+    modelLabel: "Модель",
+    modelProviders: { anthropic: "Anthropic", ollama: "Ollama", remote: "Удалённая модель" },
+    modelNoReply: "(пока нет ответа)",
+    modelFallback: "резерв",
   },
 };
 
@@ -233,6 +241,7 @@ const state = {
   providers: [],
   providerLogin: { userId: null, label: "", step: null },
   activeTab: "subscribe",
+  chatModel: null,
 };
 
 function t() { return I18N[state.language] || I18N.en; }
@@ -311,6 +320,7 @@ function applyLanguage() {
     labelSpan.textContent = dict.modes[input.value];
   });
   renderProviderBanner();
+  renderActiveModel();
   renderTabs();
 }
 
@@ -326,6 +336,27 @@ function renderTabs() {
   el("tab-subscribe").classList.toggle("active", state.activeTab === "subscribe");
   el("tab-provide").classList.toggle("active", state.activeTab === "provide");
   bulk.hidden = false;
+}
+
+
+function renderActiveModel() {
+  const node = el("active-model");
+  const cm = state.chatModel;
+  if (!cm || !cm.provider) {
+    node.hidden = true;
+    node.textContent = "";
+    return;
+  }
+  const dict = t();
+  const providerName = dict.modelProviders[cm.provider] || cm.provider;
+  const modelName = cm.model || dict.modelNoReply;
+  let text = `${dict.modelLabel}: ${providerName} — ${modelName}`;
+  if (cm.fallback_provider) {
+    const fbName = dict.modelProviders[cm.fallback_provider] || cm.fallback_provider;
+    text += `  ·  ${dict.modelFallback}: ${fbName}`;
+  }
+  node.textContent = text;
+  node.hidden = false;
 }
 
 
@@ -1179,6 +1210,7 @@ async function init() {
     state.providerStatus = data.provider_status == null ? null : String(data.provider_status);
     state.providerBlacklist = Array.isArray(data.provider_blacklist) ? data.provider_blacklist : [];
     state.providerChannels = Array.isArray(data.provider_channels) ? data.provider_channels : [];
+    state.chatModel = (data.chat_model && typeof data.chat_model === "object") ? data.chat_model : null;
     rebuildLangSelect();
     applyLanguage();
     renderList();

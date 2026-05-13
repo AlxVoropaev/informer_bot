@@ -332,6 +332,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   margin: 12px 12px 0;
 }
 
+.active-model {
+  margin: 8px 12px 0;
+  padding: 4px 10px;
+  color: var(--hint);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .provider-tag {
   display: inline-flex;
   align-items: center;
