@@ -101,23 +101,31 @@ a successful round-trip the informer deletes both messages.
 
 ## Failure handling
 
-The remote client tracks a `HEALTHY` / `UNHEALTHY` state.
+The remote client tracks a `HEALTHY` / `UNHEALTHY` state, with a grace
+window in front of the unhealthy flip.
 
-- A real call (summarize / is_relevant / embed) that times out marks
-  the state `UNHEALTHY` immediately and returns control to the
-  fallback dispatcher.
-- A background ping loop (`HEALTH_CHECK_INTERVAL_SECONDS`, default
-  60s) probes the processor. Success transitions to `HEALTHY`;
-  failure to `UNHEALTHY`.
-- On every state transition the owner gets a DM:
+- A real-call timeout (summarize / is_relevant / embed) or a ping
+  failure does not flip state directly — it arms a one-shot grace
+  window of `PROCESSOR_UNHEALTHY_GRACE_SECONDS` (default 120s, set to
+  `0` to disable and restore the previous instant-flip behavior).
+- While the window is open, in-flight callers wait on a shared
+  decision instead of falling back; new calls short-circuit and join
+  the wait. The background ping loop keeps probing every
+  `HEALTH_CHECK_INTERVAL_SECONDS` (default 60s). No DM is sent.
+- A ping success during the window cancels the grace silently:
+  `_healthy` stays `True`, no DM fires, and waiting calls retry the
+  remote once.
+- If the window expires without a successful ping, `_healthy` flips
+  to `False`, the owner gets the DM, and waiting calls fall back to
+  the providers named by `CHAT_PROVIDER_FALLBACK` and
+  `EMBEDDING_PROVIDER_FALLBACK` (default `anthropic` and `openai`).
+- Recovery from `UNHEALTHY` happens on the next ping success.
+- DMs (one per state transition):
   - `⚠️ Processor unreachable, fail-safe enabled (Claude/OpenAI).`
   - `✅ Processor recovered, back on local models.`
-- While unhealthy, summarize/is_relevant/embed go to the providers
-  named by `CHAT_PROVIDER_FALLBACK` and `EMBEDDING_PROVIDER_FALLBACK`
-  (default `anthropic` and `openai`).
 
-A logical error from the processor (`ok: false`) also triggers the
-fallback for that single call, but does not flip global state.
+A logical error from the processor (`ok: false`) still falls back for
+that single call without touching state.
 
 ## Rate limits
 
