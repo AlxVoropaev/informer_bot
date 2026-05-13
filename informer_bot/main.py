@@ -67,6 +67,7 @@ from informer_bot.remote_processor import RemoteProcessorClient
 from informer_bot.summarizer import (
     EMBED_DIMENSIONS,
     EMBED_MODEL,
+    MODEL,
     Summary,
     embed_summary,
     is_relevant,
@@ -453,6 +454,22 @@ async def main() -> None:
         if cfg.embedding_provider == "remote":
             embed_fn = _wrap_embed_with_remote_model_check(dispatcher.embed, db)
     summarize_fn = _wrap_summarize_with_custom_prompt(summarize_fn, db)
+
+    def get_active_chat_model() -> dict:
+        if cfg.chat_provider == "anthropic":
+            model: str | None = MODEL
+        elif cfg.chat_provider == "ollama":
+            model = cfg.ollama_chat_model
+        else:
+            model = remote.last_chat_model if remote is not None else None
+        return {
+            "provider": cfg.chat_provider,
+            "model": model,
+            "fallback_provider": (
+                cfg.chat_provider_fallback if cfg.chat_provider == "remote" else None
+            ),
+        }
+
     send_dm = _make_send_dm(app)
     edit_dm: EditDmFn | None = _make_edit_dm(app) if embed_fn is not None else None
     announce_new_channel = _make_announce_new_channel(app, db, miniapp_url)
@@ -593,6 +610,7 @@ async def main() -> None:
             send_dm=send_dm,
             stop_provider_client=_stop_provider_client,
             start_provider_client=_start_provider_client,
+            get_active_chat_model=get_active_chat_model,
         )
         try:
             await app.bot.set_chat_menu_button(menu_button=MenuButtonWebApp(

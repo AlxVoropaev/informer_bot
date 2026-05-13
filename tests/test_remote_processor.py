@@ -117,12 +117,15 @@ async def test_summarize_round_trip(
     rp, app_mock = remote
     rp.start()
 
+    assert rp.last_chat_model is None
+
     async def replier() -> None:
         await asyncio.sleep(0.01)
         body = await _request_payload(app_mock)
         req = json.loads(body)
         reply = encode_reply(SummarizeReply(
             id=req["id"], text="brief", input_tokens=10, output_tokens=3,
+            model="qwen2.5:7b",
         ))
         await _fire_reply(rp, app_mock, reply)
 
@@ -132,6 +135,7 @@ async def test_summarize_round_trip(
     assert result.text == "brief"
     assert result.input_tokens == 10
     assert result.output_tokens == 3
+    assert rp.last_chat_model == "qwen2.5:7b"
     # Wait briefly for fire-and-forget delete to run.
     await asyncio.sleep(0.01)
     app_mock.bot.delete_messages.assert_awaited()

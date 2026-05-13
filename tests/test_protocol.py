@@ -65,6 +65,23 @@ def test_summarize_reply_roundtrip() -> None:
     assert got == reply
 
 
+def test_summarize_reply_with_model_roundtrip() -> None:
+    reply = SummarizeReply(
+        id="x", text="brief", input_tokens=10, output_tokens=3, model="qwen2.5:7b",
+    )
+    got = decode_reply(encode_reply(reply), Op.summarize)
+    assert got == reply
+    assert isinstance(got, SummarizeReply)
+    assert got.model == "qwen2.5:7b"
+
+
+def test_summarize_reply_decodes_legacy_payload_without_model() -> None:
+    legacy = '{"id":"x","ok":true,"text":"hi","input_tokens":1,"output_tokens":2}'
+    got = decode_reply(legacy, Op.summarize)
+    assert isinstance(got, SummarizeReply)
+    assert got.model == ""
+
+
 def test_is_relevant_reply_roundtrip() -> None:
     reply = IsRelevantReply(id="x", relevant=True, input_tokens=8, output_tokens=1)
     got = decode_reply(encode_reply(reply), Op.is_relevant)

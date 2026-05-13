@@ -58,6 +58,7 @@ async def test_summarize_returns_summarize_reply() -> None:
     assert reply.text == "brief"
     assert reply.input_tokens == 10
     assert reply.output_tokens == 3
+    assert reply.model == "qwen3.5:4b"
 
 
 async def test_summarize_forwards_system_prompt() -> None:

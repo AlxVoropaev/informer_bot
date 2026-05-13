@@ -72,6 +72,7 @@ _rate_state: dict[int, deque[float]] = defaultdict(deque)
 NotifyOwnerProviderRequestFn = Callable[[int], Awaitable[None]]
 StopProviderClientFn = Callable[[int], Awaitable[bool]]
 StartProviderClientFn = Callable[[int], Awaitable[bool]]
+GetActiveChatModelFn = Callable[[], dict]
 
 DB_KEY: web.AppKey[Database] = web.AppKey("db", Database)
 BOT_TOKEN_KEY: web.AppKey[str] = web.AppKey("bot_token", str)
@@ -93,6 +94,9 @@ LOGIN_SESSIONS_KEY: web.AppKey[LoginSessions] = web.AppKey(
 )
 API_ID_KEY: web.AppKey[int] = web.AppKey("api_id", int)
 API_HASH_KEY: web.AppKey[str] = web.AppKey("api_hash", str)
+GET_ACTIVE_CHAT_MODEL_KEY: web.AppKey[GetActiveChatModelFn] = web.AppKey(
+    "get_active_chat_model",
+)
 
 
 def verify_init_data(init_data: str, bot_token: str) -> dict | None:
@@ -219,6 +223,7 @@ async def _state(request: web.Request) -> web.Response:
         "channels": _channel_payload(db, user_id),
         "is_provider": is_provider,
         "provider_status": provider.status if provider else None,
+        "chat_model": request.app[GET_ACTIVE_CHAT_MODEL_KEY](),
     }
     if is_provider:
         payload["provider_blacklist"] = sorted(db.list_provider_blacklist(user_id))
@@ -924,6 +929,7 @@ def build_app(
     send_dm: SendDmFn,
     stop_provider_client: StopProviderClientFn,
     start_provider_client: StartProviderClientFn,
+    get_active_chat_model: GetActiveChatModelFn,
 ) -> web.Application:
     app = web.Application(
         middlewares=[_auth_middleware],
@@ -939,6 +945,7 @@ def build_app(
     app[LOGIN_SESSIONS_KEY] = LoginSessions()
     app[API_ID_KEY] = api_id
     app[API_HASH_KEY] = api_hash
+    app[GET_ACTIVE_CHAT_MODEL_KEY] = get_active_chat_model
     app.router.add_get("/api/state", _state)
     app.router.add_get("/api/providers", _providers_list)
     app.router.add_post("/api/provider_login/start", _provider_login_start)
@@ -977,6 +984,7 @@ async def start_server(
     send_dm: SendDmFn,
     stop_provider_client: StopProviderClientFn,
     start_provider_client: StartProviderClientFn,
+    get_active_chat_model: GetActiveChatModelFn,
 ) -> web.AppRunner:
     app = build_app(
         db=db, bot_token=bot_token, owner_id=owner_id,
@@ -985,6 +993,7 @@ async def start_server(
         send_dm=send_dm,
         stop_provider_client=stop_provider_client,
         start_provider_client=start_provider_client,
+        get_active_chat_model=get_active_chat_model,
     )
     runner = web.AppRunner(app, access_log=None)
     await runner.setup()

@@ -88,10 +88,15 @@ class RemoteProcessorClient:
         self._grace_event: asyncio.Event | None = None
         self._grace_outcome: Literal["recovered", "unhealthy"] | None = None
         self._grace_task: asyncio.Task[None] | None = None
+        self._last_chat_model: str | None = None
 
     @property
     def healthy(self) -> bool:
         return self._healthy
+
+    @property
+    def last_chat_model(self) -> str | None:
+        return self._last_chat_model
 
     def set_state_change_callback(
         self, callback: Callable[[bool], Awaitable[None]] | None
@@ -203,6 +208,7 @@ class RemoteProcessorClient:
             raise RemoteProcessorError(
                 f"unexpected reply type for summarize: {type(reply).__name__}"
             )
+        self._last_chat_model = reply.model or None
         return Summary(
             text=reply.text,
             input_tokens=reply.input_tokens,

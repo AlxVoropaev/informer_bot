@@ -39,6 +39,7 @@ async def handle_request(
                 text=result.text,
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,
+                model=chat_model,
             )
         case IsRelevantRequest():
             check = await is_relevant_ollama(

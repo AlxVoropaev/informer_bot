@@ -9,7 +9,7 @@ import hashlib
 import hmac
 import json
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from unittest.mock import AsyncMock
 from urllib.parse import urlencode
@@ -107,9 +107,19 @@ def start_provider_client() -> AsyncMock:
 
 
 @pytest.fixture
+def get_active_chat_model() -> Callable[[], dict]:
+    return lambda: {
+        "provider": "anthropic",
+        "model": "claude-haiku-4-5",
+        "fallback_provider": None,
+    }
+
+
+@pytest.fixture
 async def client(
     db: Database, notify_owner: AsyncMock, send_dm: AsyncMock,
     stop_provider_client: AsyncMock, start_provider_client: AsyncMock,
+    get_active_chat_model: Callable[[], dict],
 ) -> TestClient:
     app = build_app(
         db=db, bot_token=BOT_TOKEN, owner_id=OWNER_ID,
@@ -118,6 +128,7 @@ async def client(
         send_dm=send_dm,
         stop_provider_client=stop_provider_client,
         start_provider_client=start_provider_client,
+        get_active_chat_model=get_active_chat_model,
     )
     server = TestServer(app)
     client = TestClient(server)
@@ -144,6 +155,20 @@ async def test_state_returns_200_with_valid_init_data(
     assert body["language"] == "en"
     titles = sorted(c["title"] for c in body["channels"])
     assert titles == ["Alpha", "Beta"]
+
+
+async def test_state_includes_chat_model(client: TestClient) -> None:
+    init_data = _make_init_data(user_id=USER_ID)
+    resp = await client.get(
+        "/api/state", headers={"X-Telegram-Init-Data": init_data}
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert body["chat_model"] == {
+        "provider": "anthropic",
+        "model": "claude-haiku-4-5",
+        "fallback_provider": None,
+    }
 
 
 async def test_invalid_hmac_rejected_with_401(client: TestClient) -> None:
