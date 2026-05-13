@@ -744,7 +744,7 @@ async def test_refresh_announce_optional(db: Database) -> None:
     assert {c.id for c in db.list_channels()} == {1, 2}
 
 
-async def test_refresh_silent_for_disappeared_blacklisted_channels(db: Database) -> None:
+async def test_refresh_dms_subscriber_when_blacklisted_channel_disappears(db: Database) -> None:
     OWNER = 999
     db.set_user_status(user_id=OWNER, status="approved")
     db.add_pending_provider(user_id=OWNER, session_path="data/informer.session")
@@ -764,7 +764,10 @@ async def test_refresh_silent_for_disappeared_blacklisted_channels(db: Database)
         db=db, send_dm=send_dm, inter_provider_sleep=0,
     )
 
-    send_dm.assert_not_called()
+    # Orphan deletion must DM every subscriber regardless of visibility — the
+    # channel row is being removed and the subscription with it.
+    send_dm.assert_awaited_once()
+    assert send_dm.await_args.args[0] == 10
     assert {c.id for c in db.list_channels(include_blacklisted=True)} == {1}
 
 
@@ -847,6 +850,10 @@ async def test_prune_orphan_channels_deletes_orphans_and_dms_subscribers(
     db.subscribe(user_id=100, channel_id=20)
     db.subscribe(user_id=200, channel_id=20)
     send_dm = _send_dm()
+
+    # Orphan channel must not be visible — and the prune DM path must not depend
+    # on visibility (or the channel_gone notice would never go out).
+    assert db.is_visible_channel(20) is False
 
     removed, notified = await prune_orphan_channels(db=db, send_dm=send_dm)
 

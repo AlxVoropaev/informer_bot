@@ -330,7 +330,7 @@ async def prune_orphan_channels(
     notified = 0
     for channel_id in orphan_ids:
         title = db.get_channel_title(channel_id) or ""
-        subs = db.subscribers_for_channel(channel_id=channel_id)
+        subs = db.list_subscribed_users_for_channel(channel_id=channel_id)
         for user_id, _mode in subs:
             lang = db.get_language(user_id)
             await send_dm(
