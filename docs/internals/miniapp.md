@@ -30,7 +30,6 @@ checked against `users.status='approved'`.
 - `POST /api/dedup_debug` `{enabled}` — user-level toggle for the dedup-debug delivery path (see [behaviour.md](behaviour.md) and [dedup.md](dedup.md))
 - `POST /api/become_provider` `{}` → `{ok, status}` on success or `{ok: false, reason}`. `reason` ∈ `owner` (caller is already the owner), `already_pending`, `already_approved`, `denied`. Mirrors the `/become_provider` Telegram command and DMs the owner an Allow/Deny inline keyboard for fresh requests.
 - `POST /api/blacklist` `{channel_id, blacklisted}` → caller-as-provider blacklist toggle. `{ok, blacklist}` (200) on success; `{error: "not_provider"}` (403) when the caller isn't an approved provider; `{error: "channel_not_owned_by_provider"}` (400) when the channel isn't in the caller's `provider_channels`. `prune_orphan_channels` is invoked defensively after a successful toggle.
-- `POST /api/blacklist_bulk` `{channel_ids: [int, ...], blacklisted}` → bulk variant of `/api/blacklist`. Same auth/error model; rejects atomically with 400 `channel_not_owned_by_provider` if ANY id isn't in the caller's `provider_channels`. Empty `channel_ids` returns the current blacklist as a no-op. `prune_orphan_channels` runs once at the end.
 - `GET /api/usage` → `{is_owner, user: {input_tokens, output_tokens, cost_usd}}` — owner payload also includes `per_user[]`, `system`, `embeddings`.
 - `POST /api/usage/reset` → owner-only (non-owners get 403 `not_owner`). Clears `usage`, `system_usage`, and `embedding_usage` in a single transaction. Returns `{ok: true}`.
 - `POST /api/summary_prompt` `{prompt}` — owner-only (non-owners get 403 `not_owner`). Saves a custom system prompt for post summarization. `null`/missing/empty/whitespace resets to the hardcoded default. Prompts longer than 4096 characters are rejected with 400 `prompt_too_long`. Returns `{ok, summary_prompt, summary_prompt_default}` where `summary_prompt` is `null` when no override is active. The custom prompt is stored in the `meta` table under `summary_prompt` and applied to every summarize backend (Anthropic, Ollama, remote processor) via the `SummarizeRequest.system_prompt` field.
@@ -58,10 +57,8 @@ caller's `provider_channels`, with an inline blacklist checkbox per row driven b
 Search is scoped to the active tab and the input resets on tab switch; default
 tab is Subscribe. Non-providers see no tab UI — just the single subscribe list,
 identical to before. The bulk-actions row (Select all / Deselect all) is visible
-on both tabs whenever the tab row is: on Subscribe it sets every currently-visible
-channel to subscription mode `all` / `off` (via `/api/subscription_bulk`); on
-Provide it toggles the per-provider blacklist on visible rows (via
-`/api/blacklist_bulk`).
+on the Subscribe tab only and sets every currently-visible channel to
+subscription mode `all` / `off` (via `/api/subscription_bulk`).
 
 ## Deep-linking
 

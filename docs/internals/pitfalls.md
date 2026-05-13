@@ -236,9 +236,9 @@ stop receiving posts but never get the documented "no longer available" DM
 only inserts into `channel_blacklist`. The blacklist endpoints called
 `prune_orphan_channels` cosmetically but it was a no-op for the blacklist
 case.
-**How to avoid:** the blacklist endpoints (`_blacklist` and
-`_blacklist_bulk` in `informer_bot/webapp.py`) snapshot
-`list_visible_channels()` before the write and call
+**How to avoid:** the blacklist endpoint (`_blacklist` in
+`informer_bot/webapp.py`) snapshots
+`list_visible_channels()` before the write and calls
 `notify_subscribers_of_lost_visibility` after, which DMs subscribers of
 any channel that lost visibility. Do not reuse `subscribers_for_channel`
 from this path — it has a legacy owner-blacklist filter that silently

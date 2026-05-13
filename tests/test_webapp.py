@@ -907,31 +907,6 @@ async def test_blacklist_multi_provider_no_dm_when_still_visible(
     send_dm.assert_not_called()
 
 
-async def test_blacklist_bulk_sole_provider_dms_subscribers(
-    client: TestClient, db: Database, send_dm: AsyncMock,
-) -> None:
-    """Bulk blacklist by the sole provider DMs one notification per
-    affected channel-subscriber pair."""
-    SUBSCRIBER_A = 7777
-    SUBSCRIBER_B = 8888
-    db.set_user_status(user_id=SUBSCRIBER_A, status="approved")
-    db.set_user_status(user_id=SUBSCRIBER_B, status="approved")
-    db.subscribe(user_id=SUBSCRIBER_A, channel_id=1)
-    db.subscribe(user_id=SUBSCRIBER_B, channel_id=2)
-    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
-
-    resp = await client.post(
-        "/api/blacklist_bulk", headers=headers,
-        json={"channel_ids": [1, 2], "blacklisted": True},
-    )
-    assert resp.status == 200
-    assert send_dm.await_count == 2
-    by_user = {call.args[0]: call.args[1] for call in send_dm.await_args_list}
-    assert set(by_user) == {SUBSCRIBER_A, SUBSCRIBER_B}
-    assert "Alpha" in by_user[SUBSCRIBER_A]
-    assert "Beta" in by_user[SUBSCRIBER_B]
-
-
 # ---------- /api/become_provider ----------
 
 
@@ -1116,97 +1091,6 @@ async def test_blacklist_runs_orphan_sweep(
     assert "Orphan" in dm_text and "no longer available" in dm_text.lower()
 
 
-# ---------- /api/blacklist_bulk ----------
-
-
-async def test_blacklist_bulk_non_provider_forbidden(
-    client: TestClient, send_dm: AsyncMock,
-) -> None:
-    resp = await client.post(
-        "/api/blacklist_bulk",
-        headers={"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)},
-        json={"channel_ids": [1, 2], "blacklisted": True},
-    )
-    assert resp.status == 403
-    assert (await resp.json())["error"] == "not_provider"
-    send_dm.assert_not_called()
-
-
-async def test_blacklist_bulk_channel_not_owned_returns_400(
-    client: TestClient, db: Database, send_dm: AsyncMock,
-) -> None:
-    # USER_ID is approved as a provider for only channel 10, not channel 1.
-    db.set_user_status(user_id=USER_ID, status="approved")
-    db.add_pending_provider(
-        user_id=USER_ID, session_path=f"data/sessions/{USER_ID}.session",
-    )
-    db.set_provider_status(user_id=USER_ID, status="approved")
-    db.upsert_channel(channel_id=10, title="Gamma")
-    db.set_provider_channels(provider_user_id=USER_ID, channel_ids={10})
-    resp = await client.post(
-        "/api/blacklist_bulk",
-        headers={"X-Telegram-Init-Data": _make_init_data(user_id=USER_ID)},
-        json={"channel_ids": [10, 1], "blacklisted": True},
-    )
-    assert resp.status == 400
-    assert (await resp.json())["error"] == "channel_not_owned_by_provider"
-    # Atomicity: nothing was applied — channel 10 must not be blacklisted.
-    assert db.list_provider_blacklist(USER_ID) == set()
-    send_dm.assert_not_called()
-
-
-async def test_blacklist_bulk_toggles_multiple_channels(
-    client: TestClient, db: Database,
-) -> None:
-    # Owner has a co-provider for channels 1 and 2 so blacklisting doesn't orphan.
-    co_provider = 7
-    db.set_user_status(user_id=co_provider, status="approved")
-    db.add_pending_provider(
-        user_id=co_provider, session_path=f"data/sessions/{co_provider}.session",
-    )
-    db.set_provider_status(user_id=co_provider, status="approved")
-    db.set_provider_channels(provider_user_id=co_provider, channel_ids={1, 2})
-    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
-
-    resp = await client.post(
-        "/api/blacklist_bulk", headers=headers,
-        json={"channel_ids": [1, 2], "blacklisted": True},
-    )
-    assert resp.status == 200
-    assert (await resp.json()) == {"ok": True, "blacklist": [1, 2]}
-    assert db.list_provider_blacklist(OWNER_ID) == {1, 2}
-
-    resp = await client.post(
-        "/api/blacklist_bulk", headers=headers,
-        json={"channel_ids": [1, 2], "blacklisted": False},
-    )
-    assert resp.status == 200
-    assert (await resp.json()) == {"ok": True, "blacklist": []}
-    assert db.list_provider_blacklist(OWNER_ID) == set()
-
-
-async def test_blacklist_bulk_runs_orphan_sweep_once(
-    client: TestClient, db: Database, send_dm: AsyncMock,
-) -> None:
-    """Bulk endpoint must run `prune_orphan_channels` exactly once, regardless
-    of how many ids are toggled."""
-    SUBSCRIBER = 7777
-    db.set_user_status(user_id=SUBSCRIBER, status="approved")
-    db.upsert_channel(channel_id=99, title="Orphan")
-    db.subscribe(user_id=SUBSCRIBER, channel_id=99)
-    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
-    resp = await client.post(
-        "/api/blacklist_bulk", headers=headers,
-        json={"channel_ids": [1, 2], "blacklisted": True},
-    )
-    assert resp.status == 200
-    assert db.get_channel(99) is None
-    assert send_dm.await_count == 1
-    dm_user_id, dm_text = send_dm.await_args.args
-    assert dm_user_id == SUBSCRIBER
-    assert "Orphan" in dm_text
-
-
 async def test_blacklist_rejects_missing_channel_id(
     client: TestClient,
 ) -> None:
@@ -1240,42 +1124,6 @@ async def test_blacklist_rejects_missing_blacklisted(
         json={"channel_id": 5},
     )
     assert resp.status == 400
-
-
-async def test_blacklist_bulk_rejects_non_numeric_in_list(
-    client: TestClient,
-) -> None:
-    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
-    resp = await client.post(
-        "/api/blacklist_bulk", headers=headers,
-        json={"channel_ids": ["1", "abc"], "blacklisted": True},
-    )
-    assert resp.status == 400
-    assert (await resp.json())["error"] == "bad_channel_id"
-
-
-async def test_blacklist_bulk_rejects_missing_blacklisted(
-    client: TestClient,
-) -> None:
-    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
-    resp = await client.post(
-        "/api/blacklist_bulk", headers=headers,
-        json={"channel_ids": [5]},
-    )
-    assert resp.status == 400
-
-
-async def test_blacklist_bulk_empty_list_noop(
-    client: TestClient, db: Database, send_dm: AsyncMock,
-) -> None:
-    headers = {"X-Telegram-Init-Data": _make_init_data(user_id=OWNER_ID)}
-    resp = await client.post(
-        "/api/blacklist_bulk", headers=headers,
-        json={"channel_ids": [], "blacklisted": True},
-    )
-    assert resp.status == 200
-    assert (await resp.json()) == {"ok": True, "blacklist": []}
-    send_dm.assert_not_called()
 
 
 # ---------- /api/subscription_bulk ----------

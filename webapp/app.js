@@ -112,9 +112,6 @@ const I18N = {
     provideEmpty: "No channels you contribute yet.",
     selectAll: "Select all",
     deselectAll: "Deselect all",
-    bulkBlacklistDone: (n, on) => on
-      ? `Blacklisted ${n} channels.`
-      : `Un-blacklisted ${n} channels.`,
     bulkSubscribeDone: (n, on) => on
       ? `Subscribed to ${n} channels.`
       : `Unsubscribed from ${n} channels.`,
@@ -233,9 +230,6 @@ const I18N = {
     provideEmpty: "Ты пока не предоставляешь каналов.",
     selectAll: "Выбрать все",
     deselectAll: "Снять все",
-    bulkBlacklistDone: (n, on) => on
-      ? `Заблокировано ${n} каналов.`
-      : `Разблокировано ${n} каналов.`,
     bulkSubscribeDone: (n, on) => on
       ? `Подписались на ${n} каналов.`
       : `Отписались от ${n} каналов.`,
@@ -517,37 +511,6 @@ async function toggleProviderBlacklist(channelId, blacklisted) {
     el("provider-blacklist-input").checked = (state.providerBlacklist || []).includes(channelId);
     renderList();
     showToast(e.message || t().network_error);
-  }
-}
-
-async function bulkToggleBlacklist(blacklisted) {
-  const blSet = new Set(state.providerBlacklist || []);
-  const targets = (state.filteredView || [])
-    .filter((c) => blacklisted ? !blSet.has(c.id) : blSet.has(c.id))
-    .map((c) => c.id);
-  const dict = t();
-  if (targets.length === 0) {
-    showToast(dict.bulkBlacklistDone(0, blacklisted));
-    return;
-  }
-  const selBtn = el("bulk-select-all");
-  const dselBtn = el("bulk-deselect-all");
-  selBtn.disabled = true;
-  dselBtn.disabled = true;
-  try {
-    const data = await api("/api/blacklist_bulk", {
-      method: "POST",
-      body: JSON.stringify({ channel_ids: targets, blacklisted }),
-    });
-    state.providerBlacklist = data.blacklist || [];
-    showToast(dict.bulkBlacklistDone(targets.length, blacklisted));
-    if (tg && tg.HapticFeedback) tg.HapticFeedback.impactOccurred("light");
-    renderList();
-  } catch (e) {
-    showToast(e.message || t().network_error);
-  } finally {
-    selBtn.disabled = false;
-    dselBtn.disabled = false;
   }
 }
 
@@ -1443,14 +1406,8 @@ async function init() {
     });
   });
 
-  el("bulk-select-all").addEventListener("click", () => {
-    if (state.activeTab === "provide") bulkToggleBlacklist(false);
-    else bulkSetSubscription("all");
-  });
-  el("bulk-deselect-all").addEventListener("click", () => {
-    if (state.activeTab === "provide") bulkToggleBlacklist(true);
-    else bulkSetSubscription("off");
-  });
+  el("bulk-select-all").addEventListener("click", () => bulkSetSubscription("all"));
+  el("bulk-deselect-all").addEventListener("click", () => bulkSetSubscription("off"));
 
   el("provider-blacklist-input").addEventListener("change", (ev) => {
     if (state.selectedId == null) return;
