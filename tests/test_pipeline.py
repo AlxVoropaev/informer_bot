@@ -68,9 +68,26 @@ def _edit_dm() -> AsyncMock:
     return AsyncMock()
 
 
+def _seed_provider(db: Database, provider_id: int) -> None:
+    db.set_user_status(user_id=provider_id, status="approved")
+    db.add_pending_provider(user_id=provider_id, session_path=f"p{provider_id}.session")
+    db.set_provider_status(user_id=provider_id, status="approved")
+
+
+def _seed_channel(
+    db: Database, channel_id: int, title: str, provider_id: int = 1,
+) -> None:
+    """Upsert a channel AND mark provider_id as a contributor so it passes
+    the visibility predicate used by subscribers_for_channel."""
+    db.upsert_channel(channel_id=channel_id, title=title)
+    db.add_provider_channel(provider_user_id=provider_id, channel_id=channel_id)
+
+
 @pytest.fixture
 def db(tmp_path: Path) -> Database:
-    return Database(tmp_path / "p.db")
+    database = Database(tmp_path / "p.db")
+    _seed_provider(database, 1)
+    return database
 
 
 # ---------- handle_new_post ----------
@@ -95,7 +112,7 @@ async def test_handle_new_post_skips_empty_text(db: Database) -> None:
 
 
 async def test_handle_new_post_summarises_and_dms_subscribers(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="Channel A")
+    _seed_channel(db, channel_id=1, title="Channel A")
     db.subscribe(user_id=10, channel_id=1)
     db.subscribe(user_id=20, channel_id=1)
     summarize = AsyncMock(return_value=_summary("Brief."))
@@ -119,7 +136,7 @@ async def test_handle_new_post_summarises_and_dms_subscribers(db: Database) -> N
 
 
 async def test_handle_new_post_passes_photo_to_send_dm(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    _seed_channel(db, channel_id=1, title="A")
     db.subscribe(user_id=10, channel_id=1)
     summarize = AsyncMock(return_value=_summary("Brief."))
     is_rel = AsyncMock()
@@ -138,7 +155,7 @@ async def test_handle_new_post_passes_photo_to_send_dm(db: Database) -> None:
 
 
 async def test_handle_new_post_html_escapes_title_and_summary(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="A & <B>")
+    _seed_channel(db, channel_id=1, title="A & <B>")
     db.subscribe(user_id=10, channel_id=1)
     summarize = AsyncMock(return_value=_summary("5 < 10 & true"))
     is_rel = AsyncMock()
@@ -157,7 +174,7 @@ async def test_handle_new_post_html_escapes_title_and_summary(db: Database) -> N
 
 
 async def test_handle_new_post_records_per_user_and_system_usage(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    _seed_channel(db, channel_id=1, title="A")
     db.subscribe(user_id=10, channel_id=1)
     db.subscribe(user_id=20, channel_id=1)
     summarize = AsyncMock(return_value=_summary("Brief.", input_tokens=100, output_tokens=20))
@@ -179,7 +196,7 @@ async def test_handle_new_post_records_per_user_and_system_usage(db: Database) -
 async def test_handle_new_post_records_provider_from_summary(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    _seed_channel(db, channel_id=1, title="A")
     db.subscribe(user_id=10, channel_id=1)
     summarize = AsyncMock(return_value=_summary(
         "Brief.", input_tokens=100, output_tokens=20, provider="remote",
@@ -203,7 +220,7 @@ async def test_handle_new_post_filter_uses_relevance_provider(
 ) -> None:
     """Filter check tokens land under the provider on the RelevanceCheck —
     even when a separate fallback summarize provider would differ."""
-    db.upsert_channel(channel_id=1, title="A")
+    _seed_channel(db, channel_id=1, title="A")
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
     db.subscribe(user_id=10, channel_id=1)
@@ -233,7 +250,7 @@ async def test_handle_new_post_filter_uses_relevance_provider(
 
 
 async def test_handle_new_post_is_idempotent_per_message(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    _seed_channel(db, channel_id=1, title="A")
     db.subscribe(user_id=10, channel_id=1)
     summarize = AsyncMock(return_value=_summary("Brief."))
     is_rel = AsyncMock()
@@ -277,7 +294,7 @@ async def test_handle_new_post_silent_when_channel_blacklisted(db: Database) -> 
 # ---------- per-user filter ----------
 
 async def test_handle_new_post_filters_out_user_when_irrelevant(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    _seed_channel(db, channel_id=1, title="A")
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
     db.subscribe(user_id=10, channel_id=1)
@@ -299,7 +316,7 @@ async def test_handle_new_post_filters_out_user_when_irrelevant(db: Database) ->
 
 
 async def test_handle_new_post_filters_in_user_when_relevant(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="Channel A")
+    _seed_channel(db, channel_id=1, title="Channel A")
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
     db.subscribe(user_id=10, channel_id=1)
@@ -323,7 +340,7 @@ async def test_handle_new_post_filters_in_user_when_relevant(db: Database) -> No
 async def test_handle_new_post_summarises_once_when_at_least_one_user_passes(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    _seed_channel(db, channel_id=1, title="A")
     db.add_pending_user(user_id=10, username="alice")
     db.add_pending_user(user_id=20, username="bob")
     db.set_user_status(user_id=10, status="approved")
@@ -375,7 +392,7 @@ async def test_handle_new_post_skips_summary_when_no_user_passes(db: Database) -
 
 
 async def test_handle_new_post_charges_filter_tokens_to_user_and_system(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    _seed_channel(db, channel_id=1, title="A")
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
     db.subscribe(user_id=10, channel_id=1)
@@ -396,7 +413,7 @@ async def test_handle_new_post_charges_filter_tokens_to_user_and_system(db: Data
 
 
 async def test_handle_new_post_mode_all_skips_filter_check(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="Channel A")
+    _seed_channel(db, channel_id=1, title="Channel A")
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
@@ -419,7 +436,7 @@ async def test_handle_new_post_mode_all_skips_filter_check(db: Database) -> None
 
 
 async def test_handle_new_post_mixes_modes_per_user(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="Channel A")
+    _seed_channel(db, channel_id=1, title="Channel A")
     db.add_pending_user(user_id=10, username="alice")
     db.add_pending_user(user_id=20, username="bob")
     db.set_user_status(user_id=10, status="approved")
@@ -444,7 +461,7 @@ async def test_handle_new_post_mixes_modes_per_user(db: Database) -> None:
 
 
 async def test_handle_new_post_debug_mode_relevant_no_marker(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="Channel A")
+    _seed_channel(db, channel_id=1, title="Channel A")
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.DEBUG)
@@ -466,7 +483,7 @@ async def test_handle_new_post_debug_mode_relevant_no_marker(db: Database) -> No
 
 
 async def test_handle_new_post_debug_mode_irrelevant_marks_filtered(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="Channel A")
+    _seed_channel(db, channel_id=1, title="Channel A")
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.DEBUG)
@@ -491,7 +508,7 @@ async def test_handle_new_post_debug_mode_irrelevant_marks_filtered(db: Database
 
 
 async def test_handle_new_post_debug_mode_no_filter_no_marker(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="Channel A")
+    _seed_channel(db, channel_id=1, title="Channel A")
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.DEBUG)
@@ -512,7 +529,7 @@ async def test_handle_new_post_debug_mode_no_filter_no_marker(db: Database) -> N
 
 
 async def test_handle_new_post_debug_marker_uses_user_language(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="Channel A")
+    _seed_channel(db, channel_id=1, title="Channel A")
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
     db.set_language(user_id=10, language="ru")
@@ -536,7 +553,7 @@ async def test_handle_new_post_debug_marker_uses_user_language(db: Database) -> 
 async def test_handle_new_post_debug_charges_filter_tokens_when_excluded(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    _seed_channel(db, channel_id=1, title="A")
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.DEBUG)
@@ -557,7 +574,7 @@ async def test_handle_new_post_debug_charges_filter_tokens_when_excluded(
 
 
 async def test_handle_new_post_debug_mixed_with_filtered_recipient(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="Channel A")
+    _seed_channel(db, channel_id=1, title="Channel A")
     db.add_pending_user(user_id=10, username="alice")
     db.add_pending_user(user_id=20, username="bob")
     db.set_user_status(user_id=10, status="approved")
@@ -587,7 +604,7 @@ async def test_handle_new_post_debug_mixed_with_filtered_recipient(db: Database)
 async def test_handle_new_post_filter_tokens_recorded_even_when_user_excluded(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    _seed_channel(db, channel_id=1, title="A")
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
     db.subscribe(user_id=10, channel_id=1)
@@ -609,12 +626,6 @@ async def test_handle_new_post_filter_tokens_recorded_even_when_user_excluded(
 
 
 # ---------- refresh_channels ----------
-
-
-def _seed_provider(db: Database, provider_id: int) -> None:
-    db.set_user_status(user_id=provider_id, status="approved")
-    db.add_pending_provider(user_id=provider_id, session_path=f"p{provider_id}.session")
-    db.set_provider_status(user_id=provider_id, status="approved")
 
 
 def _make_fetch_for(by_provider: dict[int, list[tuple[int, str, str, str | None]]]):
@@ -887,7 +898,7 @@ async def test_prune_orphan_channels_noop_when_all_have_providers(
 async def test_handle_new_post_records_delivered_and_embedding_on_first_send(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="Channel A")
+    _seed_channel(db, channel_id=1, title="Channel A")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     summarize = AsyncMock(return_value=_summary("Brief."))
     is_rel = AsyncMock()
@@ -915,8 +926,8 @@ async def test_handle_new_post_records_delivered_and_embedding_on_first_send(
 
 
 async def test_handle_new_post_dedup_edits_existing_on_duplicate(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="Channel A")
-    db.upsert_channel(channel_id=2, title="Channel B")
+    _seed_channel(db, channel_id=1, title="Channel A")
+    _seed_channel(db, channel_id=2, title="Channel B")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     db.subscribe(user_id=10, channel_id=2, mode=SubscriptionMode.ALL)
     db.store_post_embedding(
@@ -955,8 +966,8 @@ async def test_handle_new_post_dedup_edits_existing_on_duplicate(db: Database) -
 
 
 async def test_handle_new_post_no_dedup_below_threshold(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="A")
-    db.upsert_channel(channel_id=2, title="B")
+    _seed_channel(db, channel_id=1, title="A")
+    _seed_channel(db, channel_id=2, title="B")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     db.subscribe(user_id=10, channel_id=2, mode=SubscriptionMode.ALL)
     db.store_post_embedding(
@@ -985,8 +996,8 @@ async def test_handle_new_post_no_dedup_below_threshold(db: Database) -> None:
 
 
 async def test_handle_new_post_dedup_per_user(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="A")
-    db.upsert_channel(channel_id=2, title="B")
+    _seed_channel(db, channel_id=1, title="A")
+    _seed_channel(db, channel_id=2, title="B")
     db.subscribe(user_id=10, channel_id=2, mode=SubscriptionMode.ALL)
     db.subscribe(user_id=20, channel_id=2, mode=SubscriptionMode.ALL)
     db.store_post_embedding(
@@ -1021,8 +1032,8 @@ async def test_handle_new_post_dedup_per_user(db: Database) -> None:
 async def test_handle_new_post_dedup_debug_marks_duplicate_with_marker(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="Channel A")
-    db.upsert_channel(channel_id=2, title="Channel B")
+    _seed_channel(db, channel_id=1, title="Channel A")
+    _seed_channel(db, channel_id=2, title="Channel B")
     db.subscribe(user_id=10, channel_id=2, mode=SubscriptionMode.ALL)
     db.set_dedup_debug(user_id=10, enabled=True)
     db.store_post_embedding(
@@ -1060,8 +1071,8 @@ async def test_handle_new_post_dedup_debug_marks_duplicate_with_marker(
 async def test_handle_new_post_dedup_debug_marker_and_original_link_localized(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="Канал А")
-    db.upsert_channel(channel_id=2, title="B")
+    _seed_channel(db, channel_id=1, title="Канал А")
+    _seed_channel(db, channel_id=2, title="B")
     db.add_pending_user(user_id=10, username="alice")
     db.set_user_status(user_id=10, status="approved")
     db.set_language(user_id=10, language="ru")
@@ -1096,7 +1107,7 @@ async def test_handle_new_post_dedup_debug_marker_and_original_link_localized(
 async def test_handle_new_post_appends_settings_link_when_deeplink_set(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=42, title="Channel A")
+    _seed_channel(db, channel_id=42, title="Channel A")
     db.subscribe(user_id=10, channel_id=42, mode=SubscriptionMode.ALL)
     summarize = AsyncMock(return_value=_summary("Brief."))
     is_rel = AsyncMock()
@@ -1121,7 +1132,7 @@ async def test_handle_new_post_appends_settings_link_when_deeplink_set(
 async def test_handle_new_post_settings_link_handles_negative_id_and_query(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=-1001234567890, title="Big Channel")
+    _seed_channel(db, channel_id=-1001234567890, title="Big Channel")
     db.subscribe(user_id=10, channel_id=-1001234567890, mode=SubscriptionMode.ALL)
     summarize = AsyncMock(return_value=_summary("Brief."))
     is_rel = AsyncMock()
@@ -1145,7 +1156,7 @@ async def test_handle_new_post_settings_link_handles_negative_id_and_query(
 async def test_handle_new_post_no_settings_link_when_deeplink_unset(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=42, title="Channel A")
+    _seed_channel(db, channel_id=42, title="Channel A")
     db.subscribe(user_id=10, channel_id=42, mode=SubscriptionMode.ALL)
     summarize = AsyncMock(return_value=_summary("Brief."))
     is_rel = AsyncMock()
@@ -1166,8 +1177,8 @@ async def test_handle_new_post_no_settings_link_when_deeplink_unset(
 async def test_handle_new_post_settings_link_in_dedup_debug_path(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="Channel A")
-    db.upsert_channel(channel_id=2, title="Channel B")
+    _seed_channel(db, channel_id=1, title="Channel A")
+    _seed_channel(db, channel_id=2, title="Channel B")
     db.subscribe(user_id=10, channel_id=2, mode=SubscriptionMode.ALL)
     db.set_dedup_debug(user_id=10, enabled=True)
     db.store_post_embedding(
@@ -1204,8 +1215,8 @@ async def test_handle_new_post_filter_debug_without_dedup_debug_chains(
     """`mode='debug'` alone (filter-debug) keeps the silent edit-chain path
     on duplicates — only the user-level dedup_debug toggle promotes them
     to a fresh DM."""
-    db.upsert_channel(channel_id=1, title="A")
-    db.upsert_channel(channel_id=2, title="B")
+    _seed_channel(db, channel_id=1, title="A")
+    _seed_channel(db, channel_id=2, title="B")
     db.subscribe(user_id=10, channel_id=2, mode=SubscriptionMode.DEBUG)
     db.store_post_embedding(
         channel_id=1, message_id=100, embedding=[1.0, 0.0],
@@ -1233,8 +1244,8 @@ async def test_handle_new_post_filter_debug_without_dedup_debug_chains(
 
 
 async def test_handle_new_post_dedup_outside_window_treated_as_new(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="A")
-    db.upsert_channel(channel_id=2, title="B")
+    _seed_channel(db, channel_id=1, title="A")
+    _seed_channel(db, channel_id=2, title="B")
     db.subscribe(user_id=10, channel_id=2, mode=SubscriptionMode.ALL)
     db.store_post_embedding(
         channel_id=1, message_id=100, embedding=[1.0, 0.0],
@@ -1265,7 +1276,7 @@ async def test_handle_new_post_dedup_outside_window_treated_as_new(db: Database)
 async def test_handle_new_post_embeds_only_once_for_multiple_recipients(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    _seed_channel(db, channel_id=1, title="A")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     db.subscribe(user_id=20, channel_id=1, mode=SubscriptionMode.ALL)
     summarize = AsyncMock(return_value=_summary("Brief."))
@@ -1286,8 +1297,8 @@ async def test_handle_new_post_embeds_only_once_for_multiple_recipients(
 
 
 async def test_handle_new_post_dedup_edit_targets_existing_message(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="A")
-    db.upsert_channel(channel_id=2, title="Channel B")
+    _seed_channel(db, channel_id=1, title="A")
+    _seed_channel(db, channel_id=2, title="Channel B")
     db.subscribe(user_id=10, channel_id=2, mode=SubscriptionMode.ALL)
     db.store_post_embedding(
         channel_id=1, message_id=100, embedding=[1.0, 0.0],
@@ -1317,9 +1328,9 @@ async def test_handle_new_post_dedup_edit_targets_existing_message(db: Database)
 async def test_handle_new_post_dedup_accumulates_links_for_chained_dups(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="A")
-    db.upsert_channel(channel_id=2, title="B")
-    db.upsert_channel(channel_id=3, title="C")
+    _seed_channel(db, channel_id=1, title="A")
+    _seed_channel(db, channel_id=2, title="B")
+    _seed_channel(db, channel_id=3, title="C")
     db.subscribe(user_id=10, channel_id=2, mode=SubscriptionMode.ALL)
     db.subscribe(user_id=10, channel_id=3, mode=SubscriptionMode.ALL)
     db.store_post_embedding(
@@ -1359,7 +1370,7 @@ async def test_handle_new_post_dedup_accumulates_links_for_chained_dups(
 async def test_handle_new_post_dedup_charges_embedding_tokens_to_system(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    _seed_channel(db, channel_id=1, title="A")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     summarize = AsyncMock(return_value=_summary("Brief."))
     is_rel = AsyncMock()
@@ -1376,7 +1387,7 @@ async def test_handle_new_post_dedup_charges_embedding_tokens_to_system(
 
 
 async def test_handle_new_post_skips_dedup_when_embed_fn_is_none(db: Database) -> None:
-    db.upsert_channel(channel_id=1, title="Channel A")
+    _seed_channel(db, channel_id=1, title="Channel A")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     summarize = AsyncMock(return_value=_summary("Brief."))
     is_rel = AsyncMock()
@@ -1397,8 +1408,8 @@ async def test_handle_new_post_skips_dedup_when_embed_fn_is_none(db: Database) -
 async def test_handle_new_post_no_embed_fn_does_not_dedup_against_history(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="A")
-    db.upsert_channel(channel_id=2, title="B")
+    _seed_channel(db, channel_id=1, title="A")
+    _seed_channel(db, channel_id=2, title="B")
     db.subscribe(user_id=10, channel_id=2, mode=SubscriptionMode.ALL)
     db.store_post_embedding(
         channel_id=1, message_id=100, embedding=[1.0, 0.0],
@@ -1430,7 +1441,7 @@ async def test_handle_new_post_no_embed_fn_does_not_dedup_against_history(
 async def test_handle_new_post_no_save_button_when_auto_delete_off(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    _seed_channel(db, channel_id=1, title="A")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     summarize = AsyncMock(return_value=_summary("Brief."))
     is_rel = AsyncMock()
@@ -1451,7 +1462,7 @@ async def test_handle_new_post_no_save_button_when_auto_delete_off(
 async def test_handle_new_post_attaches_save_button_and_delete_at(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    _seed_channel(db, channel_id=1, title="A")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     db.set_user_auto_delete_hours(10, 6)
     summarize = AsyncMock(return_value=_summary("Brief."))
@@ -1474,7 +1485,7 @@ async def test_handle_new_post_attaches_save_button_and_delete_at(
 async def test_handle_new_post_records_delivered_when_dedup_disabled(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="A")
+    _seed_channel(db, channel_id=1, title="A")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     db.set_user_auto_delete_hours(10, 6)
     summarize = AsyncMock(return_value=_summary("Brief."))
@@ -1495,8 +1506,8 @@ async def test_handle_new_post_records_delivered_when_dedup_disabled(
 async def test_handle_new_post_dup_chain_extends_delete_at(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="A")
-    db.upsert_channel(channel_id=2, title="B")
+    _seed_channel(db, channel_id=1, title="A")
+    _seed_channel(db, channel_id=2, title="B")
     db.subscribe(user_id=10, channel_id=2, mode=SubscriptionMode.ALL)
     db.set_user_auto_delete_hours(10, 6)
     db.store_post_embedding(
@@ -1531,8 +1542,8 @@ async def test_handle_new_post_dup_chain_extends_delete_at(
 async def test_handle_new_post_dup_chain_skips_extension_when_saved(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="A")
-    db.upsert_channel(channel_id=2, title="B")
+    _seed_channel(db, channel_id=1, title="A")
+    _seed_channel(db, channel_id=2, title="B")
     db.subscribe(user_id=10, channel_id=2, mode=SubscriptionMode.ALL)
     db.set_user_auto_delete_hours(10, 6)
     db.store_post_embedding(
@@ -1571,7 +1582,7 @@ async def test_handle_new_post_dup_chain_skips_extension_when_saved(
 async def test_handle_new_post_embed_failure_delivers_without_dedup(
     db: Database,
 ) -> None:
-    db.upsert_channel(channel_id=1, title="Channel A")
+    _seed_channel(db, channel_id=1, title="Channel A")
     db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
     summarize = AsyncMock(return_value=_summary("Brief."))
     is_rel = AsyncMock()
