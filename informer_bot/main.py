@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 from openai import AsyncOpenAI
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, WebAppInfo
+from telegram.error import BadRequest
 from telegram.ext import (
     AIORateLimiter,
     Application,
@@ -288,6 +289,26 @@ async def sweep_due_deletions(app: Application, db: Database) -> None:
                     log.info(
                         "auto-delete: removed user=%s msg=%s", user_id, bot_msg_id,
                     )
+                except BadRequest as exc:
+                    text = str(exc).lower()
+                    if "message to delete not found" in text:
+                        log.info(
+                            "auto-delete: message already gone (user-deleted) "
+                            "user=%s msg=%s — dropping row",
+                            user_id, bot_msg_id,
+                        )
+                    elif "message can't be deleted for everyone" in text:
+                        log.info(
+                            "auto-delete: message too old to delete "
+                            "user=%s msg=%s — dropping row",
+                            user_id, bot_msg_id,
+                        )
+                    else:
+                        log.warning(
+                            "auto-delete: telegram delete failed user=%s msg=%s: %s",
+                            user_id, bot_msg_id, exc,
+                        )
+                        continue
                 except Exception as exc:
                     log.warning(
                         "auto-delete: telegram delete failed user=%s msg=%s: %s",

@@ -690,6 +690,116 @@ async def test_sweep_due_keeps_row_when_telegram_delete_fails(
     ) is not None
 
 
+async def test_sweep_due_drops_row_when_message_already_gone(
+    db: Database, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    import asyncio
+    import logging as _logging
+    from telegram.error import BadRequest
+    from informer_bot.main import sweep_due_deletions
+
+    db.record_delivered(
+        user_id=USER_ID, channel_id=1, message_id=300, bot_message_id=20,
+        is_photo=False, body="b", now=1, delete_at=1,
+    )
+
+    bot = SimpleNamespace(
+        delete_message=AsyncMock(side_effect=BadRequest("Message to delete not found")),
+    )
+    app = SimpleNamespace(bot=bot)
+
+    async def fake_sleep(_: float) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("informer_bot.main.asyncio.sleep", fake_sleep)
+    caplog.set_level(_logging.INFO, logger="informer_bot.main")
+    with pytest.raises(asyncio.CancelledError):
+        await sweep_due_deletions(app, db)
+
+    assert db.get_delivered_save_state(
+        user_id=USER_ID, channel_id=1, message_id=300,
+    ) is None
+    info_msgs = [
+        r.getMessage() for r in caplog.records
+        if r.levelno == _logging.INFO and "auto-delete" in r.getMessage()
+    ]
+    assert any("already gone" in m for m in info_msgs), info_msgs
+
+
+async def test_sweep_due_drops_row_when_message_too_old(
+    db: Database, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    import asyncio
+    import logging as _logging
+    from telegram.error import BadRequest
+    from informer_bot.main import sweep_due_deletions
+
+    db.record_delivered(
+        user_id=USER_ID, channel_id=1, message_id=301, bot_message_id=21,
+        is_photo=False, body="b", now=1, delete_at=1,
+    )
+
+    bot = SimpleNamespace(
+        delete_message=AsyncMock(
+            side_effect=BadRequest("Message can't be deleted for everyone"),
+        ),
+    )
+    app = SimpleNamespace(bot=bot)
+
+    async def fake_sleep(_: float) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("informer_bot.main.asyncio.sleep", fake_sleep)
+    caplog.set_level(_logging.INFO, logger="informer_bot.main")
+    with pytest.raises(asyncio.CancelledError):
+        await sweep_due_deletions(app, db)
+
+    assert db.get_delivered_save_state(
+        user_id=USER_ID, channel_id=1, message_id=301,
+    ) is None
+    info_msgs = [
+        r.getMessage() for r in caplog.records
+        if r.levelno == _logging.INFO and "auto-delete" in r.getMessage()
+    ]
+    assert any("too old" in m for m in info_msgs), info_msgs
+
+
+async def test_sweep_due_keeps_row_on_other_badrequest(
+    db: Database, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    import asyncio
+    import logging as _logging
+    from telegram.error import BadRequest
+    from informer_bot.main import sweep_due_deletions
+
+    db.record_delivered(
+        user_id=USER_ID, channel_id=1, message_id=302, bot_message_id=22,
+        is_photo=False, body="b", now=1, delete_at=1,
+    )
+
+    bot = SimpleNamespace(
+        delete_message=AsyncMock(side_effect=BadRequest("Some other failure")),
+    )
+    app = SimpleNamespace(bot=bot)
+
+    async def fake_sleep(_: float) -> None:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr("informer_bot.main.asyncio.sleep", fake_sleep)
+    caplog.set_level(_logging.WARNING, logger="informer_bot.main")
+    with pytest.raises(asyncio.CancelledError):
+        await sweep_due_deletions(app, db)
+
+    assert db.get_delivered_save_state(
+        user_id=USER_ID, channel_id=1, message_id=302,
+    ) is not None
+    warns = [
+        r.getMessage() for r in caplog.records
+        if r.levelno == _logging.WARNING and "auto-delete" in r.getMessage()
+    ]
+    assert warns
+
+
 # ---------- /become_provider ----------
 
 async def test_become_provider_blocks_non_approved_user(db: Database) -> None:

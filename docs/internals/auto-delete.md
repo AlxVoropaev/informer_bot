@@ -20,7 +20,12 @@ Opt-in per user via the Mini App settings (⚙️ icon in the top bar). Range
   posts land as fresh DMs (no stale chain).
 - **Sweeper:** `informer_bot.main.sweep_due_deletions` runs as an asyncio
   task on the same loop, ticking every 60s. Each tick calls
-  `db.list_due_deletions(now)`, issues `bot.delete_message` for each row
-  (failures are logged at WARNING — usually means the user already deleted
-  it), and then drops the row from `delivered`. The task is started in
-  `main.main()` and cancelled in `graceful_shutdown`.
+  `db.list_due_deletions(now)`, issues `bot.delete_message` for each row,
+  and then drops the row from `delivered`. Failure handling: when Telegram
+  raises `BadRequest("Message to delete not found")` (user already wiped
+  the DM) or `BadRequest("Message can't be deleted for everyone")` (older
+  than 48h, bots can't touch it), the goal is already met / unreachable —
+  log at INFO and drop the row. Other failures (transient: rate limit,
+  network, 5xx) log at WARNING and keep the row so the next tick retries.
+  The task is started in `main.main()` and cancelled in
+  `graceful_shutdown`.

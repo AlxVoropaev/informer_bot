@@ -178,6 +178,25 @@ sweeps retry on the next 60 s tick.
 **Evidence:** `73c2dc1` (fix(main): keep delivered row when Telegram delete
 fails).
 
+### Permanent-delete-failures must still drop the row
+
+**Symptom:** user wipes their DM history with the bot, or a row's
+`delete_at` is older than 48 h. Telegram answers `BadRequest("Message to
+delete not found")` / `BadRequest("Message can't be deleted for everyone")`
+on every sweep. The previous fix (keep row on any failure) re-logs the same
+WARNINGs forever — once per minute, per row.
+**Why:** the keep-on-failure rule is correct for *transient* failures but
+not for terminal ones where the goal (message gone) is already met or is
+unreachable.
+**How to avoid:** in `sweep_due_deletions`, catch `telegram.error.BadRequest`
+separately. If `str(exc).lower()` contains
+`"message to delete not found"` or `"message can't be deleted for everyone"`,
+log INFO and drop the row. Any other `BadRequest`, or any non-`BadRequest`
+exception, keeps the existing WARNING + `continue` (retry next tick). Match
+via lowercased `in` substring, not equality — Telegram's exact strings drift.
+**Evidence:** `<this commit>` (fix(auto-delete): drop delivered row when
+telegram says message is gone).
+
 ## Mini App / webapp
 
 ### One SQLite connection, three async writers — serialize at the Python layer
