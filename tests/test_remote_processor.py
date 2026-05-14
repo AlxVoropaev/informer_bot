@@ -377,6 +377,61 @@ async def test_health_loop_ping_success_keeps_healthy() -> None:
     assert app_mock.bot.send_document.await_count >= 1
 
 
+async def test_ping_success_populates_last_models(
+    remote: tuple[RemoteProcessorClient, SimpleNamespace],
+) -> None:
+    from shared.protocol import PingReply
+
+    rp, app_mock = remote
+    rp.start()
+
+    assert rp.last_chat_model is None
+    assert rp.last_embed_model is None
+
+    async def replier() -> None:
+        await asyncio.sleep(0.01)
+        body = await _request_payload(app_mock)
+        req = json.loads(body)
+        reply = encode_reply(PingReply(
+            id=req["id"], chat_model="qwen2.5:7b",
+            embed_model="qwen3-embedding:4b",
+        ))
+        await _fire_reply(rp, app_mock, reply)
+
+    asyncio.create_task(replier())
+    await rp.ping()
+
+    assert rp.last_chat_model == "qwen2.5:7b"
+    assert rp.last_embed_model == "qwen3-embedding:4b"
+
+
+async def test_ping_with_empty_models_preserves_existing(
+    remote: tuple[RemoteProcessorClient, SimpleNamespace],
+) -> None:
+    # Backward-compat: an old processor that hasn't been redeployed returns a
+    # PingReply with empty defaults. Already-known model names must not be
+    # clobbered.
+    from shared.protocol import PingReply
+
+    rp, app_mock = remote
+    rp.start()
+    rp._last_chat_model = "prev-chat"
+    rp._last_embed_model = "prev-embed"
+
+    async def replier() -> None:
+        await asyncio.sleep(0.01)
+        body = await _request_payload(app_mock)
+        req = json.loads(body)
+        reply = encode_reply(PingReply(id=req["id"]))
+        await _fire_reply(rp, app_mock, reply)
+
+    asyncio.create_task(replier())
+    await rp.ping()
+
+    assert rp.last_chat_model == "prev-chat"
+    assert rp.last_embed_model == "prev-embed"
+
+
 async def test_health_loop_ping_failure_flips_state() -> None:
     app_mock = _make_app_mock()
     rp = RemoteProcessorClient(

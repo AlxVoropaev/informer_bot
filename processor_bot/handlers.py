@@ -28,7 +28,9 @@ async def handle_request(
 ) -> Reply:
     match req:
         case PingRequest():
-            return PingReply(id=req.id)
+            return PingReply(
+                id=req.id, chat_model=chat_model, embed_model=embedding_model,
+            )
         case SummarizeRequest():
             result = await summarize_ollama(
                 req.text, client=client, model=chat_model,

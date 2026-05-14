@@ -92,6 +92,8 @@ class EmbedReply:
 @dataclass(frozen=True)
 class PingReply:
     id: str
+    chat_model: str = ""
+    embed_model: str = ""
 
 
 @dataclass(frozen=True)

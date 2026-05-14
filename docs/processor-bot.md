@@ -93,6 +93,7 @@ quote-replying to the request):
 {"id": "<uuid>", "ok": true,  "text": "...", "input_tokens": N, "output_tokens": N}
 {"id": "<uuid>", "ok": true,  "relevant": true|false, "input_tokens": N, "output_tokens": N}
 {"id": "<uuid>", "ok": true,  "vector": [...], "tokens": N, "model": "qwen3-embedding:4b"}
+{"id": "<uuid>", "ok": true,  "chat_model": "qwen2.5:7b", "embed_model": "qwen3-embedding:4b"}
 {"id": "<uuid>", "ok": false, "error": "..."}
 ```
 

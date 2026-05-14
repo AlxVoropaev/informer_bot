@@ -309,6 +309,26 @@ captions).
 **Evidence:** `bcc1d82` (fix(bus): send from bot account and use JSON file
 attachments).
 
+### Ping health and last-seen models are independent state — refresh them together
+
+**Symptom:** the remote processor recovers from being unhealthy, the owner
+gets the "✅ Processor recovered, back on local models." DM, but the Mini
+App provider UI still shows `Model: Remote — (no reply yet)` for both chat
+and embedding.
+**Why:** `_healthy` is flipped by `run_health_check_loop()` on a successful
+`ping()`, but `_last_chat_model` / `_last_embed_model` were only populated
+from `SummarizeReply.model` / `EmbedReply.model` inside `summarize()` /
+`embed()`. A successful ping after a cold start (or after recovery, before
+the next real call) left both `None`, and the `/state` endpoint rendered
+"(no reply yet)" while the bot was already on local models.
+**How to avoid:** `PingReply` carries `chat_model` and `embed_model` so a
+successful ping is a complete state refresh. When adding any new piece of
+UI state derived from the remote, decide whether it should update on ping
+too — otherwise the binary `_healthy` and the "last work-reply" fields can
+diverge for the entire time between recovery and the next real call.
+**Evidence:** `<this commit>` (fix(remote): include chat/embed model names
+in PingReply so UI stays in sync with health state).
+
 ### `shared/` must be in the Dockerfile
 
 **Symptom:** bot image boots, then immediately crashes on

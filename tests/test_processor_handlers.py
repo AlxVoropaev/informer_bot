@@ -40,6 +40,8 @@ async def test_ping_returns_ping_reply_with_same_id() -> None:
 
     assert isinstance(reply, PingReply)
     assert reply.id == req.id
+    assert reply.chat_model == "m"
+    assert reply.embed_model == "e"
 
 
 async def test_summarize_returns_summarize_reply() -> None:

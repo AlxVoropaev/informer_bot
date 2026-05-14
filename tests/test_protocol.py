@@ -109,6 +109,25 @@ def test_ping_reply_roundtrip() -> None:
     assert got == reply
 
 
+def test_ping_reply_with_models_roundtrip() -> None:
+    reply = PingReply(
+        id="x", chat_model="qwen2.5:7b", embed_model="qwen3-embedding:4b",
+    )
+    got = decode_reply(encode_reply(reply), Op.ping)
+    assert got == reply
+    assert isinstance(got, PingReply)
+    assert got.chat_model == "qwen2.5:7b"
+    assert got.embed_model == "qwen3-embedding:4b"
+
+
+def test_ping_reply_decodes_legacy_payload_without_models() -> None:
+    legacy = '{"id":"x","ok":true}'
+    got = decode_reply(legacy, Op.ping)
+    assert isinstance(got, PingReply)
+    assert got.chat_model == ""
+    assert got.embed_model == ""
+
+
 def test_error_reply_roundtrip_any_op() -> None:
     err = ErrorReply(id="x", error="boom")
     encoded = encode_reply(err)

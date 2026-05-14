@@ -271,6 +271,10 @@ class RemoteProcessorClient:
             raise RemoteProcessorError(
                 f"unexpected reply type for ping: {type(reply).__name__}"
             )
+        if reply.chat_model:
+            self._last_chat_model = reply.chat_model
+        if reply.embed_model:
+            self._last_embed_model = reply.embed_model
 
     async def _send_and_wait(self, req: Request, op: Op) -> Reply:
         loop = asyncio.get_running_loop()
