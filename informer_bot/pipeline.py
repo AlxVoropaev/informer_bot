@@ -182,12 +182,48 @@ async def handle_new_post(
         output_tokens=summary.output_tokens,
     )
     if not summary.text.strip():
+        if not summary.truncated:
+            log.warning(
+                "skip post %s/%s: empty summary (provider=%s in=%d out=%d) — "
+                "model produced no text",
+                channel_id, message_id, summary.provider,
+                summary.input_tokens, summary.output_tokens,
+            )
+            return
         log.warning(
-            "skip post %s/%s: empty summary (provider=%s in=%d out=%d) — "
-            "model produced no text",
+            "post %s/%s: empty truncated summary (provider=%s in=%d out=%d) — "
+            "notifying %d recipient(s)",
             channel_id, message_id, summary.provider,
-            summary.input_tokens, summary.output_tokens,
+            summary.input_tokens, summary.output_tokens, len(recipients),
         )
+        now_ts = int(time.time()) if now is None else now
+        channel_title = db.get_channel_title(channel_id) or ""
+        settings_url = _channel_settings_url(miniapp_tg_deeplink, channel_id)
+        for user_id, _mode, _marked_filter in recipients:
+            lang = db.get_language(user_id)
+            settings_label = (
+                t(lang, "channel_settings_link") if settings_url else None
+            )
+            notice = t(lang, "summary_truncated_notice")
+            body = _format_post(
+                channel_title, notice, link, marker=None,
+                settings_url=settings_url, settings_label=settings_label,
+            )
+            auto_hours = db.get_user_auto_delete_hours(user_id)
+            save_label = t(lang, "save_button") if auto_hours is not None else None
+            send_delete_at = (
+                now_ts + auto_hours * 3600 if auto_hours is not None else None
+            )
+            send_kwargs = (
+                {"save_button": save_label} if save_label is not None else {}
+            )
+            await _send_and_record(
+                db=db, send_dm=send_dm, user_id=user_id,
+                channel_id=channel_id, message_id=message_id,
+                body=body, photo=photo, summary=summary,
+                delete_at=send_delete_at, now_ts=now_ts,
+                send_kwargs=send_kwargs,
+            )
         return
 
     emb: Embedding | None = None
@@ -208,7 +244,12 @@ async def handle_new_post(
 
     for user_id, mode, marked_filter in recipients:
         lang = db.get_language(user_id)
-        marker = t(lang, "debug_filtered_marker") if marked_filter else None
+        markers: list[str] = []
+        if summary.truncated:
+            markers.append(t(lang, "summary_truncated_marker"))
+        if marked_filter:
+            markers.append(t(lang, "debug_filtered_marker"))
+        marker = "\n".join(markers) if markers else None
         settings_label = (
             t(lang, "channel_settings_link") if settings_url else None
         )
@@ -240,7 +281,11 @@ async def handle_new_post(
         dedup_debug = duplicate is not None and db.get_dedup_debug(user_id)
 
         if duplicate is not None and dedup_debug:
-            dup_marker = t(lang, "debug_duplicate_marker")
+            dup_markers: list[str] = []
+            if summary.truncated:
+                dup_markers.append(t(lang, "summary_truncated_marker"))
+            dup_markers.append(t(lang, "debug_duplicate_marker"))
+            dup_marker = "\n".join(dup_markers)
             orig_title = db.get_channel_title(duplicate.channel_id) or ""
             tail_html = _original_link_html(
                 t(lang, "original_label"), orig_title, duplicate.link,

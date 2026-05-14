@@ -63,6 +63,25 @@ async def test_summarize_returns_summarize_reply() -> None:
     assert reply.model == "qwen3.5:4b"
 
 
+async def test_summarize_forwards_truncated_flag() -> None:
+    from informer_bot.summarizer import MAX_TOKENS_OLLAMA
+
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=_fake_chat(
+            "partial", prompt_tokens=10, completion_tokens=MAX_TOKENS_OLLAMA,
+        )
+    )
+    req = SummarizeRequest.new("Some long post")
+
+    reply = await handle_request(
+        req, client=client, chat_model="qwen3.5:4b", embedding_model="e",
+    )
+
+    assert isinstance(reply, SummarizeReply)
+    assert reply.truncated is True
+
+
 async def test_summarize_forwards_system_prompt() -> None:
     client = AsyncMock()
     client.chat.completions.create = AsyncMock(

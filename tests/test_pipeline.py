@@ -19,12 +19,14 @@ def _summary(
     input_tokens: int = 100,
     output_tokens: int = 20,
     provider: str = "anthropic",
+    truncated: bool = False,
 ) -> Summary:
     return Summary(
         text=text,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         provider=provider,
+        truncated=truncated,
     )
 
 
@@ -1601,3 +1603,144 @@ async def test_handle_new_post_embed_failure_delivers_without_dedup(
     edit_dm.assert_not_called()
     assert db.list_dedup_candidates(user_id=10, since=0) == []
     assert db.get_embedding_usage() == []
+
+
+# ---------- summary truncation ----------
+
+async def test_handle_new_post_truncated_empty_dms_notice_to_each_recipient(
+    db: Database,
+) -> None:
+    _seed_channel(db, channel_id=1, title="Channel A")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
+    db.subscribe(user_id=20, channel_id=1, mode=SubscriptionMode.ALL)
+    summarize = AsyncMock(return_value=_summary(
+        text="", input_tokens=184, output_tokens=4000, provider="remote",
+        truncated=True,
+    ))
+    is_rel = AsyncMock()
+    send_dm = _send_dm(message_id=4242)
+    embed_fn = _embed_fn()
+    edit_dm = _edit_dm()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="post body",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+        embed_fn=embed_fn, edit_dm=edit_dm, now=1000,
+    )
+
+    assert send_dm.await_count == 2
+    embed_fn.assert_not_called()
+    edit_dm.assert_not_called()
+    bodies = [call.args[1] for call in send_dm.await_args_list]
+    for body in bodies:
+        assert "Couldn&#x27;t summarize" in body or "Couldn't summarize" in body
+        assert "Channel A" in body
+        assert "https://t.me/a/100" in body
+    # delivered rows recorded for both recipients
+    assert db.get_delivered_save_state(
+        user_id=10, channel_id=1, message_id=100,
+    ) is not None
+    assert db.get_delivered_save_state(
+        user_id=20, channel_id=1, message_id=100,
+    ) is not None
+
+
+async def test_handle_new_post_truncated_empty_notice_localized(
+    db: Database,
+) -> None:
+    _seed_channel(db, channel_id=1, title="Channel A")
+    db.add_pending_user(user_id=10, username="alice")
+    db.set_user_status(user_id=10, status="approved")
+    db.set_language(user_id=10, language="ru")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
+    summarize = AsyncMock(return_value=_summary(
+        text="", output_tokens=4000, truncated=True,
+    ))
+    is_rel = AsyncMock()
+    send_dm = _send_dm()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="post body",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+        embed_fn=_embed_fn(), edit_dm=_edit_dm(),
+    )
+
+    send_dm.assert_awaited_once()
+    body = send_dm.await_args.args[1]
+    assert "лимит токенов" in body
+
+
+async def test_handle_new_post_truncated_nonempty_prepends_marker(
+    db: Database,
+) -> None:
+    _seed_channel(db, channel_id=1, title="Channel A")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
+    summarize = AsyncMock(return_value=_summary(
+        text="Partial brief", output_tokens=4000, truncated=True,
+    ))
+    is_rel = AsyncMock()
+    send_dm = _send_dm()
+    embed_fn = _embed_fn()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="post body",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+        embed_fn=embed_fn, edit_dm=_edit_dm(),
+    )
+
+    embed_fn.assert_awaited_once_with("Partial brief")
+    send_dm.assert_awaited_once()
+    body = send_dm.await_args.args[1]
+    assert body.startswith("⚠️ summary truncated\n")
+    assert "Partial brief" in body
+
+
+async def test_handle_new_post_truncated_marker_composes_with_filtered(
+    db: Database,
+) -> None:
+    _seed_channel(db, channel_id=1, title="Channel A")
+    db.add_pending_user(user_id=10, username="alice")
+    db.set_user_status(user_id=10, status="approved")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.DEBUG)
+    db.set_channel_filter(user_id=10, channel_id=1, filter_prompt="only AI")
+    summarize = AsyncMock(return_value=_summary(
+        text="Partial brief", output_tokens=4000, truncated=True,
+    ))
+    is_rel = AsyncMock(return_value=_relevance(False))
+    send_dm = _send_dm()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="Crypto pump",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+        embed_fn=_embed_fn(), edit_dm=_edit_dm(),
+    )
+
+    send_dm.assert_awaited_once()
+    body = send_dm.await_args.args[1]
+    assert body.startswith("⚠️ summary truncated\n🐞 FILTERED\n")
+    assert "Partial brief" in body
+
+
+async def test_handle_new_post_empty_not_truncated_silently_skips(
+    db: Database,
+) -> None:
+    _seed_channel(db, channel_id=1, title="Channel A")
+    db.subscribe(user_id=10, channel_id=1, mode=SubscriptionMode.ALL)
+    summarize = AsyncMock(return_value=_summary(text="", truncated=False))
+    is_rel = AsyncMock()
+    send_dm = _send_dm()
+    embed_fn = _embed_fn()
+
+    await handle_new_post(
+        channel_id=1, message_id=100, text="post body",
+        link="https://t.me/a/100", db=db, summarize_fn=summarize,
+        is_relevant_fn=is_rel, send_dm=send_dm,
+        embed_fn=embed_fn, edit_dm=_edit_dm(),
+    )
+
+    send_dm.assert_not_called()
+    embed_fn.assert_not_called()

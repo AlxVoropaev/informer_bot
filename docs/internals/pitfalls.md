@@ -102,6 +102,33 @@ Qwen3 specifically, disable thinking via `extra_body={"think": False}`
 with empty summary), `7644a0b` (fix(summarize): use Ollama think=False to
 disable Qwen3 CoT).
 
+### Ollama thinking models can return empty content even with `think:false`
+
+**Symptom:** a single post silently never reaches users; bot logs show
+`empty summary (provider=remote in=N out=4000) — model produced no text`
+with `completion_tokens` pinned at the full `MAX_TOKENS_OLLAMA` cap.
+Observed in production on 2026-05-14 for post `1266112149/2872`
+(@FreakingTeens) under `qwen3.5:4b`.
+**Why:** thinking-class Ollama models (qwen3.5, qwen3) can still burn the
+entire output budget on hidden reasoning even when called with
+`extra_body={"think": False}`. The OpenAI-compatible response then has
+`message.content=""` (or `None`) but `usage.completion_tokens == max_tokens`.
+The naive `if not summary.text: return` path that guarded the dedup index
+(see "Empty-string summaries poison the dedup index" above) silently
+dropped the post.
+**How to avoid:** detect the cap-hit explicitly. `Summary.truncated` is set
+to True whenever the summarizer's completion reached the limit
+(`completion_tokens >= MAX_TOKENS_OLLAMA` for Ollama,
+`response.stop_reason == "max_tokens"` for Anthropic) and propagates
+through `SummarizeReply.truncated`. The pipeline branches on
+`(empty?, truncated?)`: empty+truncated → DM each recipient a localized
+notice with no embedding; non-empty+truncated → deliver with a
+`summary_truncated_marker` prefix; empty+not-truncated keeps the
+original silent-skip. Don't reintroduce a blanket `if not summary.text:
+return` — it loses the truncation signal.
+**Evidence:** `<this commit>` (feat(pipeline): DM users when the
+summarizer hits its token cap).
+
 ### Embedding-space changes silently corrupt dedup
 
 **Symptom:** dedup recall drops to noise after switching embedding provider

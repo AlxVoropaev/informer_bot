@@ -20,6 +20,7 @@ def _fake_response(text: str, input_tokens: int = 12, output_tokens: int = 7) ->
     return SimpleNamespace(
         content=[SimpleNamespace(type="text", text=text)],
         usage=SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens),
+        stop_reason="end_turn",
     )
 
 
@@ -258,6 +259,81 @@ async def test_summarize_ollama_returns_empty_on_none_content() -> None:
     assert result.input_tokens == 15
     assert result.output_tokens == 0
     assert result.provider == "ollama"
+
+
+async def test_summarize_ollama_sets_truncated_when_completion_at_cap() -> None:
+    from informer_bot.summarizer import MAX_TOKENS_OLLAMA, summarize_ollama
+
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=_fake_chat_response(
+            "partial brief", prompt_tokens=12, completion_tokens=MAX_TOKENS_OLLAMA,
+        )
+    )
+
+    result = await summarize_ollama("Body", client=client, model="m")
+
+    assert result.truncated is True
+    assert result.text == "partial brief"
+
+
+async def test_summarize_ollama_sets_truncated_when_empty_content_at_cap() -> None:
+    from informer_bot.summarizer import MAX_TOKENS_OLLAMA, summarize_ollama
+
+    client = AsyncMock()
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=None))],
+        usage=SimpleNamespace(
+            prompt_tokens=15, completion_tokens=MAX_TOKENS_OLLAMA,
+        ),
+    )
+    client.chat.completions.create = AsyncMock(return_value=response)
+
+    result = await summarize_ollama("Body", client=client, model="m")
+
+    assert result.text == ""
+    assert result.truncated is True
+
+
+async def test_summarize_ollama_not_truncated_below_cap() -> None:
+    from informer_bot.summarizer import summarize_ollama
+
+    client = AsyncMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=_fake_chat_response("brief", prompt_tokens=12, completion_tokens=3)
+    )
+
+    result = await summarize_ollama("Body", client=client, model="m")
+
+    assert result.truncated is False
+
+
+async def test_summarize_anthropic_truncated_on_max_tokens_stop_reason(
+    fake_client: AsyncMock,
+) -> None:
+    fake_client.messages.create.return_value = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="partial")],
+        usage=SimpleNamespace(input_tokens=5, output_tokens=256),
+        stop_reason="max_tokens",
+    )
+
+    result = await summarize("Body", client=fake_client)
+
+    assert result.truncated is True
+
+
+async def test_summarize_anthropic_not_truncated_on_end_turn(
+    fake_client: AsyncMock,
+) -> None:
+    fake_client.messages.create.return_value = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="brief")],
+        usage=SimpleNamespace(input_tokens=5, output_tokens=4),
+        stop_reason="end_turn",
+    )
+
+    result = await summarize("Body", client=fake_client)
+
+    assert result.truncated is False
 
 
 async def test_summarize_ollama_handles_none_usage() -> None:

@@ -47,6 +47,7 @@ class Summary:
     input_tokens: int
     output_tokens: int
     provider: str
+    truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,7 @@ async def summarize(
         input_tokens=response.usage.input_tokens,
         output_tokens=response.usage.output_tokens,
         provider="anthropic",
+        truncated=response.stop_reason == "max_tokens",
     )
 
 
@@ -179,6 +181,7 @@ async def summarize_ollama(
     usage = response.usage
     prompt_tokens = usage.prompt_tokens if usage is not None else 0
     completion_tokens = usage.completion_tokens if usage is not None else 0
+    truncated = completion_tokens >= MAX_TOKENS_OLLAMA
     if content is None:
         log.warning(
             "summarize_ollama: model returned no content (in=%d out=%d)",
@@ -189,6 +192,7 @@ async def summarize_ollama(
             input_tokens=prompt_tokens,
             output_tokens=completion_tokens,
             provider="ollama",
+            truncated=truncated,
         )
     summary = content.strip()
     log.debug(
@@ -200,6 +204,7 @@ async def summarize_ollama(
         input_tokens=prompt_tokens,
         output_tokens=completion_tokens,
         provider="ollama",
+        truncated=truncated,
     )
 
 

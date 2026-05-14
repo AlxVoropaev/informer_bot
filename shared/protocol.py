@@ -71,6 +71,7 @@ class SummarizeReply:
     input_tokens: int
     output_tokens: int
     model: str = ""
+    truncated: bool = False
 
 
 @dataclass(frozen=True)

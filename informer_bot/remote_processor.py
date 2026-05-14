@@ -219,6 +219,7 @@ class RemoteProcessorClient:
             input_tokens=reply.input_tokens,
             output_tokens=reply.output_tokens,
             provider="remote",
+            truncated=reply.truncated,
         )
 
     async def is_relevant(self, text: str, filter_prompt: str) -> RelevanceCheck:
