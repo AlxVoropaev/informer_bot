@@ -17,9 +17,12 @@ SYSTEM_PROMPT = (
     "No preamble, no quotes, no markdown — just the summary."
 )
 FILTER_SYSTEM_PROMPT = (
-    "You are a relevance classifier. Given a user's interest description and a "
-    "Telegram post, decide whether the post is relevant to the user. "
-    "Reply with exactly one token: YES or NO. No punctuation, no explanation."
+    "You are a relevance classifier for Telegram posts. The user writes a "
+    "filter description in any language. It may say what they want to see, "
+    "what they want to exclude, or both. Decide whether the post should be "
+    "delivered to the user given that description. "
+    "Reply with exactly one English token: YES to deliver, NO to filter out. "
+    "No punctuation, no explanation."
 )
 FILTER_MAX_TOKENS = 4
 
@@ -108,7 +111,7 @@ async def is_relevant(
 ) -> RelevanceCheck:
     client = client or AsyncAnthropic()
     user_content = (
-        f"User's interest description:\n{filter_prompt}\n\n"
+        f"User's filter description:\n{filter_prompt}\n\n"
         f"Post:\n{post_text}"
     )
     log.debug("is_relevant: sending %d chars to %s", len(user_content), MODEL)
@@ -212,7 +215,7 @@ async def is_relevant_ollama(
     post_text: str, filter_prompt: str, *, client: AsyncOpenAI, model: str
 ) -> RelevanceCheck:
     user_content = (
-        f"User's interest description:\n{filter_prompt}\n\n"
+        f"User's filter description:\n{filter_prompt}\n\n"
         f"Post:\n{post_text}"
     )
     log.debug("is_relevant_ollama: sending %d chars to %s", len(user_content), model)
